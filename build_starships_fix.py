@@ -455,8 +455,8 @@ params =
                 NAME="PleoComponent",
                 PleoComponent = 
                 {{
-                    Video = "World/MAPS/{MAP_NAME}/videoscoach/{MAP_NAME}_MapPreview.webm",
-					dashMPD = "World/MAPS/{MAP_NAME}/videoscoach/{MAP_NAME}_MapPreview.mpd",
+                    Video = "World/MAPS/{MAP_NAME}/videoscoach/{MAP_NAME}.webm",
+					dashMPD = "World/MAPS/{MAP_NAME}/videoscoach/{MAP_NAME}.mpd",
 					channelID = "{MAP_NAME}",
                 }},
             }},

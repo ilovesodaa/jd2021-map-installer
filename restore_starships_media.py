@@ -38,8 +38,8 @@ for src_file, dst_path in mappings.items():
     else:
         print(f"Missing {s}")
 
-print("Converting audio to wav...")
-subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", f"{TARGET}\\Audio\\Starships.ogg", f"{TARGET}\\Audio\\Starships.wav"])
-subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", f"{TARGET}\\Audio\\Starships_AudioPreview.ogg", f"{TARGET}\\Audio\\Starships_AudioPreview.wav"])
+print("Converting audio to wav (forcing 48kHz to match .trk marker positions)...")
+subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", f"{TARGET}\\Audio\\Starships.ogg", "-ar", "48000", f"{TARGET}\\Audio\\Starships.wav"])
+subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", f"{TARGET}\\Audio\\Starships_AudioPreview.ogg", "-ar", "48000", f"{TARGET}\\Audio\\Starships_AudioPreview.wav"])
 
 print("Done copying and converting.")
