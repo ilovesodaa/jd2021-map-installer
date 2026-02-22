@@ -1,5 +1,6 @@
 import os
 import shutil
+import json
 
 # --- Config ---
 MAP_NAME = "Starships"
@@ -19,22 +20,38 @@ def generate_text_files():
     os.makedirs(os.path.join(TARGET_DIR, "MenuArt/textures"), exist_ok=True)
     os.makedirs(os.path.join(TARGET_DIR, "Timeline/pictos"), exist_ok=True)
     
-    # Generate music track structure with proper beat markers
-    # Starships by Nicki Minaj: ~125 BPM, ~181 seconds
-    bpm = 125.0
-    sample_rate = 48000
-    samples_per_beat = int(sample_rate * 60 / bpm)  # 23040
-    num_beats = 460
-    markers = ", ".join(f"{{ VAL = {i * samples_per_beat} }}" for i in range(num_beats))
+    # Generate music track structure from ORIGINAL JDU timing data
+    ckd_json_path = os.path.join(SRC_DIR, "ipk_extracted/cache/itf_cooked/pc/world/maps/starships/audio/starships_musictrack.tpl.ckd")
+    with open(ckd_json_path, "r") as f:
+        mt_data = json.loads(f.read().strip('\x00\r\n '))
+    mt_struct = mt_data["COMPONENTS"][0]["trackData"]["structure"]
+    
+    # Convert JSON arrays to Lua format
+    markers = ", ".join(f"{{ VAL = {m} }}" for m in mt_struct["markers"])
+    sigs = ", ".join(
+        f"{{ MusicSignature = {{ beats = {s['beats']}, marker = {s['marker']} }} }}"
+        for s in mt_struct["signatures"]
+    )
+    sects = ", ".join(
+        f"{{ MusicSection = {{ sectionType = {s['sectionType']}, marker = {s['marker']} }} }}"
+        for s in mt_struct["sections"]
+    )
+    
     trk_content = (
         f"structure = {{ MusicTrackStructure = {{ markers = {{ {markers} }}, "
-        f"signatures = {{ {{ MusicSignature = {{ beats = 4, marker = 0 }} }} }}, "
-        f"sections = {{ {{ MusicSection = {{ sectionType = 0, marker = 0 }} }}, "
-        f"{{ MusicSection = {{ sectionType = 6, marker = 32 }} }}, "
-        f"{{ MusicSection = {{ sectionType = 9, marker = 64 }} }} }}, "
-        f"startBeat = -6, endBeat = {num_beats - 1}, videoStartTime = -2.880000, "
-        f"previewEntry = 50.0, previewLoopStart = 50.0, previewLoopEnd = 80.0, "
-        f"useFadeStartBeat = 0, useFadeEndBeat = 0, entryPoints = {{ }} }} }}"
+        f"signatures = {{ {sigs} }}, "
+        f"sections = {{ {sects} }}, "
+        f"startBeat = {mt_struct['startBeat']}, endBeat = {mt_struct['endBeat']}, "
+        f"fadeStartBeat = {mt_struct['fadeStartBeat']}, useFadeStartBeat = {int(mt_struct['useFadeStartBeat'])}, "
+        f"fadeEndBeat = {mt_struct['fadeEndBeat']}, useFadeEndBeat = {int(mt_struct['useFadeEndBeat'])}, "
+        f"videoStartTime = {mt_struct['videoStartTime']:.6f}, "
+        f"previewEntry = {float(mt_struct['previewEntry']):.1f}, "
+        f"previewLoopStart = {float(mt_struct['previewLoopStart']):.1f}, "
+        f"previewLoopEnd = {float(mt_struct['previewLoopEnd']):.1f}, "
+        f"volume = {float(mt_struct['volume']):.6f}, "
+        f"fadeInDuration = {mt_struct['fadeInDuration']}, fadeInType = {mt_struct['fadeInType']}, "
+        f"fadeOutDuration = {mt_struct['fadeOutDuration']}, fadeOutType = {mt_struct['fadeOutType']}, "
+        f"entryPoints = {{ }} }} }}"
     )
     with open(os.path.join(TARGET_DIR, f"Audio/{MAP_NAME}.trk"), "w") as f:
         f.write(trk_content)
