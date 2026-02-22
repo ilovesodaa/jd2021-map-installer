@@ -28,7 +28,12 @@ def convert_value(val, indent_level):
     elif isinstance(val, list):
         out = "{\n"
         for item in val:
-            out += f"{indent}    {convert_value(item, indent_level + 1)},\n"
+            if isinstance(item, (int, float, str, bool)) or item is None:
+                out += f"{indent}    {{\n"
+                out += f"{indent}        VAL = {convert_value(item, indent_level + 2)}\n"
+                out += f"{indent}    }},\n"
+            else:
+                out += f"{indent}    {convert_value(item, indent_level + 1)},\n"
         out += f"{indent}}}"
         return out
     elif isinstance(val, str):
