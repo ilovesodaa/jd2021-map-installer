@@ -12,7 +12,10 @@ mappings = {
     
     # Audio
     "80f47be6f8293430ae764027a56847a4.ogg": f"{TARGET}\\Audio\\Starships.ogg",
-    "b6ea5be7d5e70cda982f9d35fb6bfeba.ogg": f"{TARGET}\\Audio\\Starships_AudioPreview.ogg",
+    # NOTE: Starships_AudioPreview.ogg is intentionally NOT copied here.
+    # The engine uses previewEntry/previewLoopStart/previewLoopEnd in the .trk
+    # to seek into the main audio for preview. A separate preview audio file
+    # is never referenced by any actor, ISC, or scene file.
     
     # Phone Images (non-ckd)
     "6d162ce9e558fb6d4059e9d383112398.jpg": f"{TARGET}\\MenuArt\\textures\\Starships_Cover_Phone.jpg",
@@ -40,6 +43,6 @@ for src_file, dst_path in mappings.items():
 
 print("Converting audio to wav (forcing 48kHz to match .trk marker positions)...")
 subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", f"{TARGET}\\Audio\\Starships.ogg", "-ar", "48000", f"{TARGET}\\Audio\\Starships.wav"])
-subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", f"{TARGET}\\Audio\\Starships_AudioPreview.ogg", "-ar", "48000", f"{TARGET}\\Audio\\Starships_AudioPreview.wav"])
+# AudioPreview conversion removed: engine uses main audio + .trk previewEntry seek values.
 
 print("Done copying and converting.")

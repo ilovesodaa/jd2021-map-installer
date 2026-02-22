@@ -1,5 +1,15 @@
 # Just Dance 2021 (PC Dev Build) — JDU Map Conversion Guide
 
+## About the Source Files: JDHelper by rama
+
+All original Just Dance Unlimited (JDU) files referenced in this guide are sourced using the JDHelper bot, created by rama. JDHelper allows you to download original JDU map files, which are essential for accurate conversions and modding.
+
+**How to Access JDHelper:**
+- Join the JDHelper Discord: https://discord.gg/DFzgkpWWkX
+- Or invite the bot to your own server: https://top.gg/bot/755796344865685625
+
+You must use JDHelper to obtain the original JDU files (audio, video, CKD, pictograms, etc.) before running the conversion scripts described in this guide.
+
 ## Converting "Starships" from Just Dance Unlimited to JD2021
 
 This document covers every step of converting a Just Dance Unlimited (JDU) map into a playable map for the Just Dance 2021 PC development build (UbiArt engine). It uses **Starships** (Nicki Minaj, originally JD2014) as the case study, with **GetGetDown** as the working reference map.
@@ -703,7 +713,7 @@ The original value from `starships_musictrack.tpl.ckd` must be used — computin
 Main config generator. Reads original timing data from `starships_musictrack.tpl.ckd` (JSON) and generates ~30 Lua/XML config files. Handles all the structural differences between JDU and JD2021 format.
 
 ### `restore_starships_media.py`
-Maps hash-named JDU downloads to their correct game paths. Converts OGG→WAV with explicit 48kHz resampling. Does NOT handle pictograms or CKD decoding.
+Maps hash-named JDU downloads (obtained via JDHelper) to their correct game paths. Converts OGG→WAV with explicit 48kHz resampling. This script does NOT handle pictograms or CKD decoding—those are managed by other tools/scripts in the pipeline. Ensure you have used JDHelper to acquire the original JDU files before running this script.
 
 ### `ckd_decode.py`
 Decodes UbiArt CKD texture files. Supports:

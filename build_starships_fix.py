@@ -1,6 +1,7 @@
 import os
 import shutil
 import json
+import argparse
 
 # --- Config ---
 MAP_NAME = "Starships"
@@ -9,7 +10,7 @@ SRC_DIR = r"d:\jd2021pc\Starships"
 DECODED_DIR = os.path.join(SRC_DIR, "decoded")
 TARGET_DIR = rf"d:\jd2021pc\jd21\data\World\MAPS\{MAP_NAME}"
 
-def generate_text_files():
+def generate_text_files(video_start_time_override=None):
     print("Generating text files...")
     
     os.makedirs(os.path.join(TARGET_DIR, "Audio"), exist_ok=True)
@@ -37,6 +38,13 @@ def generate_text_files():
         for s in mt_struct["sections"]
     )
     
+    # Allow manual override of videoStartTime for per-song PC sync correction.
+    # The JDU source value is correct for the JDU platform but may need empirical
+    # adjustment for JD2021 PC. Pass --video-start-time-override <seconds> on CLI.
+    video_start_time = video_start_time_override if video_start_time_override is not None else mt_struct['videoStartTime']
+    if video_start_time_override is not None:
+        print(f"[INFO] videoStartTime overridden: {mt_struct['videoStartTime']:.6f} -> {video_start_time:.6f}")
+
     trk_content = (
         f"structure = {{ MusicTrackStructure = {{ markers = {{ {markers} }}, "
         f"signatures = {{ {sigs} }}, "
@@ -44,7 +52,7 @@ def generate_text_files():
         f"startBeat = {mt_struct['startBeat']}, endBeat = {mt_struct['endBeat']}, "
         f"fadeStartBeat = {mt_struct['fadeStartBeat']}, useFadeStartBeat = {int(mt_struct['useFadeStartBeat'])}, "
         f"fadeEndBeat = {mt_struct['fadeEndBeat']}, useFadeEndBeat = {int(mt_struct['useFadeEndBeat'])}, "
-        f"videoStartTime = {mt_struct['videoStartTime']:.6f}, "
+        f"videoStartTime = {video_start_time:.6f}, "
         f"previewEntry = {float(mt_struct['previewEntry']):.1f}, "
         f"previewLoopStart = {float(mt_struct['previewLoopStart']):.1f}, "
         f"previewLoopEnd = {float(mt_struct['previewLoopEnd']):.1f}, "
@@ -875,5 +883,18 @@ params =
 }}''')
 
 if __name__ == '__main__':
-    generate_text_files()
+    parser = argparse.ArgumentParser(description="Generate JD2021 map config files for Starships.")
+    parser.add_argument(
+        "--video-start-time-override",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help=(
+            "Override videoStartTime (seconds, negative = video starts before beat 0). "
+            "Use this to empirically fix audio/video sync on PC if the JDU source value "
+            "is misaligned. Example: --video-start-time-override -1.950"
+        )
+    )
+    args = parser.parse_args()
+    generate_text_files(video_start_time_override=args.video_start_time_override)
     print("Done generating corrected template files!")
