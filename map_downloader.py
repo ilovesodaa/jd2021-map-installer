@@ -35,26 +35,33 @@ def download_files(urls, download_dir):
     os.makedirs(download_dir, exist_ok=True)
     downloaded = {}
     
-    video_url = None
-    audio_url = None
     main_scene_zip = None
+    gesture_zips = []
     
     for u in urls:
         if "ULTRA.webm" in u: video_url = u
         elif ".ogg" in u and "AudioPreview" not in u: audio_url = u
-        elif "MAIN_SCENE_NX.zip" in u: main_scene_zip = u
+        elif "MAIN_SCENE" in u and ".zip" in u:
+            if "MAIN_SCENE_NX" in u:
+                main_scene_zip = u
+            else:
+                gesture_zips.append(u)
             
     if not video_url:
         for u in urls:
             if "HIGH.webm" in u: video_url = u; break
             
+    if not main_scene_zip and gesture_zips:
+        main_scene_zip = gesture_zips.pop(0)
+            
     important_urls = []
     if video_url: important_urls.append(video_url)
     if audio_url: important_urls.append(audio_url)
     if main_scene_zip: important_urls.append(main_scene_zip)
+    important_urls.extend(gesture_zips)
     
     for u in urls:
-        if ".ckd" in u or ".jpg" in u or ".png" in u:
+        if ".ckd" in u or ".jpg" in u or ".png" in u or ".ad" in u:
             if "discordapp.net" not in u:
                 important_urls.append(u)
                 

@@ -14,6 +14,8 @@ def setup_dirs(target_dir):
     os.makedirs(os.path.join(target_dir, "MenuArt/Actors"), exist_ok=True)
     os.makedirs(os.path.join(target_dir, "MenuArt/textures"), exist_ok=True)
     os.makedirs(os.path.join(target_dir, "Timeline/pictos"), exist_ok=True)
+    os.makedirs(os.path.join(target_dir, "Timeline/Moves"), exist_ok=True)
+    os.makedirs(os.path.join(target_dir, "Autodance"), exist_ok=True)
 
 def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override=None):
     map_lower = map_name.lower()
@@ -585,6 +587,11 @@ params =
 			</SubSceneActor>
 		</ACTORS>
 		<ACTORS NAME="SubSceneActor">
+			<SubSceneActor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{map_name}_AUTODANCE" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="enginedata/actortemplates/subscene.tpl" RELATIVEPATH="World/MAPS/{map_name}/autodance/{map_name}_autodance.isc" EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">
+				<ENUM NAME="viewType" SEL="2" />
+			</SubSceneActor>
+		</ACTORS>
+		<ACTORS NAME="SubSceneActor">
 			<SubSceneActor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{map_name}_VIDEO" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="enginedata/actortemplates/subscene.tpl" RELATIVEPATH="World/MAPS/{map_name}/videoscoach/{map_name}_video.isc" EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">
 				<ENUM NAME="viewType" SEL="2" />
 			</SubSceneActor>
@@ -613,6 +620,70 @@ params =
 		</sceneConfigs>
 	</Scene>
 </root>''')
+
+    # 11.5 Autodance Templates
+    with open(os.path.join(target_dir, f"Autodance/{map_name}_autodance.isc"), "w") as f:
+        f.write(f'''<?xml version="1.0" encoding="ISO-8859-1"?>
+<root>
+    <Scene>
+        <ACTORS NAME="Actor">
+            <Actor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{map_name}_Autodance" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="World/MAPS/{map_name}/autodance/{map_name}_autodance.act" LUA="World/MAPS/{map_name}/autodance/{map_name}_autodance.tpl">
+                <COMPONENTS NAME="MasterTape">
+                    <MasterTape />
+                </COMPONENTS>
+                <COMPONENTS NAME="AutodanceComponent">
+                    <AutodanceComponent />
+                </COMPONENTS>
+            </Actor>
+        </ACTORS>
+    </Scene>
+</root>''')
+
+    with open(os.path.join(target_dir, f"Autodance/{map_name}_autodance.tpl"), "w") as f:
+        f.write(f'''params = 
+{{
+    NAME = "Actor_Template", 
+    Actor_Template = 
+    {{
+        COMPONENTS = 
+        {{
+            {{
+                NAME = "MasterTape_Template", 
+                MasterTape_Template = 
+                {{
+                    TapePath = "World/MAPS/{map_name}/autodance/{map_name}.adtape"
+                }}
+            }},
+            {{
+                NAME = "AutodanceComponent_Template", 
+                AutodanceComponent_Template = 
+                {{
+                    RecordingsPath = "World/MAPS/{map_name}/autodance/{map_name}.adrecording",
+                    VideoConfigPath = "World/MAPS/{map_name}/autodance/{map_name}.advideo"
+                }}
+            }}
+        }}
+    }}
+}}''')
+
+    with open(os.path.join(target_dir, f"Autodance/{map_name}_autodance.act"), "w") as f:
+        f.write(f'''params = 
+{{
+    NAME = "Actor", 
+    Actor = 
+    {{
+        LUA = "world/maps/{map_name}/autodance/{map_name}_autodance.tpl", 
+        COMPONENTS = 
+        {{
+            {{
+                NAME = "MasterTape"
+            }}, 
+            {{
+                NAME = "JD_AutodanceComponent"
+            }}
+        }}
+    }}
+}}''')
 
     # 12. Cinematics tape, cine isc, tpl, act
     with open(os.path.join(target_dir, f"Cinematics/{map_name}_MainSequence.tape"), "w") as f:

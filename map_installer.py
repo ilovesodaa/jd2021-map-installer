@@ -170,28 +170,27 @@ def main():
             print("ERROR: Full Video missing! Check if NO-HUD links expired. Cannot proceed.")
             sys.exit(1)
     
-    # 2. Unzip MAIN SCENE
-    print("[2] Extracting Main Scene...")
-    main_scene_zip = None
-    for f in os.listdir(download_dir):
-        if "MAIN_SCENE" in f and f.endswith(".zip"):
-            main_scene_zip = os.path.join(download_dir, f)
-            break
+    # 2. Unzip SCENES
+    print("[2] Extracting Scene Archives...")
     sys.stdout.flush()
-            
+    
     extracted_zip_dir = os.path.join(map_dir, "main_scene_extracted")
     os.makedirs(extracted_zip_dir, exist_ok=True)
     
-    if main_scene_zip:
-        with zipfile.ZipFile(main_scene_zip, 'r') as z:
-            z.extractall(extracted_zip_dir)
+    for f in os.listdir(download_dir):
+        if "SCENE" in f and f.endswith(".zip"):
+            scene_zip = os.path.join(download_dir, f)
+            print(f"    Extracting {f}...")
+            with zipfile.ZipFile(scene_zip, 'r') as z:
+                z.extractall(extracted_zip_dir)
     
     # 3. Unpack IPK
-    print("[3] Unpacking Cooked IPK...")
+    print("[3] Unpacking Cooked IPKs...")
     ipk_files = glob.glob(os.path.join(extracted_zip_dir, "*.ipk"))
     ipk_extracted = os.path.join(map_dir, "ipk_extracted")
-    if ipk_files:
-        subprocess.run([sys.executable, os.path.join(jd_dir, r"ubiart-archive-tools\ipk_unpacker.py"), ipk_files[0], ipk_extracted], check=False)
+    for ipk in ipk_files:
+        print(f"    Unpacking {os.path.basename(ipk)}...")
+        subprocess.run([sys.executable, os.path.join(jd_dir, r"ubiart-archive-tools\ipk_unpacker.py"), ipk, ipk_extracted], check=False)
     
     # 4. Decode MenuArt CKDs & Copy Raw PNG/JPGs (Must happen before config generation so Coach PNGs can be counted!)
     print("[4] Decoding MenuArt textures...")
@@ -245,6 +244,35 @@ def main():
         for f in glob.glob(os.path.join(picto_src_dir, "*.png.ckd")):
             dst = os.path.join(target_dir, "Timeline/pictos", os.path.basename(f)[:-4]) # remove .ckd
             subprocess.run([sys.executable, os.path.join(jd_dir, "ckd_decode.py"), f, dst], check=False)
+            
+    # 7.5 Copy Gestures & Autodance files
+    print("[7.5] Extracting Moves and Autodance files...")
+    for plat in ["nx", "wii", "durango", "scarlett", "orbis", "prospero", "wiiu"]:
+        moves_src = glob.glob(os.path.join(ipk_extracted, f"**/moves/{plat}"), recursive=True)
+        for folder in moves_src:
+            dest_moves = os.path.join(target_dir, f"Timeline/Moves/{plat.upper()}")
+            os.makedirs(dest_moves, exist_ok=True)
+            for f in glob.glob(os.path.join(folder, "*.*")):
+                shutil.copy2(f, os.path.join(dest_moves, os.path.basename(f)))
+                
+    autodance_tpls = glob.glob(os.path.join(ipk_extracted, "**/autodance/*.tpl.ckd"), recursive=True)
+    for f in autodance_tpls:
+        dest_ad = os.path.join(target_dir, "Autodance")
+        os.makedirs(dest_ad, exist_ok=True)
+        
+        # Use existing map template name to seamlessly link with the map_builder .isc / .act
+        dst_tpl = os.path.join(dest_ad, f"{map_name}_autodance.tpl")
+        
+        # Convert the official JSON property template to an engine-readable Lua template
+        subprocess.run([sys.executable, os.path.join(jd_dir, "json_to_lua.py"), f, dst_tpl], check=True)
+            
+    # Copy any other Autodance media if they exist (ogg, etc.), ignoring generic cooked configs
+    autodance_media = glob.glob(os.path.join(ipk_extracted, "**/autodance/*.*"), recursive=True)
+    for f in autodance_media:
+        if f.endswith(".ckd"): continue # We only want straight media files here
+        dest_ad = os.path.join(target_dir, "Autodance")
+        os.makedirs(dest_ad, exist_ok=True)
+        shutil.copy2(f, os.path.join(dest_ad, os.path.basename(f)))
             
     # 8. Convert Audio
     v_override = args.video_override if args.video_override is not None else video_start_time
