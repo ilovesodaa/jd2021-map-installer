@@ -3,21 +3,32 @@ import shutil
 import subprocess
 import argparse
 
+
 parser = argparse.ArgumentParser(description="Copy and convert Starships media files.")
 parser.add_argument(
     "--audio-start-offset",
     type=float,
-    default=0.0,
+    default=None,
     metavar="SECONDS",
     help=(
         "Shift the audio start relative to the beat grid. "
         "Positive = pad silence at the start (audio starts later). "
         "Negative = trim the start of the file (audio starts earlier). "
-        "Use this to align audio beat 0 with video beat 0. "
+        "If not provided, uses the JDU videoStartTime offset from the CKD. "
         "Example: --audio-start-offset -1.901"
     )
 )
 args = parser.parse_args()
+
+# If no offset is provided, read videoStartTime from CKD and use as audio offset
+audio_offset = args.audio_start_offset
+if audio_offset is None:
+    ckd_json_path = os.path.join(SRC, "ipk_extracted/cache/itf_cooked/pc/world/maps/starships/audio/starships_musictrack.tpl.ckd")
+    with open(ckd_json_path, "r") as f:
+        mt_data = json.loads(f.read().strip('\x00\r\n '))
+    mt_struct = mt_data["COMPONENTS"][0]["trackData"]["structure"]
+    audio_offset = mt_struct['videoStartTime']
+    print(f"[INFO] No audio offset provided, using JDU videoStartTime: {audio_offset:+.3f}s")
 
 SRC = r"d:\jd2021pc\Starships"
 TARGET = r"d:\jd2021pc\jd21\data\World\MAPS\Starships"
