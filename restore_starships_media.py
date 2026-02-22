@@ -1,6 +1,23 @@
 import os
 import shutil
 import subprocess
+import argparse
+
+parser = argparse.ArgumentParser(description="Copy and convert Starships media files.")
+parser.add_argument(
+    "--audio-start-offset",
+    type=float,
+    default=0.0,
+    metavar="SECONDS",
+    help=(
+        "Shift the audio start relative to the beat grid. "
+        "Positive = pad silence at the start (audio starts later). "
+        "Negative = trim the start of the file (audio starts earlier). "
+        "Use this to align audio beat 0 with video beat 0. "
+        "Example: --audio-start-offset -1.901"
+    )
+)
+args = parser.parse_args()
 
 SRC = r"d:\jd2021pc\Starships"
 TARGET = r"d:\jd2021pc\jd21\data\World\MAPS\Starships"
@@ -42,7 +59,25 @@ for src_file, dst_path in mappings.items():
         print(f"Missing {s}")
 
 print("Converting audio to wav (forcing 48kHz to match .trk marker positions)...")
-subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", f"{TARGET}\\Audio\\Starships.ogg", "-ar", "48000", f"{TARGET}\\Audio\\Starships.wav"])
+audio_offset = args.audio_start_offset
+if audio_offset != 0.0:
+    print(f"[INFO] Audio start offset applied: {audio_offset:+.3f}s")
+    if audio_offset < 0:
+        # Trim: skip the first |offset| seconds of the OGG before converting
+        af_filter = f"atrim=start={abs(audio_offset)},asetpts=PTS-STARTPTS"
+    else:
+        # Pad: add silence at the start before the music begins
+        af_filter = f"adelay={int(audio_offset * 1000)}|{int(audio_offset * 1000)},asetpts=PTS-STARTPTS"
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
+                    "-i", f"{TARGET}\\Audio\\Starships.ogg",
+                    "-af", af_filter,
+                    "-ar", "48000",
+                    f"{TARGET}\\Audio\\Starships.wav"])
+else:
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
+                    "-i", f"{TARGET}\\Audio\\Starships.ogg",
+                    "-ar", "48000",
+                    f"{TARGET}\\Audio\\Starships.wav"])
 # AudioPreview conversion removed: engine uses main audio + .trk previewEntry seek values.
 
 print("Done copying and converting.")
