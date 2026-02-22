@@ -24,7 +24,7 @@ def generate_text_files():
     bpm = 125.0
     sample_rate = 48000
     samples_per_beat = int(sample_rate * 60 / bpm)  # 23040
-    num_beats = 380
+    num_beats = 460
     markers = ", ".join(f"{{ VAL = {i * samples_per_beat} }}" for i in range(num_beats))
     trk_content = (
         f"structure = {{ MusicTrackStructure = {{ markers = {{ {markers} }}, "
@@ -374,34 +374,34 @@ params =
     
     # Main Video
     with open(os.path.join(TARGET_DIR, f"VideosCoach/{MAP_NAME}.mpd"), "w") as f:
-         f.write(f'''<?xml version="1.0" encoding="utf-8"?>
-<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" minBufferTime="PT1.500000S" type="static" mediaPresentationDuration="PT181.000000S" profiles="urn:mpeg:dash:profile:isoff-live:2011">
-  <Period id="0" duration="PT181.000000S">
-    <AdaptationSet id="0" mimeType="video/webm" segmentAlignment="true" startWithSAP="1" maxWidth="1920" maxHeight="1080" maxFrameRate="30">
-      <Representation id="0" codecs="vp8" width="1920" height="1080" frameRate="30" bandwidth="4000000">
-        <BaseURL>{MAP_NAME}.webm</BaseURL>
-        <SegmentBase indexRange="0-1000">
-          <Initialization range="0-500" />
-        </SegmentBase>
-      </Representation>
-    </AdaptationSet>
-  </Period>
+         f.write(f'''<?xml version="1.0"?>
+<MPD xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="urn:mpeg:DASH:schema:MPD:2011" xsi:schemaLocation="urn:mpeg:DASH:schema:MPD:2011" type="static" mediaPresentationDuration="PT230S" minBufferTime="PT1S" profiles="urn:webm:dash:profile:webm-on-demand:2012">
+	<Period id="0" start="PT0S" duration="PT230S">
+		<AdaptationSet id="0" mimeType="video/webm" codecs="vp9" lang="eng" maxWidth="1920" maxHeight="1080" subsegmentAlignment="true" subsegmentStartsWithSAP="1" bitstreamSwitching="true">
+			<Representation id="0" bandwidth="4000000">
+				<BaseURL>jmcs://jd-contents/{MAP_NAME}/{MAP_NAME}.webm</BaseURL>
+				<SegmentBase indexRange="0-1000">
+					<Initialization range="0-500" />
+				</SegmentBase>
+			</Representation>
+		</AdaptationSet>
+	</Period>
 </MPD>''')
 
     # Map Preview Video
     with open(os.path.join(TARGET_DIR, f"VideosCoach/{MAP_NAME}_MapPreview.mpd"), "w") as f:
-         f.write(f'''<?xml version="1.0" encoding="utf-8"?>
-<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" minBufferTime="PT1.500000S" type="static" mediaPresentationDuration="PT20.000000S" profiles="urn:mpeg:dash:profile:isoff-live:2011">
-  <Period id="0" duration="PT20.000000S">
-    <AdaptationSet id="0" mimeType="video/webm" segmentAlignment="true" startWithSAP="1" maxWidth="1920" maxHeight="1080" maxFrameRate="30">
-      <Representation id="0" codecs="vp9" width="1920" height="1080" frameRate="30" bandwidth="4000000">
-        <BaseURL>{MAP_NAME}_MapPreview.webm</BaseURL>
-        <SegmentBase indexRange="0-1000">
-          <Initialization range="0-500" />
-        </SegmentBase>
-      </Representation>
-    </AdaptationSet>
-  </Period>
+         f.write(f'''<?xml version="1.0"?>
+<MPD xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="urn:mpeg:DASH:schema:MPD:2011" xsi:schemaLocation="urn:mpeg:DASH:schema:MPD:2011" type="static" mediaPresentationDuration="PT20S" minBufferTime="PT1S" profiles="urn:webm:dash:profile:webm-on-demand:2012">
+	<Period id="0" start="PT0S" duration="PT20S">
+		<AdaptationSet id="0" mimeType="video/webm" codecs="vp9" lang="eng" maxWidth="1920" maxHeight="1080" subsegmentAlignment="true" subsegmentStartsWithSAP="1" bitstreamSwitching="true">
+			<Representation id="0" bandwidth="4000000">
+				<BaseURL>jmcs://jd-contents/{MAP_NAME}/{MAP_NAME}_MapPreview.webm</BaseURL>
+				<SegmentBase indexRange="0-1000">
+					<Initialization range="0-500" />
+				</SegmentBase>
+			</Representation>
+		</AdaptationSet>
+	</Period>
 </MPD>''')
 
     with open(os.path.join(TARGET_DIR, f"VideosCoach/video_player_main.act"), "w") as f:
