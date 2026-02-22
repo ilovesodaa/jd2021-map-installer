@@ -1,0 +1,3 @@
+FOR /F "tokens=2* delims=	 " %%A IN ('REG QUERY "HKEY_CURRENT_USER\Software\Ubisoft\UbiArt\UAF" /v rootDir') DO SET UAF_RootDir=%%B
+cd %UAF_RootDir%
+UA_ResourceCooker.exe  directory=..\RaymanOriginsProduction;all=1;platform=pc,x360

@@ -13,7 +13,7 @@ REM    Positive = pad silence at the start (audio content starts later).
 REM    Set to -1.901 to match the JDU video offset so pictos/karaoke/scoring align.
 REM    Adjust this value until pictos and karaoke hit correctly.
 
-set VIDEO_OVERRIDE=0
+set VIDEO_OVERRIDE=-1.901
 set AUDIO_OFFSET=-1.901
 
 REM ===================================================
