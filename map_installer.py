@@ -61,14 +61,14 @@ def convert_audio(audio_path, map_name, target_dir, a_offset):
     ogg_out = os.path.join(target_dir, f"Audio/{map_name}.ogg")
     
     if not os.path.exists(ogg_out):
-        print(f"    [8b] Copying pristine Menu Preview OGG...")
+        print(f"    Copying menu preview OGG...")
         shutil.copy2(audio_path, ogg_out)
-        
+
     if a_offset == 0.0:
-        print(f"    [8a] Converting pristine Gameplay WAV (no offset)...")
+        print(f"    Converting to 48kHz WAV (no offset)...")
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", audio_path, "-ar", "48000", wav_out], check=True)
     else:
-        print(f"    [8a] Trimming offset {a_offset}s for Gameplay WAV...")
+        print(f"    Converting to 48kHz WAV (offset: {a_offset}s)...")
         if a_offset < 0:
             af_filter = f"atrim=start={abs(a_offset)},asetpts=PTS-STARTPTS"
         else:
@@ -173,7 +173,7 @@ def main():
     cache_dir = os.path.join(jd_dir, f"jd21\\data\\cache\\itf_cooked\\pc\\world\\maps\\{map_lower}")
     
     print(f"=== Starting Automation for {map_name} ===")
-    print("[0] Cleaning up old builds...")
+    print("[1] Cleaning up previous build...")
     def safe_rmtree(path):
         if os.path.exists(path):
             try:
@@ -192,7 +192,7 @@ def main():
     safe_rmtree(ipk_extracted)
     
     # 1. Download Files
-    print("[1] Downloading Files...")
+    print("[2] Downloading assets from JDU servers...")
     urls1 = map_downloader.extract_urls(asset_html) if asset_html and os.path.exists(asset_html) else []
     urls2 = map_downloader.extract_urls(nohud_html) if nohud_html and os.path.exists(nohud_html) else []
     downloaded = map_downloader.download_files(urls1 + urls2, download_dir)
@@ -232,7 +232,7 @@ def main():
             sys.exit(1)
     
     # 2. Unzip SCENES
-    print("[2] Extracting Scene Archives...")
+    print("[3] Extracting scene archives...")
     sys.stdout.flush()
     
     extracted_zip_dir = os.path.join(map_dir, "main_scene_extracted")
@@ -246,7 +246,7 @@ def main():
                 z.extractall(extracted_zip_dir)
     
     # 3. Unpack IPK
-    print("[3] Unpacking Cooked IPKs...")
+    print("[4] Unpacking IPK archives...")
     ipk_files = glob.glob(os.path.join(extracted_zip_dir, "*.ipk"))
     ipk_extracted = os.path.join(map_dir, "ipk_extracted")
     for ipk in ipk_files:
@@ -254,7 +254,7 @@ def main():
         subprocess.run([sys.executable, os.path.join(jd_dir, r"ubiart-archive-tools\ipk_unpacker.py"), ipk, ipk_extracted], check=False)
     
     # 4. Decode MenuArt CKDs & Copy Raw PNG/JPGs (Must happen before config generation so Coach PNGs can be counted!)
-    print("[4] Decoding MenuArt textures...")
+    print("[5] Decoding menu art textures...")
     import fnmatch
     import re
     for file in os.listdir(download_dir):
@@ -274,7 +274,7 @@ def main():
                     os.path.join(target_dir, "MenuArt/textures"), os.path.join(target_dir, "MenuArt/textures")], check=False)
 
     # 5. Generate Text Files (ISCs, TPLs, TRKs, MPDs)
-    print("[5] Generating Config Files...")
+    print("[6] Generating UbiArt config files (scenes, templates, tracks, manifests)...")
     map_builder.setup_dirs(target_dir)
     # this will return video start time
     video_start_time = map_builder.generate_text_files(map_name, ipk_extracted, target_dir, args.video_override)
@@ -286,7 +286,7 @@ def main():
     print(f"    Video Start Time is: {video_start_time}")
                     
     # 6. Convert Tapes (JSON to Lua) via UbiArt-aware converter
-    print("[6] Converting Choreography Tapes...")
+    print("[7] Converting choreography and karaoke tapes to Lua...")
     for ty in ["dance", "karaoke"]:
         src_tapes = glob.glob(os.path.join(ipk_extracted, f"**/*_tml_{ty}.?tape.ckd"), recursive=True)
         if src_tapes:
@@ -298,7 +298,7 @@ def main():
             print(f"    Converted {os.path.basename(src_tapes[0])} -> {os.path.basename(dst_tape)}")
 
     # 6.5. Convert Cinematic Tapes (overwrites empty fallback from map_builder if real data exists)
-    print("[6.5] Converting Cinematic Tapes...")
+    print("[8] Converting cinematic tapes to Lua...")
     cinematics_dirs = glob.glob(os.path.join(ipk_extracted, "**/cinematics"), recursive=True)
     cine_converted = 0
     for cine_dir in cinematics_dirs:
@@ -320,7 +320,7 @@ def main():
     # 6.6. Process Ambient Sounds
     amb_dirs = glob.glob(os.path.join(ipk_extracted, "**/audio/amb"), recursive=True)
     if amb_dirs:
-        print("[6.6] Processing Ambient Sounds...")
+        print("[9] Processing ambient sound templates...")
         for amb_dir in amb_dirs:
             dest_amb = os.path.join(target_dir, "Audio/AMB")
             os.makedirs(dest_amb, exist_ok=True)
@@ -347,7 +347,7 @@ def main():
                         print(f"    Created silent placeholder: {os.path.basename(abs_path)}")
     
     # 7. Decode Pictos
-    print("[7] Decoding Pictograms...")
+    print("[10] Decoding pictograms...")
     picto_src_dir = None
     for path in glob.glob(os.path.join(ipk_extracted, "**/pictos"), recursive=True):
         picto_src_dir = path
@@ -360,7 +360,7 @@ def main():
             subprocess.run([sys.executable, os.path.join(jd_dir, "ckd_decode.py"), f, dst], check=False)
             
     # 7.5 Copy Gestures & Autodance files
-    print("[7.5] Extracting Moves and Autodance files...")
+    print("[11] Extracting move files and autodance data...")
     for plat in ["nx", "wii", "durango", "scarlett", "orbis", "prospero", "wiiu"]:
         moves_src = glob.glob(os.path.join(ipk_extracted, f"**/moves/{plat}"), recursive=True)
         for folder in moves_src:
@@ -393,12 +393,12 @@ def main():
     a_offset = args.audio_offset if args.audio_offset is not None else v_override
     
     if audio_path:
-        print(f"[8] Processing Audio...")
+        print(f"[12] Converting audio to 48kHz WAV...")
         convert_audio(audio_path, map_name, target_dir, a_offset)
 
     # 9. Copy Video
     if video_path:
-        print(f"[9] Copying Video from {video_path}...")
+        print(f"[13] Copying gameplay video...")
         main_vid = os.path.join(target_dir, f"VideosCoach/{map_name}.webm")
         if not os.path.exists(main_vid):
             shutil.copy2(video_path, main_vid)
@@ -410,7 +410,7 @@ def main():
             sku_data = f.read()
             
         if f'USERFRIENDLY="{map_name}"' not in sku_data:
-            print(f"[10] Registering {map_name} in SkuScene...")
+            print(f"[14] Registering {map_name} in SkuScene...")
             # Inject Actor
             actor_xml = f'''           <ACTORS NAME="Actor">
               <Actor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{map_name}" POS2D="0 0" ANGLE="0.000000" INSTANCEDATAFILE="world/maps/{map_name}/songdesc.act" LUA="world/maps/{map_name}/songdesc.tpl">
@@ -435,7 +435,7 @@ def main():
             with open(sku_isc, "w", encoding="utf-8") as f:
                 f.write(sku_data)
         else:
-            print(f"[10] {map_name} is already registered in SkuScene.")
+            print(f"[14] {map_name} is already registered in SkuScene.")
         
     print("=== Automation Complete! ===")
     import time
