@@ -163,8 +163,9 @@ def main():
         print(f"ERROR: JD Base directory not found: {jd_dir}")
         sys.exit(1)
     
-    map_dir = os.path.join(jd_dir, map_name)
-    download_dir = os.path.join(map_dir, "downloads")
+    # Download directory should be where the asset HTML is
+    download_dir = os.path.dirname(asset_html)
+    map_dir = download_dir  # For compatibility with rest of script
     
     target_dir = os.path.join(jd_dir, f"jd21\\data\\World\\MAPS\\{map_name}")
     cache_dir = os.path.join(jd_dir, f"jd21\\data\\cache\\itf_cooked\\pc\\world\\maps\\{map_lower}")

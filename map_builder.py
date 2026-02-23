@@ -6,6 +6,18 @@ import subprocess
 import glob
 import zipfile
 
+def color_array_to_hex(val, default="0xFFFFFFFF"):
+    if isinstance(val, str) and val.startswith("0x"):
+        return val
+    if isinstance(val, (list, tuple)) and len(val) >= 4:
+        comps = [int(round(max(0, min(1, c)) * 255)) for c in val[:4]]
+        return "0x" + "".join(f"{c:02X}" for c in comps)
+    if isinstance(val, (list, tuple)) and val:
+        comps = [int(round(max(0, min(1, c)) * 255)) for c in val]
+        comps += [255] * (4 - len(comps))
+        return "0x" + "".join(f"{c:02X}" for c in comps[:4])
+    return default
+
 def setup_dirs(target_dir):
     os.makedirs(os.path.join(target_dir, "Audio"), exist_ok=True)
     os.makedirs(os.path.join(target_dir, "Timeline"), exist_ok=True)
@@ -34,12 +46,16 @@ def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override
         with open(songdesc_paths[0], "r", encoding="utf-8") as f:
             sd_data = json.loads(f.read().strip('\x00\r\n '))
             sd_struct = sd_data["COMPONENTS"][0]
+
+    default_colors = sd_struct.get("DefaultColors", {}) if sd_struct else {}
+    lyrics_color = color_array_to_hex(default_colors.get("lyrics"), default="0xFF1B34AA")
     
     with open(ckd_json_path, "r", encoding="utf-8") as f:
         mt_data = json.loads(f.read().strip('\x00\r\n '))
     mt_struct = mt_data["COMPONENTS"][0]["trackData"]["structure"]
     
     markers = ", ".join(f"{{ VAL = {m} }}" for m in mt_struct["markers"])
+        # Use lyric_highlight in the markers or other relevant sections if needed
     sigs = ", ".join(f"{{ MusicSignature = {{ beats = {s['beats']}, marker = {s['marker']} }} }}" for s in mt_struct["signatures"])
     sects = ", ".join(f"{{ MusicSection = {{ sectionType = {s['sectionType']}, marker = {s['marker']} }} }}" for s in mt_struct["sections"])
     
@@ -135,12 +151,12 @@ params =
 							VAL = "world/maps/{map_lower}/menuart/textures/{map_lower}_cover_phone.jpg"
 						}},{phone_images_str}
 					}},
-					DefaultColors = 
-					{{
-						{{
-							KEY = "lyrics",
-							VAL = "0xFFFFFFFF"
-						}},
+                    DefaultColors = 
+                    {{
+                        {{
+                            KEY = "lyrics",
+                            VAL = "{lyrics_color}"
+                        }},
 						{{
 							KEY = "theme",
 							VAL = "0xFFFFFFFF"
