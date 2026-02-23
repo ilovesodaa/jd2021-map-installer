@@ -35,10 +35,32 @@ For advanced technical details, refer to the following guides:
 - **[Manual Porting Guide](docs/MANUAL_PORTING_GUIDE.md)**: How to manually port a map without using the scripts.
 - **[JDU Data Mapping Specification](docs/JDU_DATA_MAPPING.md)**: Technical breakdown of property mapping between JDU and JD2021 PC.
 
-## Usage
+## Detailed Usage Guide
+
+To use the automated installer, you need to provide two HTML files containing the JDU asset links and the NOHUD (No-HUD) video links. These are obtained using the **JDHelper** bot on Discord.
+
+### Step 1: Query the Bot
+1. Join a server that has the **JDHelper** bot (or add it to your own).
+2. Use the bot's commands to query the **JDU assets** and **NOHUD assets** for the song you want to import.
+
+### Step 2: Extract the Data from Discord
+1. Open Discord in your web browser (Chrome/Edge recommended).
+2. Open **Developer Tools** (F12 or Ctrl+Shift+I).
+3. Click the **Element Selector** icon in the top-left corner of the DevTools panel.
+   ![Selector Tool](docs/img/selector_tool.png)
+4. Hover over the JDHelper's response message in Discord. Aim for the area just above the main embed.
+5. In the DOM tree, look for a `div` with an ID starting with `message-accessories-...`.
+   ![Hover Message](docs/img/hover_message.png)
+6. **Right-click** that `div` in the DevTools code view -> **Copy** -> **Copy element**.
+   ![Copy Element](docs/img/copy_element.png)
+
+### Step 3: Save and Run
+1. Paste the copied code into a new text file. 
+2. Save it as `assets.html` (for the JDU query) and `nohud.html` (for the NOHUD query).
+3. Run the following command in your terminal:
 
 ```bash
-python map_installer.py --map-name [YourMapName] --asset-html [path/to/assets_mapping.html] --nohud-html [path/to/nohud_mapping.html]
+python map_installer.py --map-name [MapName] --asset-html assets.html --nohud-html nohud.html
 ```
 
 ## Pre-requisites 
