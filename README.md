@@ -38,74 +38,9 @@ For advanced technical details, refer to the following guides:
 - **[Manual Porting Guide](docs/MANUAL_PORTING_GUIDE.md)**: How to manually port a map without using the scripts.
 - **[JDU Data Mapping Specification](docs/JDU_DATA_MAPPING.md)**: Technical breakdown of property mapping between JDU and JD2021 PC.
 
-## Detailed Usage Guide
+## Getting Started
 
-To use the automated installer, you need to provide two HTML files containing the JDU asset links and the NOHUD (No-HUD) video links. These are obtained using the **JDHelper** bot on Discord.
-
-### Step 1: Query the Bot
-1. Join a server that has the **JDHelper** bot (or add it to your own).
-2. Use the bot's commands to query the **JDU assets** and **NOHUD assets** for the song you want to import. The links expire, so you need to do this right before running the script.
-
-### Step 2: Extract the Data from Discord
-1. Open Discord in your web browser (Chrome/Edge recommended).
-2. Open **Developer Tools** (F12 or Ctrl+Shift+I).
-3. Click the **Element Selector** icon in the top-left corner of the DevTools panel.
-   
-   ![Selector Tool](docs/img/selector_tool.png)
-4. Hover over the JDHelper's response message in Discord. Aim for the area just above the main embed.
-5. In the DOM tree, look for a `div` with an ID starting with `message-accessories-...`.
-
-   ![Hover Message](docs/img/hover_message.png)
-6. Once you see that its the correct element, click once.
-7. On the elements panel, **Right-click** that `div` -> **Copy** -> **Copy element**.
-
-### Step 3: Save and Run
-1. Paste the copied code into a new text file. 
-2. Save it as `assets.html` (for the JDU query) and `nohud.html` (for the NOHUD query).
-3. Run the following command in your terminal:
-
-```bash
-python map_installer.py --map-name [MapName] --asset-html assets.html --nohud-html nohud.html
-```
-
-> [!TIP]
-> **New in v1.1:** You no longer need to specify `--jd-dir` if you are running the script from the project root! The script also now automatically cleans up accidental spaces or quotes in your paths (great for dragging and dropping files into the terminal).
-
-## Pre-requisites
-- A valid Just Dance 2021 PC development build.
-- Python 3.6+ with Pillow (`pip install Pillow`).
-- FFmpeg installed in your system PATH.
-- `ubiart-archive-tools` located in the root directory.
-
-## Batch Installation (new)
-
-If you have a directory of map folders (each containing the two HTML files exported from JDHelper), use the batch installer to launch installers for every map in separate terminals for manual review:
-
-Structure:
-
-```
-givenPath/
-   MapA/
-      assets.html
-      nohud.html
-   MapB/
-      assets.html
-      nohud.html
-```
-
-Usage:
-
-```bash
-python batch_install_maps.py "C:\path\to\givenPath"
-```
-
-Optional JD root override:
-
-```bash
-python batch_install_maps.py "C:\path\to\givenPath" --jd21-path "D:\jd2021pc\jd21"
-```
-
-The script will try common defaults to locate your JD installation and will prompt you if it cannot find it.
+See **[GETTING_STARTED.md](docs/GETTING_STARTED.md)** for a full setup walkthrough — including system dependencies, third-party tools to download, how to obtain JD2021 PC, and how to run the installer.
 
 ## Credits
 
