@@ -1,6 +1,8 @@
-# JD2021 Map Builder & Installer
+# JD2021 Map Installer
 
-An automated pipeline for extracting, building, and installing custom JDU (Just Dance Unlimited) maps into Just Dance 2021 PC. 
+An automated pipeline for extracting, building, and installing custom JDU (Just Dance Unlimited) maps into Just Dance 2021 PC.
+
+**Repository:** [https://github.com/VenB304/jd2021-map-installer](https://github.com/VenB304/jd2021-map-installer)
 
 This project goes beyond simple video parsing; it fully integrates original map logic, including controller tracking gestures and Autodance camera features, bridging the gap between basic video backdrops and fully playable, natively-scored levels.
 
@@ -47,6 +49,7 @@ To use the automated installer, you need to provide two HTML files containing th
 1. Open Discord in your web browser (Chrome/Edge recommended).
 2. Open **Developer Tools** (F12 or Ctrl+Shift+I).
 3. Click the **Element Selector** icon in the top-left corner of the DevTools panel.
+   
    ![Selector Tool](docs/img/selector_tool.png)
 4. Hover over the JDHelper's response message in Discord. Aim for the area just above the main embed.
 5. In the DOM tree, look for a `div` with an ID starting with `message-accessories-...`.
