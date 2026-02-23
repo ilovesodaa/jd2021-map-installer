@@ -116,8 +116,8 @@ params =
 					MainCoach = -1,
 					Difficulty = {sd_struct.get('Difficulty', 2)},
 					SweatDifficulty = {sd_struct.get('SweatDifficulty', 1)},
-					BackgroundType = 0,
-					LyricsType = 0,
+					BackgroundType = {sd_struct.get('backgroundType', 0)},
+					LyricsType = {sd_struct.get('LyricsType', 0)},
 					Tags = 
 					{{
 						{{
@@ -631,8 +631,8 @@ params =
                 <COMPONENTS NAME="MasterTape">
                     <MasterTape />
                 </COMPONENTS>
-                <COMPONENTS NAME="AutodanceComponent">
-                    <AutodanceComponent />
+                <COMPONENTS NAME="JD_AutodanceComponent">
+                    <JD_AutodanceComponent />
                 </COMPONENTS>
             </Actor>
         </ACTORS>

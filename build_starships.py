@@ -370,9 +370,9 @@ def generate_text_files():
     <ACTORS>
         <Actor name="Autodance">
             <LUA>World/MAPS/{MAP_NAME}/autodance/{MAP_NAME}_Autodance.tpl</LUA>
-            <COMPONENTS>
-                <AutodanceComponent />
-            </COMPONENTS>
+                <COMPONENTS NAME="JD_AutodanceComponent">
+                    <JD_AutodanceComponent />
+                </COMPONENTS>
         </Actor>
     </ACTORS>
 </scene>''')
