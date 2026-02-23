@@ -1,47 +1,153 @@
 # Manual Map Porting Guide (Just Dance 2021 PC)
 
-This guide details the technical process of manually porting a map from Just Dance Unlimited (JDU) to the Just Dance 2021 PC engine without relying on the automated `map_installer.py` script.
+This guide provides a comprehensive technical breakdown of manually porting a Just Dance Unlimited (JDU) map into the Just Dance 2021 PC engine (UbiArt). This process bridges the gap between basic video parsing and a fully integrated, natively-scored level with Autodance and controller tracking.
+
+---
+
+## Table of Contents
+
+1. [Asset Acquisition](#1-asset-acquisition)
+2. [Directory Structure](#2-directory-structure)
+3. [Understanding File Formats](#3-understanding-file-formats)
+4. [Step-by-Step Conversion](#4-step-by-step-conversion)
+5. [Critical Timing & Sync](#5-critical-timing--sync)
+6. [Game Integration](#6-game-integration)
+7. [Troubleshooting Guide](#7-troubleshooting-guide)
+
+---
 
 ## 1. Asset Acquisition
-Identify and download the following core assets from the JDU server URLs:
-- **Audio**: `.ogg` or `.wav` gameplay track.
-- **Video**: `.webm` ultra/high quality background video.
-- **Archive**: `.ipk` or `.zip` (SCENE) containing the choreography tapes and coach textures.
 
-## 2. Audio & Video Synchronization
-JDU maps often have an offset between the start of the video and the start of the audio track.
-1. Determine the `videoStartTime` (in seconds) from the JDU metadata.
-2. Use FFmpeg to trim or pad the audio relative to the video:
-   - **Negative Offset (Trim)**: `ffmpeg -i input.ogg -af "atrim=start=ABS_OFFSET,asetpts=PTS-STARTPTS" output.wav`
-   - **Positive Offset (Delay)**: `ffmpeg -i input.ogg -af "adelay=OFFSET_MS|OFFSET_MS" output.wav`
-3. Convert the finalized audio to 48kHz WAV for gameplay and OGG for menu previews.
+Before starting, acquire the following original JDU files (via JDHelper or similar):
 
-## 3. Tape Conversion (.ckd to .lua)
-The game engine requires timings in a specific Lua table format (`.dtape` for dance, `.ktape` for karaoke).
-1. Extract the `*_tml_dance.dtape.ckd` or `*_tml_karaoke.ktape.ckd` from the IPK.
-2. Strip the UbiArt CKD header (binary) to reveal the JSON/BSON content.
-3. Convert the JSON clips and tracks into the `params = { Tape = { Clips = { ... } } }` Lua structure.
-   - **Crucial**: Ensure primitive arrays (like `PartsScale`) are wrapped in `{ VAL = x }` properties to avoid engine crashes.
+| Category | Typical File types | Purpose |
+|----------|-------------------|---------|
+| **Core Media** | `.ogg`, `.webm` | Gameplay audio and video. |
+| **Data IPK** | `*_main_scene_pc.ipk` | Contains timing, choreography, and templates. |
+| **Textures** | `.png.ckd`, `.tga.ckd` | Menu art, coach textures, and pictograms. |
 
-## 4. Template (TPL) and Actor (ACT) Creation
-Each map component needs a Template (logic definition) and an Actor (instance definition).
-- **SongDesc**: Defines metadata (Artist, Title, Difficulty).
-- **MusicTrack**: Links the audio file and defines the `videoStartTime`.
-- **Timeline**: References the `.dtape` or `.ktape` file paths.
-- **Autodance**: Defines the paths for `.adtape` and `.advideo`.
-  - **Note**: The component MUST be named `JD_AutodanceComponent`.
+---
 
-## 5. Scene Assembly (ISC)
-1. **_tml.isc**: Assemble the dance and karaoke actors into a combined timeline scene.
-2. **_MAIN_SCENE.isc**: Create the master scene that pulls in the `SongDesc`, `MusicTrack`, `Autodance`, and `_tml` sub-scenes.
-   - Use `SubSceneActor` nodes to link external `.isc` files.
+## 2. Directory Structure
+
+A complete JD2021 map requires the following structure under `World/MAPS/[MapName]/`. **Case sensitivity matters.**
+
+```
+[MapName]/
+├── [MapName]_MAIN_SCENE.isc    # Root scene linking all sub-scenes
+├── SongDesc.tpl                 # Song metadata template
+├── SongDesc.act                 # Song metadata actor
+│
+├── Audio/
+│   ├── [MapName].wav            # Full audio (MUST be 48kHz PCM)
+│   ├── [MapName].ogg            # Original compressed audio
+│   ├── [MapName].trk            # CRITICAL: Beat timing data (Lua)
+│   ├── [MapName]_musictrack.tpl # Audio template
+│   ├── [MapName]_Audio.isc      # Audio scene
+│   ├── [MapName].stape          # Sequence tape (required, can be empty)
+│   └── ConfigMusic.sfi          # Audio format declaration (XML)
+│
+├── Timeline/
+│   ├── [MapName]_tml.isc        # Timeline scene
+│   ├── [MapName]_TML_Dance.dtape   # Choreography (Lua)
+│   ├── [MapName]_TML_Karaoke.ktape # Lyrics (Lua)
+│   └── pictos/
+│       └── *.png                # Decoded pictogram images
+│
+├── VideosCoach/
+│   ├── [MapName].webm           # Gameplay video
+│   ├── [MapName].mpd            # DASH manifest
+│   ├── [MapName]_video.isc      # Video scene
+│   └── video_player_main.act    # Video actor
+│
+└── MenuArt/
+    ├── [MapName]_menuart.isc    # Menu art scene with inline components
+    └── textures/
+        └── [MapName]_coach_1.tga # Decoded menu textures
+```
+
+---
+
+## 3. Understanding File Formats
+
+### .TRK (Music Track Timing)
+Lua-format file defining sample-perfect beat markers.
+```lua
+structure = { MusicTrackStructure = {
+    markers = { { VAL = 0 }, { VAL = 23040 }, ... }, -- Sample positions @ 48kHz
+    startBeat = -4,
+    endBeat = 500,
+    videoStartTime = -1.901000, -- Seconds before beat 0
+    previewEntry = 84.0,
+}}
+```
+
+### .ISC (Scene Graph)
+XML files defining which actors to load. The `MAIN_SCENE.isc` must have `ENGINE_VERSION="280000"`.
+
+### .DTAPE / .KTAPE (Choreography)
+Lua tables containing timed events (Clips) defined in **ticks** (24 ticks per beat).
+
+---
+
+## 4. Step-by-Step Conversion
+
+### 4.1 Extract Original Timing
+Open the JDU `musictrack.tpl.ckd` with a text editor. Even with the `.ckd` extension, it is often plaintext JSON. Extract `markers`, `videoStartTime`, and `startBeat`.
+
+### 4.2 Convert Audio (High Precision)
+Use FFmpeg to convert your OGG to WAV. You **must** force 48kHz:
+```bash
+ffmpeg -i input.ogg -ar 48000 output.wav
+```
+If the sample rate isn't exactly 48,000Hz, the `.trk` markers will drift, causing massive desync.
+
+### 4.3 Decode Textures
+UbiArt CKD textures have a 44-byte binary header followed by a DDS or XTX payload.
+1. Strip the header.
+2. Convert DDS/XTX to TGA or PNG (using Pillow or XTX-Extractor).
+3. Place in the `MenuArt/textures/` or `Timeline/pictos/` directories.
+
+### 4.4 Convert JSON Tapes to Lua
+JDU uses JSON/BSON natively, but JD2021 PC expectations are Lua. Convert the extracted tape JSON to Lua syntax:
+- Replace `[...]` with `{ ... }`
+- Replace `"key":` with `key =`
+- Ensure boolean constants are `TRUE` or `FALSE`.
+
+---
+
+## 5. Critical Timing & Sync
+
+### The Timing Chain
+The engine resolves timing in this order:
+1. **Audio Position** (Sample #) -> **Beat Number** (via `.trk` markers).
+2. **Beat Number** -> **Tick Number** (24 ticks per beat).
+3. **Tick Number** -> **Clip Execution** (via Tape files).
+
+### Video Start Time
+The `videoStartTime` is usually negative (e.g., `-1.901`). This means the video begins ~1.9 seconds before beat 0. **Do not calculate this synthetically**; extract the exact value from the original JDU metadata.
+
+---
 
 ## 6. Game Integration
-1. **File Placement**: Move the generated folder structure to `jd21/data/World/MAPS/[MapName]/`.
-2. **Database Registration**: Open `SkuScene_Maps_PC_All.isc` and add a new entry referencing your map's `SongDesc.tpl`.
-3. **Localisation**: (Optional) Add the map name to the `localisation.ckd` strings if you want translated titles.
 
-## 7. Verification
-- Launch the game.
-- Verify the map appears in the song list.
-- Check audio/video sync and picto timings in-game.
+1. **Deployment**: Copy your `[MapName]` folder to `jd21/data/World/MAPS/`.
+2. **Registration**: 
+   - Open `SkuScene_Maps_PC_All.isc`.
+   - Add a `JD_SongDescTemplate` entry referencing your map's `SongDesc.tpl`.
+3. **Validation**: Launch the game; if the title is missing, check your `SongDesc` actor configuration.
+
+---
+
+## 7. Troubleshooting Guide
+
+| Issue | Root Cause | Fix |
+|-------|------------|-----|
+| **Crash at Coach Select** | Missing Cinematics chain | Create `_cine.isc` -> `_MainSequence.tpl` structure. |
+| **Progressive Desync** | Wrong Audio Sample Rate | Re-convert audio with `-ar 48000`. |
+| **Black Video** | Incorrect DASH MPD | Ensure namespace is `urn:mpeg:DASH:schema:MPD:2011`. |
+| **Missing Title** | SkuScene Registration | Verify the map entry in `SkuScene_Maps_PC_All.isc`. |
+| **Autodance Error** | Component Naming | Ensure component name is `JD_AutodanceComponent`. |
+
+---
+*For automated conversion, refer to the root `README.md` and the `map_installer.py` script.*
