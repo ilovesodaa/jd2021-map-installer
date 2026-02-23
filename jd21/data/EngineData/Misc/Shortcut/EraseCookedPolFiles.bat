@@ -1,1 +1,0 @@
-del /s /q ..\..\itf_cooked\*.pol.*
