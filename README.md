@@ -63,6 +63,9 @@ To use the automated installer, you need to provide two HTML files containing th
 python map_installer.py --map-name [MapName] --asset-html assets.html --nohud-html nohud.html
 ```
 
+> [!TIP]
+> **New in v1.1:** You no longer need to specify `--jd-dir` if you are running the script from the project root! The script also now automatically cleans up accidental spaces or quotes in your paths (great for dragging and dropping files into the terminal).
+
 ## Pre-requisites 
 - A valid Just Dance 2021 PC development build.
 - Python 3.x with dependencies.

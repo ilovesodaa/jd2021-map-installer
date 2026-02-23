@@ -10,6 +10,50 @@ import sys
 import map_downloader
 import map_builder
 
+def clean_path(path):
+    """Deep cleans a path: removes quotes, trims whitespace, normalizes, and makes absolute if possible."""
+    if not path:
+        return path
+    # Remove surrounding quotes (e.g., from drag-and-drop into terminal)
+    path = path.strip().strip('"').strip("'").strip()
+    # Normalize slashes
+    path = os.path.normpath(path)
+    # Convert to absolute
+    if os.path.exists(path):
+        return os.path.abspath(path)
+    return path
+
+def detect_jd_dir(provided_dir=None):
+    """
+    Finds the JD2021 base directory.
+    Priority:
+    1. Provided path (if valid)
+    2. Directory of this script (if it contains jd21 folder)
+    3. Current working directory (if it contains jd21 folder)
+    """
+    candidates = []
+    if provided_dir:
+        cleaned = clean_path(provided_dir)
+        candidates.append(cleaned)
+    
+    # Script's own directory
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates.append(script_dir)
+    
+    # Current working directory
+    cwd = os.getcwd()
+    if cwd not in candidates:
+        candidates.append(cwd)
+        
+    for cand in candidates:
+        if cand and os.path.isdir(cand):
+            # Signature check: Look for the 'jd21' data directory
+            if os.path.exists(os.path.join(cand, "jd21")):
+                return cand
+                
+    # Fallback to the first candidate or current script dir if nothing found
+    return candidates[0] if candidates else script_dir
+
 def convert_audio(audio_path, map_name, target_dir, a_offset):
     wav_out = os.path.join(target_dir, f"Audio/{map_name}.wav")
     ogg_out = os.path.join(target_dir, f"Audio/{map_name}.ogg")
@@ -96,14 +140,28 @@ def main():
     parser.add_argument("--map-name", required=True, help="E.g. Rockabye")
     parser.add_argument("--asset-html", required=True, help="Path to asset mapping HTML")
     parser.add_argument("--nohud-html", required=True, help="Path to nohud mapping HTML")
-    parser.add_argument("--jd-dir", default=r"d:\jd2021pc", help="Base directory of JD tools / JD21 install")
+    parser.add_argument("--jd-dir", default=None, help="Base directory of JD tools / JD21 install (auto-detected if omitted)")
     parser.add_argument("--video-override", type=float, default=None, help="Force a specific video start time")
     parser.add_argument("--audio-offset", type=float, default=None, help="Force a specific audio trim offset")
     args = parser.parse_args()
     
-    map_name = args.map_name
+    # Clean and detect paths
+    map_name = args.map_name.strip()
     map_lower = map_name.lower()
-    jd_dir = args.jd_dir
+    
+    asset_html = clean_path(args.asset_html)
+    nohud_html = clean_path(args.nohud_html)
+    jd_dir = detect_jd_dir(args.jd_dir)
+    
+    print(f"--- Environment ---")
+    print(f"JD Base Dir: {jd_dir}")
+    print(f"Map Name:    {map_name}")
+    print(f"Asset HTML:  {asset_html}")
+    print(f"-------------------")
+    
+    if not os.path.exists(jd_dir):
+        print(f"ERROR: JD Base directory not found: {jd_dir}")
+        sys.exit(1)
     
     map_dir = os.path.join(jd_dir, map_name)
     download_dir = os.path.join(map_dir, "downloads")
@@ -132,8 +190,8 @@ def main():
     
     # 1. Download Files
     print("[1] Downloading Files...")
-    urls1 = map_downloader.extract_urls(args.asset_html) if os.path.exists(args.asset_html) else []
-    urls2 = map_downloader.extract_urls(args.nohud_html) if os.path.exists(args.nohud_html) else []
+    urls1 = map_downloader.extract_urls(asset_html) if asset_html and os.path.exists(asset_html) else []
+    urls2 = map_downloader.extract_urls(nohud_html) if nohud_html and os.path.exists(nohud_html) else []
     downloaded = map_downloader.download_files(urls1 + urls2, download_dir)
     
     # Auto-detect internal codename from downloaded files

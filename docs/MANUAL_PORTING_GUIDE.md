@@ -150,4 +150,4 @@ The `videoStartTime` is usually negative (e.g., `-1.901`). This means the video 
 | **Autodance Error** | Component Naming | Ensure component name is `JD_AutodanceComponent`. |
 
 ---
-*For automated conversion, refer to the root `README.md` and the `map_installer.py` script.*
+*For automated conversion, refer to the root `README.md` and the `map_installer.py` script. The automation suite now includes auto-detection of the `jd2021` directory and automatic path normalization to prevent common syntax errors.*
