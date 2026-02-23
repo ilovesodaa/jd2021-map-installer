@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import glob
+import wave
 import zipfile
 import argparse
 import sys
@@ -9,6 +10,7 @@ import sys
 # Import our individual scripts
 import map_downloader
 import map_builder
+import ubiart_lua
 
 def clean_path(path):
     """Deep cleans a path: removes quotes, trims whitespace, normalizes, and makes absolute if possible."""
@@ -283,13 +285,66 @@ def main():
         
     print(f"    Video Start Time is: {video_start_time}")
                     
-    # 6. Convert Tapes (JSON to Lua)
+    # 6. Convert Tapes (JSON to Lua) via UbiArt-aware converter
     print("[6] Converting Choreography Tapes...")
     for ty in ["dance", "karaoke"]:
         src_tapes = glob.glob(os.path.join(ipk_extracted, f"**/*_tml_{ty}.?tape.ckd"), recursive=True)
         if src_tapes:
             dst_tape = os.path.join(target_dir, f"Timeline/{map_name}_TML_{ty.capitalize()}.{ty[0]}tape")
-            subprocess.run([sys.executable, os.path.join(jd_dir, "json_to_lua.py"), src_tapes[0], dst_tape], check=True)
+            tape_data = ubiart_lua.load_ckd_json(src_tapes[0])
+            lua_str = ubiart_lua.process_tape(tape_data, tape_type=ty)
+            with open(dst_tape, 'w', encoding='utf-8') as f:
+                f.write(lua_str)
+            print(f"    Converted {os.path.basename(src_tapes[0])} -> {os.path.basename(dst_tape)}")
+
+    # 6.5. Convert Cinematic Tapes (overwrites empty fallback from map_builder if real data exists)
+    print("[6.5] Converting Cinematic Tapes...")
+    cinematics_dirs = glob.glob(os.path.join(ipk_extracted, "**/cinematics"), recursive=True)
+    cine_converted = 0
+    for cine_dir in cinematics_dirs:
+        for tape_file in glob.glob(os.path.join(cine_dir, "*.tape.ckd")):
+            tape_basename = os.path.basename(tape_file)
+            output_name = tape_basename.replace(".ckd", "")
+            if "mainsequence" in output_name.lower():
+                output_name = f"{map_name}_MainSequence.tape"
+            dst_path = os.path.join(target_dir, f"Cinematics/{output_name}")
+            tape_data = ubiart_lua.load_ckd_json(tape_file)
+            lua_str = ubiart_lua.process_tape(tape_data, tape_type="cinematics")
+            with open(dst_path, 'w', encoding='utf-8') as f:
+                f.write(lua_str)
+            print(f"    Converted {tape_basename} -> {output_name}")
+            cine_converted += 1
+    if cine_converted == 0:
+        print("    No cinematic tapes found, keeping empty fallback.")
+
+    # 6.6. Process Ambient Sounds
+    amb_dirs = glob.glob(os.path.join(ipk_extracted, "**/audio/amb"), recursive=True)
+    if amb_dirs:
+        print("[6.6] Processing Ambient Sounds...")
+        for amb_dir in amb_dirs:
+            dest_amb = os.path.join(target_dir, "Audio/AMB")
+            os.makedirs(dest_amb, exist_ok=True)
+            for amb_file in glob.glob(os.path.join(amb_dir, "*.tpl.ckd")):
+                amb_data = ubiart_lua.load_ckd_json(amb_file)
+                ilu_content, tpl_content, audio_file_paths = ubiart_lua.process_ambient_sound(
+                    amb_data, map_name, os.path.basename(amb_file))
+                base = os.path.basename(amb_file).replace('.tpl.ckd', '')
+                with open(os.path.join(dest_amb, f"{base}.ilu"), 'w', encoding='utf-8') as f:
+                    f.write(ilu_content)
+                with open(os.path.join(dest_amb, f"{base}.tpl"), 'w', encoding='utf-8') as f:
+                    f.write(tpl_content)
+                print(f"    Generated AMB: {base}.ilu + {base}.tpl")
+                # Generate silent WAV placeholders for any referenced audio files that don't exist
+                for rel_path in audio_file_paths:
+                    abs_path = os.path.join(jd_dir, "jd21", "data", rel_path.replace("/", os.sep))
+                    if not os.path.exists(abs_path):
+                        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+                        with wave.open(abs_path, 'w') as wf:
+                            wf.setnchannels(1)
+                            wf.setsampwidth(2)
+                            wf.setframerate(48000)
+                            wf.writeframes(b'\x00\x00' * 4800)  # 0.1s silence
+                        print(f"    Created silent placeholder: {os.path.basename(abs_path)}")
     
     # 7. Decode Pictos
     print("[7] Decoding Pictograms...")

@@ -48,7 +48,41 @@ def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override
             sd_struct = sd_data["COMPONENTS"][0]
 
     default_colors = sd_struct.get("DefaultColors", {}) if sd_struct else {}
-    lyrics_color = color_array_to_hex(default_colors.get("lyrics"), default="0xFF1B34AA")
+
+    # Build DefaultColors: use CKD values/keys where available, fall back to hardcoded for missing.
+    # Match case-insensitively so CKD "songcolor_1a" maps to fallback "songColor_1A" without duplicating.
+    default_color_fallbacks = {
+        "lyrics": "0xFF1B34AA",
+        "theme": "0xFFFFFFFF",
+        "songColor_1A": "0x00D1D0D0",
+        "songColor_1B": "0xF50005D0",
+        "songColor_2A": "0x00D1D0D0",
+        "songColor_2B": "0xF50005D0",
+    }
+    # lowercase -> (actual_key_from_ckd, raw_value) for fast case-insensitive lookup
+    ckd_lower_map = {k.lower(): (k, v) for k, v in default_colors.items()}
+
+    # Each entry is (output_key, hex_value)
+    resolved_colors = []
+    for fb_key, fb_hex in default_color_fallbacks.items():
+        if fb_key.lower() in ckd_lower_map:
+            ckd_key, ckd_raw = ckd_lower_map[fb_key.lower()]
+            resolved_colors.append((ckd_key, color_array_to_hex(ckd_raw, default=fb_hex)))
+        else:
+            resolved_colors.append((fb_key, fb_hex))
+    # Append any extra CKD keys not covered by fallbacks
+    fb_lower_set = {k.lower() for k in default_color_fallbacks}
+    for ckd_key, ckd_raw in default_colors.items():
+        if ckd_key.lower() not in fb_lower_set:
+            resolved_colors.append((ckd_key, color_array_to_hex(ckd_raw)))
+
+    default_colors_lua = ""
+    for key, val in resolved_colors:
+        default_colors_lua += f'''
+						{{
+							KEY = "{key}",
+							VAL = "{val}"
+						}},'''
     
     with open(ckd_json_path, "r", encoding="utf-8") as f:
         mt_data = json.loads(f.read().strip('\x00\r\n '))
@@ -102,7 +136,7 @@ params =
 	NAME = "Actor_Template",
 	Actor_Template =
 	{{
-		TAGS = 
+		TAGS =
 		{{
 			{{
 				VAL = "songdescmain"
@@ -114,69 +148,45 @@ params =
 		PROCEDURAL = 0,
 		STARTPAUSED = 0,
 		FORCEISENVIRONMENT = 0,
-		COMPONENTS = 
+		COMPONENTS =
 		{{
 			{{
 				NAME = "JD_SongDescTemplate",
 				JD_SongDescTemplate =
 				{{
 					MapName = "{map_name}",
-					JDVersion = 2021,
-					OriginalJDVersion = 2021,
+					JDVersion = {sd_struct.get('JDVersion', 2021)},
+					OriginalJDVersion = {sd_struct.get('OriginalJDVersion', 2021)},
 					Artist = [[{sd_struct.get('Artist', 'Unknown Artist')}]],
-					DancerName = "Unknown Dancer",
+					DancerName = "{sd_struct.get('DancerName', 'Unknown Dancer')}",
 					Title = [[{sd_struct.get('Title', map_name)}]],
-					Credits = [[{sd_struct.get('Credits', 'Credits')}]],
-					ChoreoCreator = "Choreographer",
+					Credits = [[{sd_struct.get('Credits', 'All rights of the producer and other rightholders to the recorded work reserved. Unless otherwise authorized, the duplication, rental, loan, exchange or use of this video game for public performance, broadcasting and online distribution to the public are prohibited.')}]],
 					NumCoach = {num_coach},
-					MainCoach = -1,
+					MainCoach = {sd_struct.get('MainCoach', -1)},
 					Difficulty = {sd_struct.get('Difficulty', 2)},
 					SweatDifficulty = {sd_struct.get('SweatDifficulty', 1)},
-					BackgroundType = {sd_struct.get('backgroundType', 0)},
+					backgroundType = {sd_struct.get('backgroundType', sd_struct.get('BackgroundType', 0))},
 					LyricsType = {sd_struct.get('LyricsType', 0)},
-					Tags = 
+					Energy = {sd_struct.get('Energy', 1)},
+					Tags =
 					{{
 						{{
 							VAL = "Main"
 						}}
 					}},
-					Status = 3,
-					LocaleID = 4294967295,
-					MojoValue = 0,
-					CountInProgression = 1,
-					PhoneImages = 
+					Status = {sd_struct.get('Status', 3)},
+					LocaleID = {sd_struct.get('LocaleID', 4294967295)},
+					MojoValue = {sd_struct.get('MojoValue', 0)},
+					CountInProgression = {sd_struct.get('CountInProgression', 1)},
+					PhoneImages =
 					{{
 						{{
 							KEY = "cover",
 							VAL = "world/maps/{map_lower}/menuart/textures/{map_lower}_cover_phone.jpg"
 						}},{phone_images_str}
 					}},
-                    DefaultColors = 
-                    {{
-                        {{
-                            KEY = "lyrics",
-                            VAL = "{lyrics_color}"
-                        }},
-						{{
-							KEY = "theme",
-							VAL = "0xFFFFFFFF"
-						}},
-						{{
-							KEY = "songColor_1A",
-							VAL = "0x00D1D0D0"
-						}},
-						{{
-							KEY = "songColor_1B",
-							VAL = "0xF50005D0"
-						}},
-						{{
-							KEY = "songColor_2A",
-							VAL = "0x00D1D0D0"
-						}},
-						{{
-							KEY = "songColor_2B",
-							VAL = "0xF50005D0"
-						}}
+                    DefaultColors =
+                    {{{default_colors_lua}
 					}},
 					VideoPreviewPath = "",
 					Mode = 6,
