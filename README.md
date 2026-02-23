@@ -41,7 +41,7 @@ To use the automated installer, you need to provide two HTML files containing th
 
 ### Step 1: Query the Bot
 1. Join a server that has the **JDHelper** bot (or add it to your own).
-2. Use the bot's commands to query the **JDU assets** and **NOHUD assets** for the song you want to import.
+2. Use the bot's commands to query the **JDU assets** and **NOHUD assets** for the song you want to import. The links expire, so you need to do this right before running the script.
 
 ### Step 2: Extract the Data from Discord
 1. Open Discord in your web browser (Chrome/Edge recommended).
