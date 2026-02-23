@@ -52,7 +52,6 @@ To use the automated installer, you need to provide two HTML files containing th
 5. In the DOM tree, look for a `div` with an ID starting with `message-accessories-...`.
    ![Hover Message](docs/img/hover_message.png)
 6. **Right-click** that `div` in the DevTools code view -> **Copy** -> **Copy element**.
-   ![Copy Element](docs/img/copy_element.png)
 
 ### Step 3: Save and Run
 1. Paste the copied code into a new text file. 
