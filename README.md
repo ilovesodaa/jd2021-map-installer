@@ -46,3 +46,13 @@ python map_installer.py --map-name [YourMapName] --asset-html [path/to/assets_ma
 - Python 3.x with dependencies.
 - FFmpeg installed in your system PATH.
 - `ubiart-archive-tools` located in the root directory.
+
+## Credits
+
+This project utilizes several essential third-party tools from the Just Dance modding community:
+
+- **[JustDanceTools](https://github.com/the-m-v-p/JustDanceTools)**: For various UbiArt and Just Dance specific file manipulations.
+- **[XTX-Extractor](https://github.com/Tofat/XTX-Extractor)**: For extracting textures from Switch-specific XTX containers.
+- **[ubiart-archive-tools](https://github.com/the-m-v-p/ubiart-archive-tools)**: For unpacking and packing UbiArt `.ipk` archives.
+
+Special thanks to the authors and contributors of these tools for making Just Dance modding possible.
