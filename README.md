@@ -72,6 +72,36 @@ python map_installer.py --map-name [MapName] --asset-html assets.html --nohud-ht
 - FFmpeg installed in your system PATH.
 - `ubiart-archive-tools` located in the root directory.
 
+## Batch Installation (new)
+
+If you have a directory of map folders (each containing the two HTML files exported from JDHelper), use the batch installer to launch installers for every map in separate terminals for manual review:
+
+Structure:
+
+```
+givenPath/
+   MapA/
+      assets.html
+      nohud.html
+   MapB/
+      assets.html
+      nohud.html
+```
+
+Usage:
+
+```bash
+python batch_install_maps.py "C:\path\to\givenPath"
+```
+
+Optional JD root override:
+
+```bash
+python batch_install_maps.py "C:\path\to\givenPath" --jd21-path "D:\jd2021pc\jd21"
+```
+
+The script will try common defaults to locate your JD installation and will prompt you if it cannot find it.
+
 ## Credits
 
 This project utilizes several essential third-party tools from the Just Dance modding community:

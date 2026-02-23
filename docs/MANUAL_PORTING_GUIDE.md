@@ -151,3 +151,46 @@ The `videoStartTime` is usually negative (e.g., `-1.901`). This means the video 
 
 ---
 *For automated conversion, refer to the root `README.md` and the `map_installer.py` script. The automation suite now includes auto-detection of the `jd2021` directory and automatic path normalization to prevent common syntax errors.*
+
+## Appendix A — Batch Preperation (assets.html + nohud.html)
+
+If you plan to convert many maps, prepare a single parent directory where each child's folder contains the two HTML exports (`assets.html` and `nohud.html`) captured from JDHelper. The `batch_install_maps.py` script will scan this directory and launch an installer for each valid map folder.
+
+Example layout:
+
+```
+my_maps/
+    BadRomance/
+        assets.html
+        nohud.html
+    Starships/
+        assets.html
+        nohud.html
+```
+
+To run the batch installer:
+
+```bash
+python batch_install_maps.py "C:\path\to\my_maps"
+```
+
+If the script cannot find your JD installation automatically it will prompt you to input the path (or you can pass `--jd21-path`).
+
+### Verifying `SongDesc.tpl` lyric color
+
+After installation, open `jd21/data/World/MAPS/<MapName>/SongDesc.tpl` and look for the `DefaultColors` block. The `lyrics` key should be present and contain a `0xAARRGGBB` value when the original JDU metadata provided the highlight color. If not present, the pipeline used the configured fallback color.
+
+Example snippet:
+
+```
+DefaultColors = 
+{
+    { KEY = "lyrics", VAL = "0xFFB8113B" },
+    ...
+}
+```
+
+### Troubleshooting batch runs
+
+- If terminals open but installers do nothing, confirm that each map folder contains both required HTML files.
+- If `map_installer.py` cannot find `map_builder.py` or other modules, run the batch script from the project root or pass `--jd21-path` pointing to `d:\jd2021pc\jd21`.

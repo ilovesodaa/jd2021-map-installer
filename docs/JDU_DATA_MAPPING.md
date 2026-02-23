@@ -89,3 +89,27 @@ The following JDU properties are safely ignored:
 
 ---
 *Reference: This mapping is derived from high-precision analysis of the "Starships" and "GetGetDown" case studies.*
+
+---
+
+## 7. Default Colors & Lyric Highlight
+
+JDU often exposes a `DefaultColors` block (either as a JSON object stored in a `.tpl.ckd` payload or as a hex string). The automation extracts `DefaultColors["lyrics"]` when present and injects it into the generated `SongDesc.tpl` so the in-engine lyric highlight matches the original JDU presentation.
+
+- Source formats supported:
+  - JSON arrays: `[r, g, b, a]` where components are floats in the range 0.0-1.0.
+  - Hex strings: `0xAARRGGBB` (already in engine format).
+
+- Conversion rule (array -> hex):
+
+  Given `[r,g,b,a]` with values 0..1, convert each channel to 0..255 by `int(round(channel * 255))` and produce `0xAARRGGBB` where alpha is first.
+
+  Example:
+
+  - JDU: `[1, 0.721569, 0.066667, 0.231373]`
+  - Channel ints: R=255, G=184, B=17, A=59
+  - Engine hex: `0xFFB8113B`
+
+- Notes:
+  - Some `.tpl.ckd` files are plaintext JSON despite the `.ckd` extension; the pipeline attempts to detect and parse JSON first before applying CKD-specific decoding.
+  - If `lyrics` color is absent, the pipeline falls back to a default highlight (configurable in `map_builder.py`).
