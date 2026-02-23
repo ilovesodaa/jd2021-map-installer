@@ -79,3 +79,8 @@ This project utilizes several essential third-party tools from the Just Dance mo
 - **Just Dance Helper**: For providing a way to get JDU assets and NOHUD videos from Discord. Built by [rama0dev](https://github.com/rama0dev).
 
 Special thanks to the authors and contributors of these tools for making Just Dance modding possible.
+
+TODO:
+- analyze and integrate functions of a certain someone's tools 👀
+   - It could have better performance or features as this project was made blindly 
+   - apply credits if used
