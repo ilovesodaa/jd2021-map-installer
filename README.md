@@ -1,10 +1,6 @@
 # JD2021 Map Installer
 
-An automated pipeline for extracting, building, and installing custom JDU (Just Dance Unlimited) maps into Just Dance 2021 PC.
-
-**Repository:** [https://github.com/VenB304/jd2021-map-installer](https://github.com/VenB304/jd2021-map-installer)
-
-This project goes beyond simple video parsing; it fully integrates original map logic, including controller tracking gestures and Autodance camera features, bridging the gap between basic video backdrops and fully playable, natively-scored levels.
+An automated pipeline for extracting, building, and installing JDU (Just Dance Unlimited) maps into Just Dance 2021 PC.
 
 ## Features
 
