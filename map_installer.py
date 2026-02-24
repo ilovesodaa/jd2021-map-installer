@@ -6,11 +6,45 @@ import wave
 import zipfile
 import argparse
 import sys
+import fnmatch
+import re
 
 # Import our individual scripts
 import map_downloader
 import map_builder
 import ubiart_lua
+
+
+class PipelineState:
+    """Holds all intermediate state for a map installation pipeline run."""
+    def __init__(self, map_name, asset_html, nohud_html, jd_dir=None,
+                 video_override=None, audio_offset=None):
+        self.map_name = map_name.strip()
+        self.map_lower = self.map_name.lower()
+        self.asset_html = clean_path(asset_html)
+        self.nohud_html = clean_path(nohud_html)
+        self.jd_dir = detect_jd_dir(jd_dir)
+
+        # Derived paths
+        self.download_dir = os.path.dirname(self.asset_html)
+        self.target_dir = os.path.join(
+            self.jd_dir, f"jd21\\data\\World\\MAPS\\{self.map_name}")
+        self.cache_dir = os.path.join(
+            self.jd_dir,
+            f"jd21\\data\\cache\\itf_cooked\\pc\\world\\maps\\{self.map_lower}")
+        self.extracted_zip_dir = os.path.join(self.download_dir, "main_scene_extracted")
+        self.ipk_extracted = os.path.join(self.download_dir, "ipk_extracted")
+
+        # Populated during pipeline execution
+        self.codename = self.map_name
+        self.audio_path = None
+        self.video_path = None
+        self.video_start_time = None
+
+        # Sync parameters (may be overridden during refinement)
+        self.v_override = video_override
+        self.a_offset = audio_offset
+
 
 def clean_path(path):
     """Deep cleans a path: removes quotes, trims whitespace, normalizes, and makes absolute if possible."""
@@ -37,22 +71,22 @@ def detect_jd_dir(provided_dir=None):
     if provided_dir:
         cleaned = clean_path(provided_dir)
         candidates.append(cleaned)
-    
+
     # Script's own directory
     script_dir = os.path.dirname(os.path.abspath(__file__))
     candidates.append(script_dir)
-    
+
     # Current working directory
     cwd = os.getcwd()
     if cwd not in candidates:
         candidates.append(cwd)
-        
+
     for cand in candidates:
         if cand and os.path.isdir(cand):
             # Signature check: Look for the 'jd21' data directory
             if os.path.exists(os.path.join(cand, "jd21")):
                 return cand
-                
+
     # Fallback to the first candidate or current script dir if nothing found
     return candidates[0] if candidates else script_dir
 
@@ -318,15 +352,11 @@ includeReference("world/maps/{map_name}/audio/amb/{intro_name}.ilu")'''
 
 
 def show_ffplay_preview(video_path, audio_path, v_override, a_offset):
-    """Sync preview using an ffmpeg -> ffplay pipe, considering both offsets."""
+    """Sync preview using an ffmpeg -> ffplay pipe, considering both offsets. Blocks until closed."""
     if not os.path.exists(video_path) or not os.path.exists(audio_path):
         print(f"ERROR: Preview files missing!\nVideo: {video_path}\nAudio: {audio_path}")
         return
 
-    import subprocess
-    # Logic: net_offset = v_override - a_offset
-    # If negative: Video starts before Audio.
-    # If positive: Audio starts before Video.
     net_offset = v_override - a_offset
     delay_ms = int(abs(net_offset) * 1000)
 
@@ -388,176 +418,230 @@ def show_ffplay_preview(video_path, audio_path, v_override, a_offset):
             except Exception:
                 pass
 
-def main():
-    parser = argparse.ArgumentParser(description="Fully Automated Just Dance 2021 Map Installer")
-    parser.add_argument("--map-name", required=True, help="E.g. Rockabye")
-    parser.add_argument("--asset-html", required=True, help="Path to asset mapping HTML")
-    parser.add_argument("--nohud-html", required=True, help="Path to nohud mapping HTML")
-    parser.add_argument("--jd-dir", default=None, help="Base directory of JD tools / JD21 install (auto-detected if omitted)")
-    parser.add_argument("--video-override", type=float, default=None, help="Force a specific video start time")
-    parser.add_argument("--audio-offset", type=float, default=None, help="Force a specific audio trim offset")
-    args = parser.parse_args()
-    
-    # Clean and detect paths
-    map_name = args.map_name.strip()
-    map_lower = map_name.lower()
-    
-    asset_html = clean_path(args.asset_html)
-    nohud_html = clean_path(args.nohud_html)
-    jd_dir = detect_jd_dir(args.jd_dir)
-    
-    print(f"--- Environment ---")
-    print(f"JD Base Dir: {jd_dir}")
-    print(f"Map Name:    {map_name}")
-    print(f"Asset HTML:  {asset_html}")
-    print(f"-------------------")
 
-    if not preflight_check(jd_dir, asset_html, nohud_html):
-        sys.exit(1)
-    
-    # Download directory should be where the asset HTML is
-    download_dir = os.path.dirname(asset_html)
-    map_dir = download_dir  # For compatibility with rest of script
-    
-    target_dir = os.path.join(jd_dir, f"jd21\\data\\World\\MAPS\\{map_name}")
-    cache_dir = os.path.join(jd_dir, f"jd21\\data\\cache\\itf_cooked\\pc\\world\\maps\\{map_lower}")
-    
-    print(f"=== Starting Automation for {map_name} ===")
-    print("[1] Cleaning up if there is a previous build...")
-    def safe_rmtree(path):
-        if os.path.exists(path):
+def _build_preview_commands(video_path, audio_path, v_override, a_offset):
+    """Build ffmpeg and ffplay command lists for sync preview."""
+    net_offset = v_override - a_offset
+    delay_ms = int(abs(net_offset) * 1000)
+
+    if net_offset == 0.0:
+        a_filt = "anull"
+        v_filt = "null"
+    elif net_offset < 0:
+        a_filt = f"adelay=delays={delay_ms}:all=1"
+        v_filt = "null"
+    else:
+        a_filt = "anull"
+        v_filt = f"setpts=PTS+({net_offset}/TB)"
+
+    ffmpeg_cmd = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-i", video_path,
+        "-i", audio_path,
+        "-filter_complex", f"[1:a]{a_filt}[a];[0:v]{v_filt}[v]",
+        "-map", "[v]", "-map", "[a]",
+        "-c:v", "libx264", "-preset", "ultrafast",
+        "-c:a", "pcm_s16le",
+        "-f", "matroska", "-"
+    ]
+
+    ffplay_cmd = ["ffplay", "-i", "-", "-autoexit", "-loglevel", "quiet",
+                  "-window_title", "SYNC PREVIEW - CLOSE TO CONTINUE"]
+
+    return ffmpeg_cmd, ffplay_cmd, net_offset
+
+
+def launch_preview_async(video_path, audio_path, v_override, a_offset):
+    """Launch ffplay preview and return process handles without blocking.
+
+    Returns:
+        tuple: (p_ffmpeg, p_ffplay) Popen objects, or (None, None) on error.
+    """
+    if not os.path.exists(video_path) or not os.path.exists(audio_path):
+        print(f"ERROR: Preview files missing!\nVideo: {video_path}\nAudio: {audio_path}")
+        return None, None
+
+    ffmpeg_cmd, ffplay_cmd, net_offset = _build_preview_commands(
+        video_path, audio_path, v_override, a_offset)
+
+    print(f"    Launching sync preview (net delay: {net_offset:.3f}s)...")
+
+    try:
+        p_ffmpeg = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        p_ffplay = subprocess.Popen(ffplay_cmd, stdin=p_ffmpeg.stdout, stderr=subprocess.DEVNULL)
+        p_ffmpeg.stdout.close()
+        return p_ffmpeg, p_ffplay
+    except Exception as e:
+        print(f"    ERROR: Could not launch preview: {e}")
+        return None, None
+
+
+def kill_preview(p_ffmpeg, p_ffplay):
+    """Terminate preview processes gracefully."""
+    for p in [p_ffplay, p_ffmpeg]:
+        if p is not None and p.poll() is None:
             try:
-                shutil.rmtree(path)
-            except Exception as e:
-                print(f"    Warning: Could not fully delete {path}: {e}")
-                print("    Continuing anyway...")
+                p.terminate()
+                p.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                p.kill()
+            except Exception:
+                pass
 
-    safe_rmtree(target_dir)
-    safe_rmtree(cache_dir)
-        
-    extracted_zip_dir = os.path.join(map_dir, "main_scene_extracted")
-    ipk_extracted = os.path.join(map_dir, "ipk_extracted")
-    
-    safe_rmtree(extracted_zip_dir)
-    safe_rmtree(ipk_extracted)
-    
-    # 1. Download Files
+
+# ---------------------------------------------------------------------------
+# Pipeline step functions
+# ---------------------------------------------------------------------------
+
+def _safe_rmtree(path):
+    """Remove a directory tree, logging warnings on failure."""
+    if os.path.exists(path):
+        try:
+            shutil.rmtree(path)
+        except Exception as e:
+            print(f"    Warning: Could not fully delete {path}: {e}")
+            print("    Continuing anyway...")
+
+
+def step_01_clean(state):
+    """Clean previous build artifacts."""
+    print("[1] Cleaning up if there is a previous build...")
+    _safe_rmtree(state.target_dir)
+    _safe_rmtree(state.cache_dir)
+    _safe_rmtree(state.extracted_zip_dir)
+    _safe_rmtree(state.ipk_extracted)
+
+
+def step_02_download(state):
+    """Download assets from JDU servers and detect codename/audio/video paths."""
     print("[2] Downloading assets from JDU servers...")
-    urls1 = map_downloader.extract_urls(asset_html) if asset_html and os.path.exists(asset_html) else []
-    urls2 = map_downloader.extract_urls(nohud_html) if nohud_html and os.path.exists(nohud_html) else []
-    downloaded = map_downloader.download_files(urls1 + urls2, download_dir)
-    
+    urls1 = map_downloader.extract_urls(state.asset_html) if state.asset_html and os.path.exists(state.asset_html) else []
+    urls2 = map_downloader.extract_urls(state.nohud_html) if state.nohud_html and os.path.exists(state.nohud_html) else []
+    map_downloader.download_files(urls1 + urls2, state.download_dir)
+
     # Auto-detect internal codename from downloaded files
-    codename = map_name
-    for f in os.listdir(download_dir):
+    state.codename = state.map_name
+    for f in os.listdir(state.download_dir):
         if "_MAIN_SCENE" in f and f.endswith(".zip"):
-            codename = f.split("_MAIN_SCENE")[0]
+            state.codename = f.split("_MAIN_SCENE")[0]
             break
         elif f.endswith(".ogg") and "AudioPreview" not in f:
-            codename = f[:-4]
+            state.codename = f[:-4]
             break
-            
-    print(f"    Detected Internal Codename: {codename}")
-    
+
+    print(f"    Detected Internal Codename: {state.codename}")
+
     # Check if necessary media exists, since auth links might expire
-    audio_path = os.path.join(download_dir, f"{codename}.ogg")
+    audio_path = os.path.join(state.download_dir, f"{state.codename}.ogg")
     if not os.path.exists(audio_path):
-        # Fallback to look for hash name from mapped dict if we knew it, or any .ogg not AudioPreview
-        oggs = [f for f in glob.glob(os.path.join(download_dir, "*.ogg")) if "AudioPreview" not in f]
-        if oggs: audio_path = oggs[0]
+        oggs = [f for f in glob.glob(os.path.join(state.download_dir, "*.ogg")) if "AudioPreview" not in f]
+        if oggs:
+            audio_path = oggs[0]
         else:
-            print("ERROR: Full Audio missing! Check if NO-HUD links expired. Cannot proceed.")
-            sys.exit(1)
-            
+            raise RuntimeError("Full Audio missing! Check if NO-HUD links expired. Cannot proceed.")
+    state.audio_path = audio_path
+
     video_path = None
     for qual in ["ULTRA", "HIGH", "MID", "LOW"]:
-        vp = os.path.join(download_dir, f"{codename}_{qual}.webm")
-        if os.path.exists(vp): video_path = vp; break
+        vp = os.path.join(state.download_dir, f"{state.codename}_{qual}.webm")
+        if os.path.exists(vp):
+            video_path = vp
+            break
     if not video_path:
-        # Check hash named webms
-        webms = [f for f in glob.glob(os.path.join(download_dir, "*.webm")) if "MapPreview" not in f and "VideoPreview" not in f]
-        if webms: video_path = webms[0]
+        webms = [f for f in glob.glob(os.path.join(state.download_dir, "*.webm")) if "MapPreview" not in f and "VideoPreview" not in f]
+        if webms:
+            video_path = webms[0]
         else:
-            print("ERROR: Full Video missing! Check if NO-HUD links expired. Cannot proceed.")
-            sys.exit(1)
-    
-    # 2. Unzip SCENES
+            raise RuntimeError("Full Video missing! Check if NO-HUD links expired. Cannot proceed.")
+    state.video_path = video_path
+
+
+def step_03_extract_scenes(state):
+    """Extract scene ZIP archives."""
     print("[3] Extracting scene archives...")
     sys.stdout.flush()
-    
-    extracted_zip_dir = os.path.join(map_dir, "main_scene_extracted")
-    os.makedirs(extracted_zip_dir, exist_ok=True)
-    
-    for f in os.listdir(download_dir):
+
+    os.makedirs(state.extracted_zip_dir, exist_ok=True)
+
+    for f in os.listdir(state.download_dir):
         if "SCENE" in f and f.endswith(".zip"):
-            scene_zip = os.path.join(download_dir, f)
+            scene_zip = os.path.join(state.download_dir, f)
             print(f"    Extracting {f}...")
             with zipfile.ZipFile(scene_zip, 'r') as z:
-                z.extractall(extracted_zip_dir)
-    
-    # 3. Unpack IPK
+                z.extractall(state.extracted_zip_dir)
+
+
+def step_04_unpack_ipk(state):
+    """Unpack IPK archives."""
     print("[4] Unpacking IPK archives...")
-    ipk_files = glob.glob(os.path.join(extracted_zip_dir, "*.ipk"))
-    ipk_extracted = os.path.join(map_dir, "ipk_extracted")
+    ipk_files = glob.glob(os.path.join(state.extracted_zip_dir, "*.ipk"))
     for ipk in ipk_files:
         print(f"    Unpacking {os.path.basename(ipk)}...")
-        subprocess.run([sys.executable, os.path.join(jd_dir, r"ubiart-archive-tools\ipk_unpacker.py"), ipk, ipk_extracted], check=False, capture_output=True)
-    
-    # 4. Decode MenuArt CKDs & Copy Raw PNG/JPGs (Must happen before config generation so Coach PNGs can be counted!)
+        subprocess.run([sys.executable, os.path.join(state.jd_dir, r"ubiart-archive-tools\ipk_unpacker.py"),
+                        ipk, state.ipk_extracted], check=False, capture_output=True)
+
+
+def step_05_decode_menuart(state):
+    """Decode MenuArt CKDs and copy raw PNG/JPGs."""
     print("[5] Decoding menu art textures...")
-    import fnmatch
-    import re
-    for file in os.listdir(download_dir):
-        src = os.path.join(download_dir, file)
+    for file in os.listdir(state.download_dir):
+        src = os.path.join(state.download_dir, file)
         dst = None
         if fnmatch.fnmatch(file, "*.tga.ckd") or file.endswith(".jpg") or file.endswith(".png"):
-            if "Phone" in file or "1024" in file or codename.lower() in file.lower() or map_name.lower() in file.lower():
-                new_name = re.sub(re.escape(codename), map_name, file, flags=re.IGNORECASE) if codename.lower() in file.lower() else file
-                dst = os.path.join(target_dir, f"MenuArt/textures/{new_name}")
-        
+            if "Phone" in file or "1024" in file or state.codename.lower() in file.lower() or state.map_name.lower() in file.lower():
+                new_name = re.sub(re.escape(state.codename), state.map_name, file, flags=re.IGNORECASE) if state.codename.lower() in file.lower() else file
+                dst = os.path.join(state.target_dir, f"MenuArt/textures/{new_name}")
+
         if dst:
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(src, dst)
-            
-    # Decode CKDs to actual TGAs/PNGs
-    subprocess.run([sys.executable, os.path.join(jd_dir, "ckd_decode.py"), "--batch", "--quiet",
-                    os.path.join(target_dir, "MenuArt/textures"), os.path.join(target_dir, "MenuArt/textures")], check=False)
 
-    # 5. Generate Text Files (ISCs, TPLs, TRKs, MPDs)
+    # Decode CKDs to actual TGAs/PNGs
+    subprocess.run([sys.executable, os.path.join(state.jd_dir, "ckd_decode.py"), "--batch", "--quiet",
+                    os.path.join(state.target_dir, "MenuArt/textures"),
+                    os.path.join(state.target_dir, "MenuArt/textures")], check=False)
+
+
+def step_06_generate_configs(state):
+    """Generate UbiArt config files (scenes, templates, tracks, manifests)."""
     print("[6] Generating UbiArt config files (scenes, templates, tracks, manifests)...")
-    map_builder.setup_dirs(target_dir)
-    # this will return video start time
-    video_start_time = map_builder.generate_text_files(map_name, ipk_extracted, target_dir, args.video_override)
-    
+    map_builder.setup_dirs(state.target_dir)
+    video_start_time = map_builder.generate_text_files(
+        state.map_name, state.ipk_extracted, state.target_dir, state.v_override)
+
     if video_start_time is None:
-        print("ERROR: Could not fetch video start time.")
-        sys.exit(1)
-        
+        raise RuntimeError("Could not fetch video start time.")
+
+    state.video_start_time = video_start_time
     print(f"    Video Start Time is: {video_start_time}")
-                    
-    # 6. Convert Tapes (JSON to Lua) via UbiArt-aware converter
+
+
+def step_07_convert_tapes(state):
+    """Convert choreography and karaoke tapes to Lua."""
     print("[7] Converting choreography and karaoke tapes to Lua...")
     for ty in ["dance", "karaoke"]:
-        src_tapes = glob.glob(os.path.join(ipk_extracted, f"**/*_tml_{ty}.?tape.ckd"), recursive=True)
+        src_tapes = glob.glob(os.path.join(state.ipk_extracted, f"**/*_tml_{ty}.?tape.ckd"), recursive=True)
         if src_tapes:
-            dst_tape = os.path.join(target_dir, f"Timeline/{map_name}_TML_{ty.capitalize()}.{ty[0]}tape")
+            dst_tape = os.path.join(state.target_dir, f"Timeline/{state.map_name}_TML_{ty.capitalize()}.{ty[0]}tape")
             tape_data = ubiart_lua.load_ckd_json(src_tapes[0])
             lua_str = ubiart_lua.process_tape(tape_data, tape_type=ty)
             with open(dst_tape, 'w', encoding='utf-8') as f:
                 f.write(lua_str)
             print(f"    Converted {os.path.basename(src_tapes[0])} -> {os.path.basename(dst_tape)}")
 
-    # 6.5. Convert Cinematic Tapes (overwrites empty fallback from map_builder if real data exists)
+
+def step_08_convert_cinematics(state):
+    """Convert cinematic tapes to Lua."""
     print("[8] Converting cinematic tapes to Lua...")
-    cinematics_dirs = glob.glob(os.path.join(ipk_extracted, "**/cinematics"), recursive=True)
+    cinematics_dirs = glob.glob(os.path.join(state.ipk_extracted, "**/cinematics"), recursive=True)
     cine_converted = 0
     for cine_dir in cinematics_dirs:
         for tape_file in glob.glob(os.path.join(cine_dir, "*.tape.ckd")):
             tape_basename = os.path.basename(tape_file)
             output_name = tape_basename.replace(".ckd", "")
             if "mainsequence" in output_name.lower():
-                output_name = f"{map_name}_MainSequence.tape"
-            dst_path = os.path.join(target_dir, f"Cinematics/{output_name}")
+                output_name = f"{state.map_name}_MainSequence.tape"
+            dst_path = os.path.join(state.target_dir, f"Cinematics/{output_name}")
             tape_data = ubiart_lua.load_ckd_json(tape_file)
             lua_str = ubiart_lua.process_tape(tape_data, tape_type="cinematics")
             with open(dst_path, 'w', encoding='utf-8') as f:
@@ -567,17 +651,19 @@ def main():
     if cine_converted == 0:
         print("    No cinematic tapes found, keeping empty fallback.")
 
-    # 6.6. Process Ambient Sounds
-    amb_dirs = glob.glob(os.path.join(ipk_extracted, "**/audio/amb"), recursive=True)
+
+def step_09_process_amb(state):
+    """Process ambient sound templates."""
+    amb_dirs = glob.glob(os.path.join(state.ipk_extracted, "**/audio/amb"), recursive=True)
     if amb_dirs:
         print("[9] Processing ambient sound templates...")
-        for amb_dir in amb_dirs:
-            dest_amb = os.path.join(target_dir, "Audio/AMB")
+        for amb_dir_path in amb_dirs:
+            dest_amb = os.path.join(state.target_dir, "Audio/AMB")
             os.makedirs(dest_amb, exist_ok=True)
-            for amb_file in glob.glob(os.path.join(amb_dir, "*.tpl.ckd")):
+            for amb_file in glob.glob(os.path.join(amb_dir_path, "*.tpl.ckd")):
                 amb_data = ubiart_lua.load_ckd_json(amb_file)
                 ilu_content, tpl_content, audio_file_paths = ubiart_lua.process_ambient_sound(
-                    amb_data, map_name, os.path.basename(amb_file))
+                    amb_data, state.map_name, os.path.basename(amb_file))
                 base = os.path.basename(amb_file).replace('.tpl.ckd', '')
                 with open(os.path.join(dest_amb, f"{base}.ilu"), 'w', encoding='utf-8') as f:
                     f.write(ilu_content)
@@ -586,7 +672,7 @@ def main():
                 print(f"    Generated AMB: {base}.ilu + {base}.tpl")
                 # Generate silent WAV placeholders for any referenced audio files that don't exist
                 for rel_path in audio_file_paths:
-                    abs_path = os.path.join(jd_dir, "jd21", "data", rel_path.replace("/", os.sep))
+                    abs_path = os.path.join(state.jd_dir, "jd21", "data", rel_path.replace("/", os.sep))
                     if not os.path.exists(abs_path):
                         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
                         with wave.open(abs_path, 'w') as wf:
@@ -597,9 +683,9 @@ def main():
                         print(f"    Created silent placeholder: {os.path.basename(abs_path)}")
 
         # Inject AMB actors into the audio ISC so the engine actually loads them
-        audio_isc_path = os.path.join(target_dir, f"Audio/{map_name}_audio.isc")
+        audio_isc_path = os.path.join(state.target_dir, f"Audio/{state.map_name}_audio.isc")
         if os.path.exists(audio_isc_path):
-            amb_tpls = glob.glob(os.path.join(target_dir, "Audio/AMB/*.tpl"))
+            amb_tpls = glob.glob(os.path.join(state.target_dir, "Audio/AMB/*.tpl"))
             if amb_tpls:
                 with open(audio_isc_path, "r", encoding="utf-8") as f:
                     isc_data = f.read()
@@ -608,7 +694,7 @@ def main():
                     amb_name = os.path.basename(tpl).replace('.tpl', '')
                     z = f"0.{i + 2:06d}"
                     amb_actors += f'''		<ACTORS NAME="Actor">
-			<Actor RELATIVEZ="{z}" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{amb_name}" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="World/MAPS/{map_name}/audio/AMB/{amb_name}.tpl">
+			<Actor RELATIVEZ="{z}" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{amb_name}" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="World/MAPS/{state.map_name}/audio/AMB/{amb_name}.tpl">
 				<COMPONENTS NAME="SoundComponent">
 					<SoundComponent />
 				</COMPONENTS>
@@ -619,132 +705,206 @@ def main():
                 with open(audio_isc_path, "w", encoding="utf-8") as f:
                     f.write(isc_data)
                 print(f"    Injected {len(amb_tpls)} AMB actor(s) into audio ISC")
+    else:
+        print("[9] No ambient sound templates found, skipping.")
 
-    # 7. Decode Pictos
+
+def step_10_decode_pictos(state):
+    """Decode pictograms."""
     print("[10] Decoding pictograms...")
     picto_src_dir = None
-    for path in glob.glob(os.path.join(ipk_extracted, "**/pictos"), recursive=True):
+    for path in glob.glob(os.path.join(state.ipk_extracted, "**/pictos"), recursive=True):
         picto_src_dir = path
         break
     sys.stdout.flush()
 
     if picto_src_dir:
-        picto_dst_dir = os.path.join(target_dir, "Timeline/pictos")
+        picto_dst_dir = os.path.join(state.target_dir, "Timeline/pictos")
         os.makedirs(picto_dst_dir, exist_ok=True)
-        # Copy all CKD pictos to target, then batch decode in one call
         for f in glob.glob(os.path.join(picto_src_dir, "*.png.ckd")):
             shutil.copy2(f, os.path.join(picto_dst_dir, os.path.basename(f)))
-        subprocess.run([sys.executable, os.path.join(jd_dir, "ckd_decode.py"), "--batch", "--quiet",
+        subprocess.run([sys.executable, os.path.join(state.jd_dir, "ckd_decode.py"), "--batch", "--quiet",
                         picto_dst_dir, picto_dst_dir], check=False)
-        # Remove source CKDs from target after decoding
         for f in glob.glob(os.path.join(picto_dst_dir, "*.ckd")):
             os.remove(f)
-            
-    # 7.5 Copy Gestures & Autodance files
+
+
+def step_11_extract_moves(state):
+    """Extract move files and autodance data."""
     print("[11] Extracting move files and autodance data...")
     for plat in ["nx", "wii", "durango", "scarlett", "orbis", "prospero", "wiiu"]:
-        moves_src = glob.glob(os.path.join(ipk_extracted, f"**/moves/{plat}"), recursive=True)
+        moves_src = glob.glob(os.path.join(state.ipk_extracted, f"**/moves/{plat}"), recursive=True)
         for folder in moves_src:
-            dest_moves = os.path.join(target_dir, f"Timeline/Moves/{plat.upper()}")
+            dest_moves = os.path.join(state.target_dir, f"Timeline/Moves/{plat.upper()}")
             os.makedirs(dest_moves, exist_ok=True)
             for f in glob.glob(os.path.join(folder, "*.*")):
                 shutil.copy2(f, os.path.join(dest_moves, os.path.basename(f)))
-                
-    autodance_tpls = glob.glob(os.path.join(ipk_extracted, "**/autodance/*.tpl.ckd"), recursive=True)
+
+    autodance_tpls = glob.glob(os.path.join(state.ipk_extracted, "**/autodance/*.tpl.ckd"), recursive=True)
     for f in autodance_tpls:
-        dest_ad = os.path.join(target_dir, "Autodance")
+        dest_ad = os.path.join(state.target_dir, "Autodance")
         os.makedirs(dest_ad, exist_ok=True)
-        
-        # Use existing map template name to seamlessly link with the map_builder .isc / .act
-        dst_tpl = os.path.join(dest_ad, f"{map_name}_autodance.tpl")
-        
-        # Convert the official JSON property template to an engine-readable Lua template
-        subprocess.run([sys.executable, os.path.join(jd_dir, "json_to_lua.py"), f, dst_tpl], check=True, capture_output=True)
+        dst_tpl = os.path.join(dest_ad, f"{state.map_name}_autodance.tpl")
+        subprocess.run([sys.executable, os.path.join(state.jd_dir, "json_to_lua.py"), f, dst_tpl],
+                       check=True, capture_output=True)
 
     # Convert autodance data CKDs (adtape, adrecording, advideo)
     for ext in ["adtape", "adrecording", "advideo"]:
-        ad_ckds = glob.glob(os.path.join(ipk_extracted, f"**/autodance/*.{ext}.ckd"), recursive=True)
+        ad_ckds = glob.glob(os.path.join(state.ipk_extracted, f"**/autodance/*.{ext}.ckd"), recursive=True)
         for f in ad_ckds:
-            dest_ad = os.path.join(target_dir, "Autodance")
+            dest_ad = os.path.join(state.target_dir, "Autodance")
             os.makedirs(dest_ad, exist_ok=True)
-            dst_file = os.path.join(dest_ad, f"{map_name}.{ext}")
-            subprocess.run([sys.executable, os.path.join(jd_dir, "json_to_lua.py"), f, dst_file],
-                          check=False, capture_output=True)
+            dst_file = os.path.join(dest_ad, f"{state.map_name}.{ext}")
+            subprocess.run([sys.executable, os.path.join(state.jd_dir, "json_to_lua.py"), f, dst_file],
+                           check=False, capture_output=True)
 
-    # Copy any other Autodance media if they exist (ogg, etc.), ignoring generic cooked configs
-    autodance_media = glob.glob(os.path.join(ipk_extracted, "**/autodance/*.*"), recursive=True)
+    # Copy any other Autodance media if they exist (ogg, etc.)
+    autodance_media = glob.glob(os.path.join(state.ipk_extracted, "**/autodance/*.*"), recursive=True)
     for f in autodance_media:
-        if f.endswith(".ckd"): continue # We only want straight media files here
-        dest_ad = os.path.join(target_dir, "Autodance")
+        if f.endswith(".ckd"):
+            continue
+        dest_ad = os.path.join(state.target_dir, "Autodance")
         os.makedirs(dest_ad, exist_ok=True)
         shutil.copy2(f, os.path.join(dest_ad, os.path.basename(f)))
 
     # Convert stape CKD (sequence tape with BPM/Signature data) if available
-    stape_ckds = glob.glob(os.path.join(ipk_extracted, "**/*.stape.ckd"), recursive=True)
+    stape_ckds = glob.glob(os.path.join(state.ipk_extracted, "**/*.stape.ckd"), recursive=True)
     if stape_ckds:
-        dst_stape = os.path.join(target_dir, f"Audio/{map_name}.stape")
-        subprocess.run([sys.executable, os.path.join(jd_dir, "json_to_lua.py"),
-                       stape_ckds[0], dst_stape], check=False, capture_output=True)
+        dst_stape = os.path.join(state.target_dir, f"Audio/{state.map_name}.stape")
+        subprocess.run([sys.executable, os.path.join(state.jd_dir, "json_to_lua.py"),
+                        stape_ckds[0], dst_stape], check=False, capture_output=True)
 
-    # 8. Convert Audio
-    v_override = args.video_override if args.video_override is not None else video_start_time
-    a_offset = args.audio_offset if args.audio_offset is not None else v_override
 
-    if audio_path:
+def step_12_convert_audio(state):
+    """Convert audio to 48kHz WAV with offset."""
+    # Resolve default sync parameters if not explicitly set
+    if state.v_override is None:
+        state.v_override = state.video_start_time
+    if state.a_offset is None:
+        state.a_offset = state.v_override
+
+    if state.audio_path:
         print(f"[12] Converting audio to 48kHz WAV...")
-        convert_audio(audio_path, map_name, target_dir, a_offset)
-        generate_intro_amb(audio_path, map_name, target_dir, a_offset)
+        convert_audio(state.audio_path, state.map_name, state.target_dir, state.a_offset)
+        generate_intro_amb(state.audio_path, state.map_name, state.target_dir, state.a_offset)
 
-    # 9. Copy Video
-    if video_path:
+
+def step_13_copy_video(state):
+    """Copy gameplay video to target."""
+    if state.video_path:
         print(f"[13] Copying gameplay video...")
-        main_vid = os.path.join(target_dir, f"VideosCoach/{map_name}.webm")
+        main_vid = os.path.join(state.target_dir, f"VideosCoach/{state.map_name}.webm")
         if not os.path.exists(main_vid):
-            shutil.copy2(video_path, main_vid)
-        
-    # 10. Register in SkuScene_Maps_PC_All
-    sku_isc = os.path.join(jd_dir, r"jd21\data\World\SkuScenes\SkuScene_Maps_PC_All.isc")
+            shutil.copy2(state.video_path, main_vid)
+
+
+def step_14_register_sku(state):
+    """Register map in SkuScene_Maps_PC_All."""
+    sku_isc = os.path.join(state.jd_dir, r"jd21\data\World\SkuScenes\SkuScene_Maps_PC_All.isc")
     if os.path.exists(sku_isc):
         with open(sku_isc, "r", encoding="utf-8") as f:
             sku_data = f.read()
-            
-        if f'USERFRIENDLY="{map_name}"' not in sku_data:
-            print(f"[14] Registering {map_name} in SkuScene...")
-            # Inject Actor
+
+        if f'USERFRIENDLY="{state.map_name}"' not in sku_data:
+            print(f"[14] Registering {state.map_name} in SkuScene...")
             actor_xml = f'''           <ACTORS NAME="Actor">
-              <Actor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{map_name}" POS2D="0 0" ANGLE="0.000000" INSTANCEDATAFILE="world/maps/{map_name}/songdesc.act" LUA="world/maps/{map_name}/songdesc.tpl">
+              <Actor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{state.map_name}" POS2D="0 0" ANGLE="0.000000" INSTANCEDATAFILE="world/maps/{state.map_name}/songdesc.act" LUA="world/maps/{state.map_name}/songdesc.tpl">
                   <COMPONENTS NAME="JD_SongDescComponent">
                       <JD_SongDescComponent />
                   </COMPONENTS>
               </Actor>
           </ACTORS>\n'''
             sku_data = sku_data.replace("          <sceneConfigs>", actor_xml + "          <sceneConfigs>")
-            
-            # Inject Coverflow
+
             coverflow_xml = f'''                          <CoverflowSkuSongs>
-                            <CoverflowSong name="{map_name}"  cover_path="world/maps/{map_name}/menuart/actors/{map_name}_cover_generic.act">
+                            <CoverflowSong name="{state.map_name}"  cover_path="world/maps/{state.map_name}/menuart/actors/{state.map_name}_cover_generic.act">
                               </CoverflowSong>
                           </CoverflowSkuSongs>
                           <CoverflowSkuSongs>
-                            <CoverflowSong name="{map_name}"  cover_path="world/maps/{map_name}/menuart/actors/{map_name}_cover_online.act">
+                            <CoverflowSong name="{state.map_name}"  cover_path="world/maps/{state.map_name}/menuart/actors/{state.map_name}_cover_online.act">
                               </CoverflowSong>
                           </CoverflowSkuSongs>\n'''
-            sku_data = sku_data.replace("                      </JD_SongDatabaseSceneConfig>", coverflow_xml + "                      </JD_SongDatabaseSceneConfig>")
-            
+            sku_data = sku_data.replace("                      </JD_SongDatabaseSceneConfig>",
+                                        coverflow_xml + "                      </JD_SongDatabaseSceneConfig>")
+
             with open(sku_isc, "w", encoding="utf-8") as f:
                 f.write(sku_data)
         else:
-            print(f"[14] {map_name} is already registered in SkuScene.")
-        
+            print(f"[14] {state.map_name} is already registered in SkuScene.")
+
+
+# ---------------------------------------------------------------------------
+# All pipeline steps in order, for easy iteration
+# ---------------------------------------------------------------------------
+PIPELINE_STEPS = [
+    ("Clean previous builds",                   step_01_clean),
+    ("Download assets from JDU servers",        step_02_download),
+    ("Extract scene archives",                  step_03_extract_scenes),
+    ("Unpack IPK archives",                     step_04_unpack_ipk),
+    ("Decode MenuArt textures",                 step_05_decode_menuart),
+    ("Generate UbiArt config files",            step_06_generate_configs),
+    ("Convert choreography/karaoke tapes",      step_07_convert_tapes),
+    ("Convert cinematic tapes",                 step_08_convert_cinematics),
+    ("Process ambient sounds",                  step_09_process_amb),
+    ("Decode pictograms",                       step_10_decode_pictos),
+    ("Extract moves & autodance",               step_11_extract_moves),
+    ("Convert audio",                           step_12_convert_audio),
+    ("Copy gameplay video",                     step_13_copy_video),
+    ("Register in SkuScene",                    step_14_register_sku),
+]
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Fully Automated Just Dance 2021 Map Installer")
+    parser.add_argument("--map-name", required=True, help="E.g. Rockabye")
+    parser.add_argument("--asset-html", required=True, help="Path to asset mapping HTML")
+    parser.add_argument("--nohud-html", required=True, help="Path to nohud mapping HTML")
+    parser.add_argument("--jd-dir", default=None, help="Base directory of JD tools / JD21 install (auto-detected if omitted)")
+    parser.add_argument("--video-override", type=float, default=None, help="Force a specific video start time")
+    parser.add_argument("--audio-offset", type=float, default=None, help="Force a specific audio trim offset")
+    args = parser.parse_args()
+
+    # Create pipeline state
+    state = PipelineState(
+        map_name=args.map_name,
+        asset_html=args.asset_html,
+        nohud_html=args.nohud_html,
+        jd_dir=args.jd_dir,
+        video_override=args.video_override,
+        audio_offset=args.audio_offset,
+    )
+
+    print(f"--- Environment ---")
+    print(f"JD Base Dir: {state.jd_dir}")
+    print(f"Map Name:    {state.map_name}")
+    print(f"Asset HTML:  {state.asset_html}")
+    print(f"-------------------")
+
+    if not preflight_check(state.jd_dir, state.asset_html, state.nohud_html):
+        sys.exit(1)
+
+    print(f"=== Starting Automation for {state.map_name} ===")
+
+    # Run all pipeline steps
+    for step_name, step_fn in PIPELINE_STEPS:
+        try:
+            step_fn(state)
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
+
     print("=== Automation Complete! ===")
     import time
-    time.sleep(1) # Give terminal buffers a second to clear
+    time.sleep(1)  # Give terminal buffers a second to clear
     sys.stdout.flush()
-    
+
     # --- INTERACTIVE CLI LOOP ---
+    v_override = state.v_override
+    a_offset = state.a_offset
+
     while True:
         print("\n" + "="*50)
-        print(f" SYNC REFINEMENT: {map_name}")
+        print(f" SYNC REFINEMENT: {state.map_name}")
         print(f" Current VIDEO_OVERRIDE: {v_override}s")
         print(f" Current AUDIO_OFFSET:   {a_offset}s")
         print("="*50)
@@ -756,33 +916,33 @@ def main():
         print("3 - Custom values")
         print("4 - Preview with ffplay")
         print("="*50)
-        
+
         print("-" * 50, flush=True)
         choice = input("Choice [0-4]: ").strip()
-        
+
         if choice == '0':
             sys.exit(0)
         elif choice == '1':
             a_offset = v_override
-            convert_audio(audio_path, map_name, target_dir, a_offset)
-            generate_intro_amb(audio_path, map_name, target_dir, a_offset)
-            show_ffplay_preview(video_path, audio_path, v_override, a_offset)
+            convert_audio(state.audio_path, state.map_name, state.target_dir, a_offset)
+            generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset)
+            show_ffplay_preview(state.video_path, state.audio_path, v_override, a_offset)
         elif choice == '2':
-            # Get durations
-            import json
             def get_dur(p):
-                res = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", p], capture_output=True, text=True)
+                res = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                                      "-of", "default=noprint_wrappers=1:nokey=1", p],
+                                     capture_output=True, text=True)
                 return float(res.stdout.strip())
 
-            v_dur = get_dur(video_path)
-            a_dur = get_dur(audio_path)
+            v_dur = get_dur(state.video_path)
+            a_dur = get_dur(state.audio_path)
             diff = v_dur - a_dur
             print(f"    Video: {v_dur:.2f}s, Audio: {a_dur:.2f}s")
             print(f"    Padding audio by: {diff:.3f}s")
             a_offset = diff
-            convert_audio(audio_path, map_name, target_dir, a_offset)
-            generate_intro_amb(audio_path, map_name, target_dir, a_offset)
-            show_ffplay_preview(video_path, audio_path, v_override, a_offset)
+            convert_audio(state.audio_path, state.map_name, state.target_dir, a_offset)
+            generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset)
+            show_ffplay_preview(state.video_path, state.audio_path, v_override, a_offset)
         elif choice == '3':
             try:
                 ov = input(f"New VIDEO_OVERRIDE (current {v_override}): ").strip()
@@ -791,15 +951,15 @@ def main():
                 if oa: a_offset = float(oa)
 
                 # Regenerate config if video_override changed
-                map_builder.generate_text_files(map_name, ipk_extracted, target_dir, v_override)
+                map_builder.generate_text_files(state.map_name, state.ipk_extracted, state.target_dir, v_override)
                 # Re-convert audio
-                convert_audio(audio_path, map_name, target_dir, a_offset)
-                generate_intro_amb(audio_path, map_name, target_dir, a_offset)
-                show_ffplay_preview(video_path, audio_path, v_override, a_offset)
+                convert_audio(state.audio_path, state.map_name, state.target_dir, a_offset)
+                generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset)
+                show_ffplay_preview(state.video_path, state.audio_path, v_override, a_offset)
             except ValueError:
                 print("Invalid number entered.")
         elif choice == '4':
-            show_ffplay_preview(video_path, audio_path, v_override, a_offset)
+            show_ffplay_preview(state.video_path, state.audio_path, v_override, a_offset)
         else:
             print("Invalid choice.")
 
