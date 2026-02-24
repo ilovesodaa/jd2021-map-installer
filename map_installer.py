@@ -245,6 +245,7 @@ def generate_intro_amb(ogg_path, map_name, target_dir, a_offset):
     intro_wavs = glob.glob(os.path.join(amb_dir, "*_intro.wav"))
     if intro_wavs:
         intro_wav = intro_wavs[0]
+        intro_name = os.path.basename(intro_wav).replace('.wav', '')
     else:
         # No AMB came from the IPK — create the full set of files from scratch
         intro_name    = f"amb_{map_lower}_intro"
@@ -317,29 +318,29 @@ includeReference("world/maps/{map_name}/audio/amb/{intro_name}.ilu")'''
             f.write(ilu_content)
         with open(os.path.join(amb_dir, f"{intro_name}.tpl"), 'w', encoding='utf-8') as f:
             f.write(tpl_content)
-
-        # Inject AMB actor into audio ISC (only if not already present)
-        audio_isc_path = os.path.join(target_dir, f"Audio/{map_name}_audio.isc")
-        if os.path.exists(audio_isc_path):
-            with open(audio_isc_path, "r", encoding="utf-8") as f:
-                isc_data = f.read()
-            if intro_name not in isc_data:
-                amb_actor = (
-                    f'\t\t<ACTORS NAME="Actor">\n'
-                    f'\t\t\t<Actor RELATIVEZ="0.000002" SCALE="1.000000 1.000000" xFLIPPED="0"'
-                    f' USERFRIENDLY="{intro_name}" POS2D="0.000000 0.000000" ANGLE="0.000000"'
-                    f' INSTANCEDATAFILE="" LUA="World/MAPS/{map_name}/audio/AMB/{intro_name}.tpl">\n'
-                    f'\t\t\t\t<COMPONENTS NAME="SoundComponent">\n'
-                    f'\t\t\t\t\t<SoundComponent />\n'
-                    f'\t\t\t\t</COMPONENTS>\n'
-                    f'\t\t\t</Actor>\n'
-                    f'\t\t</ACTORS>\n'
-                )
-                isc_data = isc_data.replace("\t\t<sceneConfigs>", amb_actor + "\t\t<sceneConfigs>")
-                with open(audio_isc_path, "w", encoding="utf-8") as f:
-                    f.write(isc_data)
-                print(f"    Injected intro AMB actor into audio ISC")
         print(f"    Created intro AMB files: {intro_name}.tpl/.ilu")
+
+    # Always inject AMB actor into audio ISC (regardless of whether files came from IPK)
+    audio_isc_path = os.path.join(target_dir, f"Audio/{map_name}_audio.isc")
+    if os.path.exists(audio_isc_path):
+        with open(audio_isc_path, "r", encoding="utf-8") as f:
+            isc_data = f.read()
+        if intro_name not in isc_data:
+            amb_actor = (
+                f'\t\t<ACTORS NAME="Actor">\n'
+                f'\t\t\t<Actor RELATIVEZ="0.000002" SCALE="1.000000 1.000000" xFLIPPED="0"'
+                f' USERFRIENDLY="{intro_name}" POS2D="0.000000 0.000000" ANGLE="0.000000"'
+                f' INSTANCEDATAFILE="" LUA="World/MAPS/{map_name}/audio/AMB/{intro_name}.tpl">\n'
+                f'\t\t\t\t<COMPONENTS NAME="SoundComponent">\n'
+                f'\t\t\t\t\t<SoundComponent />\n'
+                f'\t\t\t\t</COMPONENTS>\n'
+                f'\t\t\t</Actor>\n'
+                f'\t\t</ACTORS>\n'
+            )
+            isc_data = isc_data.replace("\t\t<sceneConfigs>", amb_actor + "\t\t<sceneConfigs>")
+            with open(audio_isc_path, "w", encoding="utf-8") as f:
+                f.write(isc_data)
+            print(f"    Injected intro AMB actor into audio ISC")
 
     # Generate the intro WAV with a 200ms fade-out at the tail end
     af_filter = f"atrim=end={amb_duration:.3f},asetpts=PTS-STARTPTS,afade=t=out:st={fade_start:.3f}:d=0.2"
