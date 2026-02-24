@@ -663,7 +663,7 @@ class MapInstallerGUI:
                     state.target_dir, a_offset)
                 map_installer.generate_intro_amb(
                     state.audio_path, state.map_name,
-                    state.target_dir, a_offset)
+                    state.target_dir, a_offset, v_override)
                 state.a_offset = a_offset
 
                 print("    Sync changes applied successfully.")
