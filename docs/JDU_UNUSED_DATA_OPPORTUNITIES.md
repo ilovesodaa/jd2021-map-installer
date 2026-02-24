@@ -6,7 +6,6 @@ improvement if implemented.
 
 > **Related docs:**
 > - `docs/JDU_DATA_MAPPING.md` -- field-level mapping of what IS used today
-> - `docs/archive/JDU_Data_Usage_Report.md` -- older overview (partially outdated)
 
 ---
 

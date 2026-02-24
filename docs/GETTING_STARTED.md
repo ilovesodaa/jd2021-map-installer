@@ -91,8 +91,10 @@ projectRoot/
 ├── README.md
 ├── docs/
 │   ├── GETTING_STARTED.md
+│   ├── AUDIO_TIMING.md
 │   ├── MANUAL_PORTING_GUIDE.md
-│   └── JDU_DATA_MAPPING.md
+│   ├── JDU_DATA_MAPPING.md
+│   └── JDU_UNUSED_DATA_OPPORTUNITIES.md
 ├── ubiart-archive-tools/    <- downloaded in Step 2
 ├── XTX-Extractor/           <- downloaded in Step 2
 └── jd21/                    <- your JD2021 PC install from Step 3
@@ -128,7 +130,7 @@ Each map install requires **two HTML files** exported from the **JDHelper** Disc
 
 ## Step 6 — Run the Installer
 
-Open a terminal in the project root (`d:\jd2021pc`) and run:
+Open a terminal in the project root and run:
 
 ```bash
 python map_installer.py --map-name YourMapName --asset-html assets.html --nohud-html nohud.html
@@ -168,26 +170,27 @@ Each map opens in its own terminal window for independent review.
 
 | Step | Description |
 |------|-------------|
-| **[1]** | Cleaning up previous build output |
-| **[2]** | Downloading assets (IPKs, ZIPs, WebMs, textures) from JDU servers |
-| **[3]** | Extracting scene archives |
-| **[4]** | Unpacking IPK archives |
-| **[5]** | Decoding menu art textures (CKD to PNG/TGA) |
-| **[6]** | Generating UbiArt config files (scenes, templates, tracks, manifests) |
-| **[7]** | Converting choreography and karaoke tapes to Lua |
-| **[8]** | Converting cinematic tapes to Lua |
-| **[9]** | Processing ambient sound templates |
-| **[10]** | Decoding pictograms |
-| **[11]** | Extracting move files and autodance data |
-| **[12]** | Converting audio to 48kHz WAV |
-| **[13]** | Copying gameplay video |
-| **[14]** | Registering the map in SkuScene |
-| **Interactive** | Audio/video sync fine-tuning with live FFplay preview |
+| **[1]** | Clean up previous build output |
+| **[2]** | Download assets (IPKs, ZIPs, WebMs, textures) from JDU servers |
+| **[3]** | Extract scene archives |
+| **[4]** | Unpack IPK archives |
+| **[5]** | Decode menu art textures (CKD → PNG/TGA) |
+| **[6]** | Generate UbiArt config files (scenes, templates, tracks, manifests) |
+| **[7]** | Convert choreography and karaoke tapes to Lua |
+| **[8]** | Convert cinematic tapes to Lua |
+| **[9]** | Process ambient sound templates from IPK |
+| **[10]** | Decode pictograms |
+| **[11]** | Extract move files and autodance data |
+| **[12]** | Convert audio to 48kHz WAV and generate intro AMB for pre-roll coverage |
+| **[13]** | Copy gameplay video |
+| **[14]** | Register the map in SkuScene |
+| **Interactive** | Audio/video sync fine-tuning with live FFplay preview (intro AMB regenerates on each adjustment) |
 
 ---
 
 ## Further Reading
 
-- **[README.md](../README.md)** — Project overview and feature list
-- **[MANUAL_PORTING_GUIDE.md](MANUAL_PORTING_GUIDE.md)** — How to manually port a map without scripts
+- **[README.md](../README.md)** — Project overview, feature list, and limitations
+- **[AUDIO_TIMING.md](AUDIO_TIMING.md)** — How `videoStartTime` causes pre-roll silence and how the AMB intro fix works
+- **[MANUAL_PORTING_GUIDE.md](MANUAL_PORTING_GUIDE.md)** — How to manually port a map without scripts; map directory structure reference
 - **[JDU_DATA_MAPPING.md](JDU_DATA_MAPPING.md)** — Technical property mapping between JDU and JD2021 PC
