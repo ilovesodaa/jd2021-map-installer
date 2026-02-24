@@ -9,6 +9,7 @@ import queue
 import subprocess
 import sys
 import os
+from PIL import Image, ImageTk
 
 # Ensure we can import sibling scripts regardless of cwd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -52,8 +53,8 @@ class MapInstallerGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("JD2021 Map Installer")
-        self.root.geometry("920x800")
-        self.root.minsize(780, 700)
+        self.root.geometry("1060x830")
+        self.root.minsize(900, 750)
 
         # State
         self.pipeline_state = None
@@ -61,8 +62,12 @@ class MapInstallerGUI:
         self.preview_ffmpeg = None
         self.preview_ffplay = None
         self._preview_lock = threading.Lock()
+        self._frame_stop = None
+        self._frame_thread = None
+        self._current_photo = None
         self._original_stdout = sys.stdout
         self._original_stderr = sys.stderr
+        self._preflight_passed = False
 
         # Tkinter variables for sync refinement
         self.v_override_var = tk.DoubleVar(value=0.0)
@@ -83,11 +88,10 @@ class MapInstallerGUI:
     # ------------------------------------------------------------------
 
     def _build_ui(self):
-        # Use a canvas with scrollbar for the entire content so it works on small screens
         container = ttk.Frame(self.root)
         container.pack(fill="both", expand=True, padx=8, pady=4)
 
-        # ---------- CONFIGURATION ----------
+        # ===================== CONFIGURATION =====================
         cfg = ttk.LabelFrame(container, text="Configuration", padding=6)
         cfg.pack(fill="x", pady=(0, 4))
 
@@ -97,47 +101,77 @@ class MapInstallerGUI:
             ("NOHUD HTML:", "nohud_html_entry", "html"),
             ("JD Directory:", "jd_dir_entry", "dir"),
         ]):
-            ttk.Label(cfg, text=label_text, width=14, anchor="e").grid(row=i, column=0, sticky="e", padx=(0, 4))
+            ttk.Label(cfg, text=label_text, width=14, anchor="e").grid(
+                row=i, column=0, sticky="e", padx=(0, 4))
             entry = ttk.Entry(cfg, width=64)
             entry.grid(row=i, column=1, sticky="ew", pady=1)
             setattr(self, attr_name, entry)
             if browse_type:
                 cmd = (lambda e=entry, bt=browse_type: self._browse(e, bt))
-                ttk.Button(cfg, text="Browse", width=8, command=cmd).grid(row=i, column=2, padx=(4, 0))
+                ttk.Button(cfg, text="Browse", width=8, command=cmd).grid(
+                    row=i, column=2, padx=(4, 0))
 
         cfg.columnconfigure(1, weight=1)
 
         btn_row = ttk.Frame(cfg)
         btn_row.grid(row=4, column=0, columnspan=3, pady=(6, 0))
-        self.preflight_btn = ttk.Button(btn_row, text="Pre-flight Check", command=self._on_preflight)
+        self.preflight_btn = ttk.Button(
+            btn_row, text="Pre-flight Check", command=self._on_preflight)
         self.preflight_btn.pack(side="left", padx=(0, 12))
-        self.install_btn = ttk.Button(btn_row, text="Install Map", command=self._on_install)
+        self.install_btn = ttk.Button(
+            btn_row, text="Install Map", command=self._on_install, state="disabled")
         self.install_btn.pack(side="left")
 
-        # ---------- PROGRESS ----------
-        prog = ttk.LabelFrame(container, text="Installation Progress", padding=6)
-        prog.pack(fill="x", pady=(0, 4))
+        # ===================== MIDDLE: PROGRESS + PREVIEW =====================
+        middle = ttk.Frame(container)
+        middle.pack(fill="both", expand=True, pady=(0, 4))
+
+        # --- Left: Installation Progress ---
+        prog = ttk.LabelFrame(middle, text="Installation Progress", padding=6)
+        prog.pack(side="left", fill="both", padx=(0, 4))
 
         self.step_labels = []
         for i, name in enumerate(self.STEP_NAMES):
-            lbl = ttk.Label(prog, text=f"[  ] Step {i+1}:  {name}", font=("Consolas", 9))
+            lbl = ttk.Label(prog, text=f"[  ] Step {i+1}:  {name}",
+                            font=("Consolas", 9))
             lbl.pack(anchor="w")
             self.step_labels.append(lbl)
 
-        # ---------- LOG ----------
-        log_frame = ttk.LabelFrame(container, text="Log Output", padding=4)
-        log_frame.pack(fill="both", expand=True, pady=(0, 4))
+        # --- Right: Embedded Preview ---
+        prev_frame = ttk.LabelFrame(middle, text="Preview", padding=4)
+        prev_frame.pack(side="right", fill="both", expand=True)
 
-        self.log_text = tk.Text(log_frame, height=8, state="disabled", wrap="word",
-                                font=("Consolas", 8), bg="#1e1e1e", fg="#cccccc",
-                                insertbackground="#cccccc")
-        log_sb = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
+        # Black container for embedded video preview
+        self.preview_container = tk.Frame(prev_frame, bg="black", width=480, height=270)
+        self.preview_container.pack(fill="both", expand=True)
+        self.preview_container.pack_propagate(False)
+
+        # "No Preview" overlay label (centered on the black frame)
+        self.preview_label = tk.Label(
+            self.preview_container, text="No Preview",
+            fg="#555555", bg="black", font=("Consolas", 14))
+        self.preview_label.place(relx=0.5, rely=0.5, anchor="center")
+
+        # ===================== LOG OUTPUT =====================
+        log_frame = ttk.LabelFrame(container, text="Log Output", padding=4)
+        log_frame.pack(fill="x", pady=(0, 4))
+
+        log_inner = ttk.Frame(log_frame)
+        log_inner.pack(fill="both", expand=True)
+
+        self.log_text = tk.Text(
+            log_inner, height=6, state="disabled", wrap="word",
+            font=("Consolas", 8), bg="#1e1e1e", fg="#cccccc",
+            insertbackground="#cccccc")
+        log_sb = ttk.Scrollbar(log_inner, orient="vertical",
+                               command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=log_sb.set)
         self.log_text.pack(side="left", fill="both", expand=True)
         log_sb.pack(side="right", fill="y")
 
-        # ---------- SYNC REFINEMENT ----------
-        self.sync_frame = ttk.LabelFrame(container, text="Sync Refinement", padding=6)
+        # ===================== SYNC REFINEMENT =====================
+        self.sync_frame = ttk.LabelFrame(
+            container, text="Sync Refinement", padding=6)
         self.sync_frame.pack(fill="x", pady=(0, 4))
 
         deltas = [1, 0.1, 0.01, 0.001]
@@ -148,16 +182,19 @@ class MapInstallerGUI:
         ]):
             row = ttk.Frame(self.sync_frame)
             row.pack(fill="x", pady=2)
-            ttk.Label(row, text=label, width=18, anchor="e", font=("Consolas", 9, "bold")).pack(side="left")
+            ttk.Label(row, text=label, width=18, anchor="e",
+                      font=("Consolas", 9, "bold")).pack(side="left")
 
-            # Decrement buttons
+            # Decrement buttons (largest delta first)
             for d in deltas:
-                btn = ttk.Button(row, text=f"-{d}", width=6,
-                                 command=lambda v=var, dd=d: self._on_increment(v, -dd))
+                btn = ttk.Button(
+                    row, text=f"-{d}", width=6,
+                    command=lambda v=var, dd=d: self._on_increment(v, -dd))
                 btn.pack(side="left", padx=1)
 
             # Value display
-            val_entry = ttk.Entry(row, width=14, justify="center", font=("Consolas", 10))
+            val_entry = ttk.Entry(row, width=14, justify="center",
+                                  font=("Consolas", 10))
             val_entry.pack(side="left", padx=6)
             val_entry.insert(0, f"{var.get():.5f}")
             val_entry.configure(state="readonly")
@@ -166,22 +203,30 @@ class MapInstallerGUI:
             else:
                 self._ao_display = val_entry
 
-            # Increment buttons
+            # Increment buttons (smallest delta first)
             for d in reversed(deltas):
-                btn = ttk.Button(row, text=f"+{d}", width=6,
-                                 command=lambda v=var, dd=d: self._on_increment(v, dd))
+                btn = ttk.Button(
+                    row, text=f"+{d}", width=6,
+                    command=lambda v=var, dd=d: self._on_increment(v, dd))
                 btn.pack(side="left", padx=1)
 
         # Action buttons
         actions = ttk.Frame(self.sync_frame)
         actions.pack(fill="x", pady=(8, 0))
-        self.sync_beatgrid_btn = ttk.Button(actions, text="Sync Beatgrid", command=self._on_sync_beatgrid)
+        self.sync_beatgrid_btn = ttk.Button(
+            actions, text="Sync Beatgrid", command=self._on_sync_beatgrid)
         self.sync_beatgrid_btn.pack(side="left", padx=(0, 6))
-        self.pad_audio_btn = ttk.Button(actions, text="Pad Audio", command=self._on_pad_audio)
+        self.pad_audio_btn = ttk.Button(
+            actions, text="Pad Audio", command=self._on_pad_audio)
         self.pad_audio_btn.pack(side="left", padx=(0, 6))
-        self.preview_btn = ttk.Button(actions, text="Preview", command=self._on_preview)
+        self.preview_btn = ttk.Button(
+            actions, text="Preview", command=self._on_preview)
         self.preview_btn.pack(side="left", padx=(0, 6))
-        self.apply_btn = ttk.Button(actions, text="Apply & Finish", command=self._on_apply)
+        self.stop_preview_btn = ttk.Button(
+            actions, text="Stop Preview", command=self._on_stop_preview)
+        self.stop_preview_btn.pack(side="left", padx=(0, 6))
+        self.apply_btn = ttk.Button(
+            actions, text="Apply & Finish", command=self._on_apply)
         self.apply_btn.pack(side="left")
 
         # Start with sync refinement disabled
@@ -193,7 +238,8 @@ class MapInstallerGUI:
 
     def _browse(self, entry, browse_type):
         if browse_type == "html":
-            path = filedialog.askopenfilename(filetypes=[("HTML files", "*.html"), ("All files", "*.*")])
+            path = filedialog.askopenfilename(
+                filetypes=[("HTML files", "*.html"), ("All files", "*.*")])
         else:
             path = filedialog.askdirectory()
         if path:
@@ -245,6 +291,7 @@ class MapInstallerGUI:
         else:
             lbl.configure(font=("Consolas", 9), foreground="")
 
+
     # ------------------------------------------------------------------
     # Pre-flight
     # ------------------------------------------------------------------
@@ -254,15 +301,29 @@ class MapInstallerGUI:
         asset = self.asset_html_entry.get().strip()
         nohud = self.nohud_html_entry.get().strip()
         if not jd_dir:
-            messagebox.showerror("Missing", "JD Directory is required for pre-flight check.")
+            messagebox.showerror("Missing",
+                                 "JD Directory is required for pre-flight check.")
             return
 
+        self.preflight_btn.configure(state="disabled")
+
         def _run():
-            ok = map_installer.preflight_check(jd_dir, asset or "(not set)", nohud or "(not set)")
-            self.root.after(0, lambda: messagebox.showinfo(
-                "Pre-flight", "All checks passed!" if ok else "Some checks failed. See log."))
+            ok = map_installer.preflight_check(
+                jd_dir, asset or "(not set)", nohud or "(not set)")
+            self._preflight_passed = ok
+            self.root.after(0, self._on_preflight_done, ok)
 
         threading.Thread(target=_run, daemon=True).start()
+
+    def _on_preflight_done(self, passed):
+        self.preflight_btn.configure(state="normal")
+        if passed:
+            self.install_btn.configure(state="normal")
+            messagebox.showinfo("Pre-flight", "All checks passed!")
+        else:
+            self.install_btn.configure(state="disabled")
+            messagebox.showwarning(
+                "Pre-flight", "Some checks failed. See log for details.")
 
     # ------------------------------------------------------------------
     # Install pipeline
@@ -275,7 +336,9 @@ class MapInstallerGUI:
         jd_dir = self.jd_dir_entry.get().strip()
 
         if not all([map_name, asset_html, nohud_html]):
-            messagebox.showerror("Missing Input", "Map Name, Asset HTML, and NOHUD HTML are all required.")
+            messagebox.showerror(
+                "Missing Input",
+                "Map Name, Asset HTML, and NOHUD HTML are all required.")
             return
 
         # Disable controls during pipeline
@@ -293,7 +356,8 @@ class MapInstallerGUI:
             jd_dir=jd_dir or None,
         )
 
-        self.pipeline_thread = threading.Thread(target=self._run_pipeline, daemon=True)
+        self.pipeline_thread = threading.Thread(
+            target=self._run_pipeline, daemon=True)
         self.pipeline_thread.start()
 
     def _run_pipeline(self):
@@ -305,13 +369,7 @@ class MapInstallerGUI:
         print(f"Asset HTML:  {state.asset_html}")
         print(f"-------------------")
 
-        if not map_installer.preflight_check(state.jd_dir, state.asset_html, state.nohud_html):
-            self.root.after(0, lambda: messagebox.showerror("Pre-flight Failed",
-                                                            "Critical dependency checks failed. See log."))
-            self.root.after(0, lambda: self.install_btn.configure(state="normal"))
-            self.root.after(0, lambda: self.preflight_btn.configure(state="normal"))
-            return
-
+        # Skip preflight here since we already passed it via the button
         print(f"=== Starting Automation for {state.map_name} ===")
 
         step_fns = [fn for _, fn in map_installer.PIPELINE_STEPS]
@@ -323,8 +381,8 @@ class MapInstallerGUI:
             except Exception as e:
                 self.root.after(0, self._update_step_status, i, "error")
                 print(f"ERROR at step {i+1}: {e}")
-                self.root.after(0, lambda err=str(e): messagebox.showerror(
-                    "Pipeline Error", f"Step {i+1} failed:\n{err}"))
+                self.root.after(0, lambda err=str(e), idx=i: messagebox.showerror(
+                    "Pipeline Error", f"Step {idx+1} failed:\n{err}"))
                 self.root.after(0, lambda: self.install_btn.configure(state="normal"))
                 self.root.after(0, lambda: self.preflight_btn.configure(state="normal"))
                 return
@@ -335,8 +393,10 @@ class MapInstallerGUI:
     def _on_pipeline_complete(self):
         state = self.pipeline_state
         # Populate sync values from pipeline
-        self.v_override_var.set(state.v_override if state.v_override is not None else 0.0)
-        self.a_offset_var.set(state.a_offset if state.a_offset is not None else 0.0)
+        self.v_override_var.set(
+            state.v_override if state.v_override is not None else 0.0)
+        self.a_offset_var.set(
+            state.a_offset if state.a_offset is not None else 0.0)
         self._refresh_value_displays()
 
         # Enable sync refinement
@@ -344,19 +404,57 @@ class MapInstallerGUI:
         # Keep install disabled until user finishes sync refinement via Apply
         self.preflight_btn.configure(state="normal")
 
-        messagebox.showinfo("Complete",
-                            f"Installation pipeline finished for {state.map_name}.\n\n"
-                            "Use the Sync Refinement panel below to fine-tune audio/video timing, "
-                            "then click 'Apply & Finish'.")
+        messagebox.showinfo(
+            "Complete",
+            f"Installation pipeline finished for {state.map_name}.\n\n"
+            "Use the Sync Refinement panel below to fine-tune "
+            "audio/video timing, then click 'Apply & Finish'.")
 
     # ------------------------------------------------------------------
-    # Preview management
+    # Preview management (PIL frame-by-frame + ffplay audio-only)
     # ------------------------------------------------------------------
 
     def _kill_current_preview(self):
-        map_installer.kill_preview(self.preview_ffmpeg, self.preview_ffplay)
+        # Signal frame reader to stop
+        if self._frame_stop is not None:
+            self._frame_stop.set()
+
+        # Kill ffmpeg (video frames pipe)
+        if self.preview_ffmpeg is not None:
+            try:
+                self.preview_ffmpeg.stdout.close()
+            except Exception:
+                pass
+            if self.preview_ffmpeg.poll() is None:
+                try:
+                    self.preview_ffmpeg.terminate()
+                    self.preview_ffmpeg.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self.preview_ffmpeg.kill()
+                except Exception:
+                    pass
+
+        # Kill ffplay (audio-only)
+        if self.preview_ffplay is not None and self.preview_ffplay.poll() is None:
+            try:
+                self.preview_ffplay.terminate()
+                self.preview_ffplay.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self.preview_ffplay.kill()
+            except Exception:
+                pass
+
         self.preview_ffmpeg = None
         self.preview_ffplay = None
+        self._frame_stop = None
+        self._frame_thread = None
+        self._current_photo = None
+
+        # Restore "No Preview" label
+        self.root.after(0, lambda: self.preview_label.configure(
+            image="", text="No Preview"))
+        self.root.after(0, lambda: self.preview_label.place(
+            relx=0.5, rely=0.5, anchor="center"))
 
     def _launch_preview(self):
         state = self.pipeline_state
@@ -369,10 +467,103 @@ class MapInstallerGUI:
         def _do():
             with self._preview_lock:
                 self._kill_current_preview()
-                self.preview_ffmpeg, self.preview_ffplay = map_installer.launch_preview_async(
-                    state.video_path, state.audio_path, v_override, a_offset)
+
+                # Get container dimensions
+                w = self.preview_container.winfo_width()
+                h = self.preview_container.winfo_height()
+                if w < 10 or h < 10:
+                    w, h = 480, 270
+
+                net_offset = v_override - a_offset
+                delay_ms = int(abs(net_offset) * 1000)
+
+                # Build video filter chain
+                vf_parts = []
+                if net_offset > 0:
+                    vf_parts.append(
+                        f"tpad=start_duration={net_offset}:color=black")
+                vf_parts.append(
+                    f"scale={w}:{h}:force_original_aspect_ratio=decrease")
+                vf_parts.append(
+                    f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black")
+                vf_chain = ",".join(vf_parts)
+
+                # Build audio filter (delay audio if video starts first)
+                af = None
+                if net_offset < 0:
+                    af = f"adelay=delays={delay_ms}:all=1"
+
+                # ffmpeg: decode video -> raw RGB24 frames to pipe
+                ffmpeg_cmd = [
+                    "ffmpeg", "-re", "-loglevel", "error",
+                    "-i", state.video_path,
+                    "-vf", vf_chain,
+                    "-r", "24",
+                    "-pix_fmt", "rgb24",
+                    "-f", "rawvideo",
+                    "-"
+                ]
+
+                # ffplay: audio-only playback (no display)
+                ffplay_cmd = [
+                    "ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"]
+                if af:
+                    ffplay_cmd += ["-af", af]
+                ffplay_cmd += ["-i", state.audio_path]
+
+                print(f"    Launching embedded preview "
+                      f"(net delay: {net_offset:.3f}s)...")
+
+                _cflags = (subprocess.CREATE_NO_WINDOW
+                           if sys.platform == "win32" else 0)
+
+                try:
+                    self.preview_ffmpeg = subprocess.Popen(
+                        ffmpeg_cmd,
+                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                        creationflags=_cflags)
+                    self.preview_ffplay = subprocess.Popen(
+                        ffplay_cmd,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        creationflags=_cflags)
+
+                    self._frame_stop = threading.Event()
+                    self._frame_thread = threading.Thread(
+                        target=self._read_video_frames,
+                        args=(self.preview_ffmpeg, w, h, self._frame_stop),
+                        daemon=True)
+                    self._frame_thread.start()
+                except Exception as e:
+                    print(f"    ERROR: Could not launch preview: {e}")
 
         threading.Thread(target=_do, daemon=True).start()
+
+    def _read_video_frames(self, proc, width, height, stop_event):
+        """Read raw RGB24 frames from ffmpeg stdout and display them."""
+        frame_size = width * height * 3
+        try:
+            while not stop_event.is_set():
+                data = b""
+                while len(data) < frame_size:
+                    chunk = proc.stdout.read(frame_size - len(data))
+                    if not chunk:
+                        return
+                    data += chunk
+                if not stop_event.is_set():
+                    img = Image.frombytes("RGB", (width, height), data)
+                    self.root.after(0, self._display_frame, img)
+        except Exception:
+            pass
+
+    def _display_frame(self, pil_image):
+        """Display a PIL image on the preview label (main thread only)."""
+        try:
+            photo = ImageTk.PhotoImage(pil_image)
+            self._current_photo = photo  # prevent garbage collection
+            self.preview_label.configure(image=photo, text="")
+            self.preview_label.place(relx=0.5, rely=0.5, anchor="center")
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Sync refinement callbacks
@@ -398,7 +589,8 @@ class MapInstallerGUI:
             try:
                 def get_dur(p):
                     res = subprocess.run(
-                        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                        ["ffprobe", "-v", "error", "-show_entries",
+                         "format=duration",
                          "-of", "default=noprint_wrappers=1:nokey=1", p],
                         capture_output=True, text=True)
                     return float(res.stdout.strip())
@@ -406,7 +598,8 @@ class MapInstallerGUI:
                 v_dur = get_dur(state.video_path)
                 a_dur = get_dur(state.audio_path)
                 diff = round(v_dur - a_dur, 5)
-                print(f"    Video: {v_dur:.2f}s, Audio: {a_dur:.2f}s, Padding: {diff:.3f}s")
+                print(f"    Video: {v_dur:.2f}s, Audio: {a_dur:.2f}s, "
+                      f"Padding: {diff:.3f}s")
 
                 self.root.after(0, lambda: self.a_offset_var.set(diff))
                 self.root.after(0, self._refresh_value_displays)
@@ -418,6 +611,12 @@ class MapInstallerGUI:
 
     def _on_preview(self):
         self._launch_preview()
+
+    def _on_stop_preview(self):
+        def _do():
+            with self._preview_lock:
+                self._kill_current_preview()
+        threading.Thread(target=_do, daemon=True).start()
 
     def _on_apply(self):
         state = self.pipeline_state
@@ -432,27 +631,34 @@ class MapInstallerGUI:
 
         def _apply():
             try:
-                # Regenerate config if v_override changed
-                print(f"    Applying: VIDEO_OVERRIDE={v_override:.5f}, AUDIO_OFFSET={a_offset:.5f}")
+                print(f"    Applying: VIDEO_OVERRIDE={v_override:.5f}, "
+                      f"AUDIO_OFFSET={a_offset:.5f}")
                 map_builder.generate_text_files(
-                    state.map_name, state.ipk_extracted, state.target_dir, v_override)
+                    state.map_name, state.ipk_extracted,
+                    state.target_dir, v_override)
                 state.v_override = v_override
 
-                # Re-convert audio with new offset
-                map_installer.convert_audio(state.audio_path, state.map_name, state.target_dir, a_offset)
-                map_installer.generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset)
+                map_installer.convert_audio(
+                    state.audio_path, state.map_name,
+                    state.target_dir, a_offset)
+                map_installer.generate_intro_amb(
+                    state.audio_path, state.map_name,
+                    state.target_dir, a_offset)
                 state.a_offset = a_offset
 
                 print("    Sync changes applied successfully.")
                 self.root.after(0, lambda: messagebox.showinfo(
-                    "Applied", f"Sync values applied and files regenerated.\n\n"
-                               f"VIDEO_OVERRIDE: {v_override:.5f}\n"
-                               f"AUDIO_OFFSET: {a_offset:.5f}\n\n"
-                               f"Map '{state.map_name}' is ready to use."))
-                self.root.after(0, lambda: self.install_btn.configure(state="normal"))
+                    "Applied",
+                    f"Sync values applied and files regenerated.\n\n"
+                    f"VIDEO_OVERRIDE: {v_override:.5f}\n"
+                    f"AUDIO_OFFSET: {a_offset:.5f}\n\n"
+                    f"Map '{state.map_name}' is ready to use."))
+                self.root.after(0,
+                    lambda: self.install_btn.configure(state="normal"))
             except Exception as e:
                 print(f"    ERROR applying changes: {e}")
-                self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to apply:\n{e}"))
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Error", f"Failed to apply:\n{e}"))
 
         threading.Thread(target=_apply, daemon=True).start()
 

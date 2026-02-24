@@ -419,8 +419,13 @@ def show_ffplay_preview(video_path, audio_path, v_override, a_offset):
                 pass
 
 
-def _build_preview_commands(video_path, audio_path, v_override, a_offset):
-    """Build ffmpeg and ffplay command lists for sync preview."""
+def _build_preview_commands(video_path, audio_path, v_override, a_offset, window_handle=None):
+    """Build ffmpeg and ffplay command lists for sync preview.
+
+    Args:
+        window_handle: If provided (int), embeds ffplay into that OS window handle
+                       using ffplay's -wid flag (HWND on Windows).
+    """
     net_offset = v_override - a_offset
     delay_ms = int(abs(net_offset) * 1000)
 
@@ -445,14 +450,21 @@ def _build_preview_commands(video_path, audio_path, v_override, a_offset):
         "-f", "matroska", "-"
     ]
 
-    ffplay_cmd = ["ffplay", "-i", "-", "-autoexit", "-loglevel", "quiet",
-                  "-window_title", "SYNC PREVIEW - CLOSE TO CONTINUE"]
+    if window_handle is not None:
+        ffplay_cmd = ["ffplay", "-i", "-", "-autoexit", "-loglevel", "quiet",
+                      "-noborder", "-wid", str(window_handle)]
+    else:
+        ffplay_cmd = ["ffplay", "-i", "-", "-autoexit", "-loglevel", "quiet",
+                      "-window_title", "SYNC PREVIEW - CLOSE TO CONTINUE"]
 
     return ffmpeg_cmd, ffplay_cmd, net_offset
 
 
-def launch_preview_async(video_path, audio_path, v_override, a_offset):
+def launch_preview_async(video_path, audio_path, v_override, a_offset, window_handle=None):
     """Launch ffplay preview and return process handles without blocking.
+
+    Args:
+        window_handle: If provided (int), embeds ffplay into that OS window handle.
 
     Returns:
         tuple: (p_ffmpeg, p_ffplay) Popen objects, or (None, None) on error.
@@ -462,7 +474,7 @@ def launch_preview_async(video_path, audio_path, v_override, a_offset):
         return None, None
 
     ffmpeg_cmd, ffplay_cmd, net_offset = _build_preview_commands(
-        video_path, audio_path, v_override, a_offset)
+        video_path, audio_path, v_override, a_offset, window_handle)
 
     print(f"    Launching sync preview (net delay: {net_offset:.3f}s)...")
 

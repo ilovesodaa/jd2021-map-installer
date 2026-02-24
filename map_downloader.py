@@ -37,7 +37,9 @@ def download_files(urls, download_dir):
     
     main_scene_zip = None
     gesture_zips = []
-    
+    video_url = None
+    audio_url = None
+
     for u in urls:
         if "ULTRA.webm" in u: video_url = u
         elif ".ogg" in u and "AudioPreview" not in u: audio_url = u
