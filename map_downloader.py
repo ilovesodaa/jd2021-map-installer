@@ -90,6 +90,8 @@ def download_files(urls, download_dir):
     return downloaded
 
 def run(map_name, asset_html, nohud_html, jd_dir):
+    if not jd_dir:
+        jd_dir = os.path.dirname(os.path.abspath(__file__))
     map_dir = os.path.join(jd_dir, map_name)
     download_dir = os.path.join(map_dir, "downloads")
     
@@ -106,6 +108,6 @@ if __name__ == "__main__":
     parser.add_argument("--map-name", required=True)
     parser.add_argument("--asset-html", required=True)
     parser.add_argument("--nohud-html", required=True)
-    parser.add_argument("--jd-dir", default=r"d:\jd2021pc")
+    parser.add_argument("--jd-dir", default=None)
     args = parser.parse_args()
     run(args.map_name, args.asset_html, args.nohud_html, args.jd_dir)

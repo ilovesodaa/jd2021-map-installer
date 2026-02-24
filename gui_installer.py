@@ -19,16 +19,24 @@ import map_builder
 
 
 class StdoutRedirector:
-    """Bridges print() calls from worker threads to a tkinter Text widget via a queue."""
+    """Bridges print() calls from worker threads to a tkinter Text widget via a queue.
+    If log_file is set, also writes to it simultaneously."""
 
-    def __init__(self, text_widget, root):
+    def __init__(self, text_widget, root, log_file=None):
         self.text_widget = text_widget
         self.root = root
+        self.log_file = log_file
         self._queue = queue.Queue()
         self._poll()
 
     def write(self, text):
         self._queue.put(text)
+        if self.log_file:
+            try:
+                self.log_file.write(text)
+                self.log_file.flush()
+            except Exception:
+                pass
 
     def flush(self):
         pass
@@ -68,6 +76,7 @@ class MapInstallerGUI:
         self._original_stdout = sys.stdout
         self._original_stderr = sys.stderr
         self._preflight_passed = False
+        self._log_file = None
 
         # Tkinter variables for sync refinement
         self.v_override_var = tk.DoubleVar(value=0.0)
@@ -355,6 +364,17 @@ class MapInstallerGUI:
             nohud_html=nohud_html,
             jd_dir=jd_dir or None,
         )
+
+        # Close any previous log file and open a new one for this install run
+        if self._log_file:
+            try:
+                self._log_file.close()
+            except Exception:
+                pass
+        self._log_file = map_installer.setup_log_file(
+            self.pipeline_state.jd_dir, self.pipeline_state.map_name)
+        self._redirector.log_file = self._log_file
+        print(f"Log file: {self._log_file.name}")
 
         self.pipeline_thread = threading.Thread(
             target=self._run_pipeline, daemon=True)
@@ -669,6 +689,11 @@ class MapInstallerGUI:
     def _on_close(self):
         self._kill_current_preview()
         self._restore_stdout()
+        if self._log_file:
+            try:
+                self._log_file.close()
+            except Exception:
+                pass
         self.root.destroy()
 
 
