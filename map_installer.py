@@ -161,7 +161,7 @@ def preflight_check(jd_dir, asset_html, nohud_html):
         return False
     return True
 
-def convert_audio(audio_path, map_name, target_dir, a_offset):
+def convert_audio(audio_path, map_name, target_dir, a_offset=0.0):
     wav_out = os.path.join(target_dir, f"Audio/{map_name}.wav")
     ogg_out = os.path.join(target_dir, f"Audio/{map_name}.ogg")
 
@@ -170,7 +170,7 @@ def convert_audio(audio_path, map_name, target_dir, a_offset):
         shutil.copy2(audio_path, ogg_out)
 
     if a_offset == 0.0:
-        print(f"    Converting to 48kHz WAV (no offset)...")
+        print(f"    Converting to 48kHz WAV (untrimmed, engine uses videoStartTime for sync)...")
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", audio_path, "-ar", "48000", wav_out], check=True)
     else:
         print(f"    Converting to 48kHz WAV (offset: {a_offset}s)...")
@@ -527,8 +527,10 @@ def main():
 
     # 8. Convert Audio
     v_override = args.video_override if args.video_override is not None else video_start_time
-    a_offset = args.audio_offset if args.audio_offset is not None else v_override
-    
+    a_offset = 0.0  # Default: untrimmed. Engine uses videoStartTime from TRK for sync.
+    if args.audio_offset is not None:
+        a_offset = args.audio_offset
+
     if audio_path:
         print(f"[12] Converting audio to 48kHz WAV...")
         convert_audio(audio_path, map_name, target_dir, a_offset)
