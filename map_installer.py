@@ -8,11 +8,39 @@ import argparse
 import sys
 import fnmatch
 import re
+import datetime
+import time
 
 # Import our individual scripts
 import map_downloader
 import map_builder
 import ubiart_lua
+
+
+class TeeOutput:
+    """Writes to both the original stream and a log file simultaneously."""
+
+    def __init__(self, original, log_file):
+        self.original = original
+        self.log_file = log_file
+
+    def write(self, text):
+        self.original.write(text)
+        self.log_file.write(text)
+        self.log_file.flush()
+
+    def flush(self):
+        self.original.flush()
+        self.log_file.flush()
+
+
+def setup_log_file(jd_dir, map_name):
+    """Create a timestamped log file in {jd_dir}/logs/ and return the open file handle."""
+    logs_dir = os.path.join(jd_dir, "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_path = os.path.join(logs_dir, f"install_{map_name}_{timestamp}.log")
+    return open(log_path, "w", encoding="utf-8", buffering=1)
 
 
 class PipelineState:
@@ -28,10 +56,9 @@ class PipelineState:
         # Derived paths
         self.download_dir = os.path.dirname(self.asset_html)
         self.target_dir = os.path.join(
-            self.jd_dir, f"jd21\\data\\World\\MAPS\\{self.map_name}")
+            self.jd_dir, "jd21", "data", "World", "MAPS", self.map_name)
         self.cache_dir = os.path.join(
-            self.jd_dir,
-            f"jd21\\data\\cache\\itf_cooked\\pc\\world\\maps\\{self.map_lower}")
+            self.jd_dir, "jd21", "data", "cache", "itf_cooked", "pc", "world", "maps", self.map_lower)
         self.extracted_zip_dir = os.path.join(self.download_dir, "main_scene_extracted")
         self.ipk_extracted = os.path.join(self.download_dir, "ipk_extracted")
 
@@ -590,7 +617,7 @@ def step_04_unpack_ipk(state):
     ipk_files = glob.glob(os.path.join(state.extracted_zip_dir, "*.ipk"))
     for ipk in ipk_files:
         print(f"    Unpacking {os.path.basename(ipk)}...")
-        subprocess.run([sys.executable, os.path.join(state.jd_dir, r"ubiart-archive-tools\ipk_unpacker.py"),
+        subprocess.run([sys.executable, os.path.join(state.jd_dir, "ubiart-archive-tools", "ipk_unpacker.py"),
                         ipk, state.ipk_extracted], check=False, capture_output=True)
 
 
@@ -813,7 +840,7 @@ def step_13_copy_video(state):
 
 def step_14_register_sku(state):
     """Register map in SkuScene_Maps_PC_All."""
-    sku_isc = os.path.join(state.jd_dir, r"jd21\data\World\SkuScenes\SkuScene_Maps_PC_All.isc")
+    sku_isc = os.path.join(state.jd_dir, "jd21", "data", "World", "SkuScenes", "SkuScene_Maps_PC_All.isc")
     if os.path.exists(sku_isc):
         with open(sku_isc, "r", encoding="utf-8") as f:
             sku_data = f.read()
@@ -887,10 +914,15 @@ def main():
         audio_offset=args.audio_offset,
     )
 
+    # Start logging to file — everything from here on is captured to both terminal and log
+    _log_file = setup_log_file(state.jd_dir, state.map_name)
+    sys.stdout = TeeOutput(sys.stdout, _log_file)
+
     print(f"--- Environment ---")
     print(f"JD Base Dir: {state.jd_dir}")
     print(f"Map Name:    {state.map_name}")
     print(f"Asset HTML:  {state.asset_html}")
+    print(f"Log file:    {_log_file.name}")
     print(f"-------------------")
 
     if not preflight_check(state.jd_dir, state.asset_html, state.nohud_html):
@@ -907,7 +939,6 @@ def main():
             sys.exit(1)
 
     print("=== Automation Complete! ===")
-    import time
     time.sleep(1)  # Give terminal buffers a second to clear
     sys.stdout.flush()
 
