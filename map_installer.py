@@ -170,7 +170,7 @@ def convert_audio(audio_path, map_name, target_dir, a_offset=0.0):
         shutil.copy2(audio_path, ogg_out)
 
     if a_offset == 0.0:
-        print(f"    Converting to 48kHz WAV (untrimmed, engine uses videoStartTime for sync)...")
+        print(f"    Converting to 48kHz WAV (no offset)...")
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", audio_path, "-ar", "48000", wav_out], check=True)
     else:
         print(f"    Converting to 48kHz WAV (offset: {a_offset}s)...")
@@ -458,7 +458,31 @@ def main():
                             wf.setframerate(48000)
                             wf.writeframes(b'\x00\x00' * 4800)  # 0.1s silence
                         print(f"    Created silent placeholder: {os.path.basename(abs_path)}")
-    
+
+        # Inject AMB actors into the audio ISC so the engine actually loads them
+        audio_isc_path = os.path.join(target_dir, f"Audio/{map_name}_audio.isc")
+        if os.path.exists(audio_isc_path):
+            amb_tpls = glob.glob(os.path.join(target_dir, "Audio/AMB/*.tpl"))
+            if amb_tpls:
+                with open(audio_isc_path, "r", encoding="utf-8") as f:
+                    isc_data = f.read()
+                amb_actors = ""
+                for i, tpl in enumerate(amb_tpls):
+                    amb_name = os.path.basename(tpl).replace('.tpl', '')
+                    z = f"0.{i + 2:06d}"
+                    amb_actors += f'''		<ACTORS NAME="Actor">
+			<Actor RELATIVEZ="{z}" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{amb_name}" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="World/MAPS/{map_name}/audio/AMB/{amb_name}.tpl">
+				<COMPONENTS NAME="SoundComponent">
+					<SoundComponent />
+				</COMPONENTS>
+			</Actor>
+		</ACTORS>
+'''
+                isc_data = isc_data.replace("		<sceneConfigs>", amb_actors + "		<sceneConfigs>")
+                with open(audio_isc_path, "w", encoding="utf-8") as f:
+                    f.write(isc_data)
+                print(f"    Injected {len(amb_tpls)} AMB actor(s) into audio ISC")
+
     # 7. Decode Pictos
     print("[10] Decoding pictograms...")
     picto_src_dir = None
@@ -527,9 +551,7 @@ def main():
 
     # 8. Convert Audio
     v_override = args.video_override if args.video_override is not None else video_start_time
-    a_offset = 0.0  # Default: untrimmed. Engine uses videoStartTime from TRK for sync.
-    if args.audio_offset is not None:
-        a_offset = args.audio_offset
+    a_offset = args.audio_offset if args.audio_offset is not None else v_override
 
     if audio_path:
         print(f"[12] Converting audio to 48kHz WAV...")
