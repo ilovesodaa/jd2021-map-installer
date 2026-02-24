@@ -167,7 +167,7 @@ def batch_decode(input_folder, output_folder=None, quiet=False):
         ckd_path = os.path.join(input_folder, ckd_file)
         # Use the CKD filename but change extension safely
         out_name = ckd_file.rsplit('.', 1)[0]
-        if not out_name.lower().endswith('.tga'):
+        if not any(out_name.lower().endswith(ext) for ext in ('.tga', '.png')):
             out_name += '.tga'
         out_path = os.path.join(output_folder, out_name)
 

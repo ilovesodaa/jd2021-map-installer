@@ -5,12 +5,11 @@ import os
 
 
 def find_jd21_path(provided_path=None):
-    # common default
     candidates = []
     if provided_path:
         candidates.append(provided_path)
-    candidates.append(r"d:\jd2021pc\jd21")
-    candidates.append(r"d:\jd2021pc")
+    # Default: the script lives in the project root alongside map_installer.py
+    candidates.append(os.path.dirname(os.path.abspath(__file__)))
     for p in candidates:
         if p and os.path.isdir(p):
             return p
@@ -85,9 +84,15 @@ def launch_installer_for(map_name, asset_html, nohud_html, jd21_cwd):
     print(f"\n========================================")
     print(f"Launching installer for {map_name} in new terminal...")
     print(f"========================================\n")
-    python_exe = f'"{sys.executable}"'
-    # Keep the terminal open so user can interact/review offsets
-    cmd = f'start "Install {map_name}" cmd /k {python_exe} map_installer.py --map-name "{map_name}" --asset-html "{asset_html}" --nohud-html "{nohud_html}"'
+    # Build inner command with proper quoting for paths that may contain spaces
+    inner_cmd = subprocess.list2cmdline([
+        sys.executable, "map_installer.py",
+        "--map-name", map_name,
+        "--asset-html", asset_html,
+        "--nohud-html", nohud_html,
+    ])
+    # cmd /k strips the outermost quotes (old behavior), leaving the inner command intact
+    cmd = f'start "Install {map_name}" cmd /k "{inner_cmd}"'
     subprocess.Popen(cmd, shell=True, cwd=jd21_cwd)
 
 

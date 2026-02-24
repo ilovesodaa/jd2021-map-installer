@@ -1,5 +1,9 @@
 # Original JDU Data Usage vs Extracted Map Builder Report
 
+> **Note:** This is an early-stage report. For current field-level mappings, see
+> `docs/JDU_DATA_MAPPING.md`. For unused data opportunities, see
+> `docs/JDU_UNUSED_DATA_OPPORTUNITIES.md`.
+
 Based on the analysis of the `map_builder.py` / `map_installer.py` scripts and cross-referencing against a "complete" standard custom map like `GetGetDown`, here is a breakdown of what original extracted data your scripts actually process, versus what is completely disregarded.
 
 ## ✅ Information Used (Extracted & Processed)

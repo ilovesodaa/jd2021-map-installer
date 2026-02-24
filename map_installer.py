@@ -164,7 +164,7 @@ def preflight_check(jd_dir, asset_html, nohud_html):
 def convert_audio(audio_path, map_name, target_dir, a_offset):
     wav_out = os.path.join(target_dir, f"Audio/{map_name}.wav")
     ogg_out = os.path.join(target_dir, f"Audio/{map_name}.ogg")
-    
+
     if not os.path.exists(ogg_out):
         print(f"    Copying menu preview OGG...")
         shutil.copy2(audio_path, ogg_out)
@@ -499,7 +499,17 @@ def main():
         
         # Convert the official JSON property template to an engine-readable Lua template
         subprocess.run([sys.executable, os.path.join(jd_dir, "json_to_lua.py"), f, dst_tpl], check=True, capture_output=True)
-            
+
+    # Convert autodance data CKDs (adtape, adrecording, advideo)
+    for ext in ["adtape", "adrecording", "advideo"]:
+        ad_ckds = glob.glob(os.path.join(ipk_extracted, f"**/autodance/*.{ext}.ckd"), recursive=True)
+        for f in ad_ckds:
+            dest_ad = os.path.join(target_dir, "Autodance")
+            os.makedirs(dest_ad, exist_ok=True)
+            dst_file = os.path.join(dest_ad, f"{map_name}.{ext}")
+            subprocess.run([sys.executable, os.path.join(jd_dir, "json_to_lua.py"), f, dst_file],
+                          check=False, capture_output=True)
+
     # Copy any other Autodance media if they exist (ogg, etc.), ignoring generic cooked configs
     autodance_media = glob.glob(os.path.join(ipk_extracted, "**/autodance/*.*"), recursive=True)
     for f in autodance_media:
@@ -507,7 +517,14 @@ def main():
         dest_ad = os.path.join(target_dir, "Autodance")
         os.makedirs(dest_ad, exist_ok=True)
         shutil.copy2(f, os.path.join(dest_ad, os.path.basename(f)))
-            
+
+    # Convert stape CKD (sequence tape with BPM/Signature data) if available
+    stape_ckds = glob.glob(os.path.join(ipk_extracted, "**/*.stape.ckd"), recursive=True)
+    if stape_ckds:
+        dst_stape = os.path.join(target_dir, f"Audio/{map_name}.stape")
+        subprocess.run([sys.executable, os.path.join(jd_dir, "json_to_lua.py"),
+                       stape_ckds[0], dst_stape], check=False, capture_output=True)
+
     # 8. Convert Audio
     v_override = args.video_override if args.video_override is not None else video_start_time
     a_offset = args.audio_offset if args.audio_offset is not None else v_override
@@ -582,17 +599,18 @@ def main():
         choice = input("Choice [0-4]: ").strip()
         
         if choice == '0':
-            break
+            sys.exit(0)
         elif choice == '1':
             a_offset = v_override
             convert_audio(audio_path, map_name, target_dir, a_offset)
+            show_ffplay_preview(video_path, audio_path, v_override, a_offset)
         elif choice == '2':
             # Get durations
             import json
             def get_dur(p):
                 res = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", p], capture_output=True, text=True)
                 return float(res.stdout.strip())
-            
+
             v_dur = get_dur(video_path)
             a_dur = get_dur(audio_path)
             diff = v_dur - a_dur
@@ -600,17 +618,19 @@ def main():
             print(f"    Padding audio by: {diff:.3f}s")
             a_offset = diff
             convert_audio(audio_path, map_name, target_dir, a_offset)
+            show_ffplay_preview(video_path, audio_path, v_override, a_offset)
         elif choice == '3':
             try:
                 ov = input(f"New VIDEO_OVERRIDE (current {v_override}): ").strip()
                 if ov: v_override = float(ov)
                 oa = input(f"New AUDIO_OFFSET (current {a_offset}): ").strip()
                 if oa: a_offset = float(oa)
-                
+
                 # Regenerate config if video_override changed
                 map_builder.generate_text_files(map_name, ipk_extracted, target_dir, v_override)
                 # Re-convert audio
                 convert_audio(audio_path, map_name, target_dir, a_offset)
+                show_ffplay_preview(video_path, audio_path, v_override, a_offset)
             except ValueError:
                 print("Invalid number entered.")
         elif choice == '4':
