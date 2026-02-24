@@ -56,6 +56,111 @@ def detect_jd_dir(provided_dir=None):
     # Fallback to the first candidate or current script dir if nothing found
     return candidates[0] if candidates else script_dir
 
+def check_executable(name):
+    """Check if an executable is available on PATH."""
+    try:
+        subprocess.run([name, "-version"], capture_output=True, timeout=5)
+        return True
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return False
+
+def preflight_check(jd_dir, asset_html, nohud_html):
+    """Run pre-flight dependency checks. Returns True if all critical checks pass."""
+    print("--- Pre-flight Checks ---")
+    failures = 0
+
+    def ok(msg):
+        print(f"  [OK] {msg}")
+
+    def fail(msg):
+        nonlocal failures
+        failures += 1
+        print(f"  [FAIL] {msg}")
+
+    def warn(msg):
+        print(f"  [WARN] {msg}")
+
+    # Critical: ffmpeg
+    if check_executable("ffmpeg"):
+        ok("ffmpeg found")
+    else:
+        fail("ffmpeg not found in PATH (install from https://ffmpeg.org)")
+
+    # Critical: jd21 game data
+    if os.path.isdir(os.path.join(jd_dir, "jd21")):
+        ok("JD2021 game data (jd21/)")
+    else:
+        fail(f"jd21/ directory not found in {jd_dir}")
+
+    # Critical: SkuScene registry
+    sku_path = os.path.join(jd_dir, "jd21", "data", "World", "SkuScenes", "SkuScene_Maps_PC_All.isc")
+    if os.path.isfile(sku_path):
+        ok("SkuScene registry file")
+    else:
+        fail(f"SkuScene_Maps_PC_All.isc not found at {sku_path}")
+
+    # Critical: ubiart-archive-tools
+    ipk_unpacker = os.path.join(jd_dir, "ubiart-archive-tools", "ipk_unpacker.py")
+    if os.path.isfile(ipk_unpacker):
+        ok("ubiart-archive-tools")
+    else:
+        fail(f"ubiart-archive-tools/ipk_unpacker.py not found (see GETTING_STARTED.md Step 2)")
+
+    # Critical: ckd_decode.py
+    if os.path.isfile(os.path.join(jd_dir, "ckd_decode.py")):
+        ok("ckd_decode.py")
+    else:
+        fail("ckd_decode.py not found in project root")
+
+    # Critical: json_to_lua.py
+    if os.path.isfile(os.path.join(jd_dir, "json_to_lua.py")):
+        ok("json_to_lua.py")
+    else:
+        fail("json_to_lua.py not found in project root")
+
+    # Critical: XTX-Extractor
+    if os.path.isdir(os.path.join(jd_dir, "XTX-Extractor")):
+        ok("XTX-Extractor")
+    else:
+        fail("XTX-Extractor/ directory not found (see GETTING_STARTED.md Step 2)")
+
+    # Critical: Pillow
+    try:
+        from PIL import Image
+        ok("Pillow (image library)")
+    except ImportError:
+        fail("Pillow not installed (run: pip install Pillow)")
+
+    # Critical: input HTML files
+    if os.path.isfile(asset_html):
+        ok("Asset HTML file")
+    else:
+        fail(f"Asset HTML file not found: {asset_html}")
+
+    if os.path.isfile(nohud_html):
+        ok("NOHUD HTML file")
+    else:
+        fail(f"NOHUD HTML file not found: {nohud_html}")
+
+    # Optional: ffplay
+    if check_executable("ffplay"):
+        ok("ffplay found")
+    else:
+        warn("ffplay not found (sync preview will be unavailable)")
+
+    # Optional: ffprobe
+    if check_executable("ffprobe"):
+        ok("ffprobe found")
+    else:
+        warn("ffprobe not found (sync duration calculation will be unavailable)")
+
+    print("-------------------------")
+
+    if failures > 0:
+        print(f"\nERROR: {failures} critical check(s) failed. Cannot proceed.")
+        return False
+    return True
+
 def convert_audio(audio_path, map_name, target_dir, a_offset):
     wav_out = os.path.join(target_dir, f"Audio/{map_name}.wav")
     ogg_out = os.path.join(target_dir, f"Audio/{map_name}.ogg")
@@ -87,7 +192,7 @@ def show_ffplay_preview(video_path, audio_path, v_override, a_offset):
     # If positive: Audio starts before Video.
     net_offset = v_override - a_offset
     delay_ms = int(abs(net_offset) * 1000)
-    
+
     if net_offset == 0.0:
         a_filt = "anull"
         v_filt = "null"
@@ -112,30 +217,39 @@ def show_ffplay_preview(video_path, audio_path, v_override, a_offset):
         "-f", "matroska", "-"
     ]
 
-    ffplay_cmd = ["ffplay", "-i", "-", "-autoexit", "-window_title", "SYNC PREVIEW - CLOSE TO CONTINUE"]
+    ffplay_cmd = ["ffplay", "-i", "-", "-autoexit", "-loglevel", "quiet",
+                  "-window_title", "SYNC PREVIEW - CLOSE TO CONTINUE"]
 
-    print(f"\nLaunching Sync Preview (Net Delay: {net_offset:.3f}s)...")
-    print("Close the preview window to return to the menu.")
-    
+    print(f"\n    Launching sync preview (net delay: {net_offset:.3f}s)...")
+    print("    Close the preview window to return to the menu.")
+
     try:
-        # Start ffmpeg process. We don't hide stderr here so we can see errors!
-        p_ffmpeg = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE)
-        # Start ffplay process, reading from ffmpeg's stdout
-        p_ffplay = subprocess.Popen(ffplay_cmd, stdin=p_ffmpeg.stdout)
+        # Suppress stderr from both processes to avoid version spam and broken pipe errors
+        p_ffmpeg = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        p_ffplay = subprocess.Popen(ffplay_cmd, stdin=p_ffmpeg.stdout, stderr=subprocess.DEVNULL)
 
-        
         # Allow p_ffmpeg to receive a SIGPIPE if p_ffplay exits
         p_ffmpeg.stdout.close()
-        
+
         # Wait for ffplay to close
         p_ffplay.wait()
-        
+
         # Terminate ffmpeg if it's still running
         if p_ffmpeg.poll() is None:
             p_ffmpeg.terminate()
-            
+            p_ffmpeg.wait(timeout=5)
+
+        print("    Preview closed.")
+
     except Exception as e:
-        print(f"ERROR: Preview session failed: {e}")
+        print(f"    ERROR: Preview session failed: {e}")
+        # Clean up processes on error
+        for p in [p_ffmpeg, p_ffplay]:
+            try:
+                if p.poll() is None:
+                    p.terminate()
+            except Exception:
+                pass
 
 def main():
     parser = argparse.ArgumentParser(description="Fully Automated Just Dance 2021 Map Installer")
@@ -160,9 +274,8 @@ def main():
     print(f"Map Name:    {map_name}")
     print(f"Asset HTML:  {asset_html}")
     print(f"-------------------")
-    
-    if not os.path.exists(jd_dir):
-        print(f"ERROR: JD Base directory not found: {jd_dir}")
+
+    if not preflight_check(jd_dir, asset_html, nohud_html):
         sys.exit(1)
     
     # Download directory should be where the asset HTML is
@@ -173,7 +286,7 @@ def main():
     cache_dir = os.path.join(jd_dir, f"jd21\\data\\cache\\itf_cooked\\pc\\world\\maps\\{map_lower}")
     
     print(f"=== Starting Automation for {map_name} ===")
-    print("[1] Cleaning up previous build...")
+    print("[1] Cleaning up if there is a previous build...")
     def safe_rmtree(path):
         if os.path.exists(path):
             try:
@@ -251,7 +364,7 @@ def main():
     ipk_extracted = os.path.join(map_dir, "ipk_extracted")
     for ipk in ipk_files:
         print(f"    Unpacking {os.path.basename(ipk)}...")
-        subprocess.run([sys.executable, os.path.join(jd_dir, r"ubiart-archive-tools\ipk_unpacker.py"), ipk, ipk_extracted], check=False)
+        subprocess.run([sys.executable, os.path.join(jd_dir, r"ubiart-archive-tools\ipk_unpacker.py"), ipk, ipk_extracted], check=False, capture_output=True)
     
     # 4. Decode MenuArt CKDs & Copy Raw PNG/JPGs (Must happen before config generation so Coach PNGs can be counted!)
     print("[5] Decoding menu art textures...")
@@ -270,7 +383,7 @@ def main():
             shutil.copy2(src, dst)
             
     # Decode CKDs to actual TGAs/PNGs
-    subprocess.run([sys.executable, os.path.join(jd_dir, "ckd_decode.py"), "--batch", 
+    subprocess.run([sys.executable, os.path.join(jd_dir, "ckd_decode.py"), "--batch", "--quiet",
                     os.path.join(target_dir, "MenuArt/textures"), os.path.join(target_dir, "MenuArt/textures")], check=False)
 
     # 5. Generate Text Files (ISCs, TPLs, TRKs, MPDs)
@@ -353,11 +466,18 @@ def main():
         picto_src_dir = path
         break
     sys.stdout.flush()
-        
+
     if picto_src_dir:
+        picto_dst_dir = os.path.join(target_dir, "Timeline/pictos")
+        os.makedirs(picto_dst_dir, exist_ok=True)
+        # Copy all CKD pictos to target, then batch decode in one call
         for f in glob.glob(os.path.join(picto_src_dir, "*.png.ckd")):
-            dst = os.path.join(target_dir, "Timeline/pictos", os.path.basename(f)[:-4]) # remove .ckd
-            subprocess.run([sys.executable, os.path.join(jd_dir, "ckd_decode.py"), f, dst], check=False)
+            shutil.copy2(f, os.path.join(picto_dst_dir, os.path.basename(f)))
+        subprocess.run([sys.executable, os.path.join(jd_dir, "ckd_decode.py"), "--batch", "--quiet",
+                        picto_dst_dir, picto_dst_dir], check=False)
+        # Remove source CKDs from target after decoding
+        for f in glob.glob(os.path.join(picto_dst_dir, "*.ckd")):
+            os.remove(f)
             
     # 7.5 Copy Gestures & Autodance files
     print("[11] Extracting move files and autodance data...")
@@ -378,7 +498,7 @@ def main():
         dst_tpl = os.path.join(dest_ad, f"{map_name}_autodance.tpl")
         
         # Convert the official JSON property template to an engine-readable Lua template
-        subprocess.run([sys.executable, os.path.join(jd_dir, "json_to_lua.py"), f, dst_tpl], check=True)
+        subprocess.run([sys.executable, os.path.join(jd_dir, "json_to_lua.py"), f, dst_tpl], check=True, capture_output=True)
             
     # Copy any other Autodance media if they exist (ogg, etc.), ignoring generic cooked configs
     autodance_media = glob.glob(os.path.join(ipk_extracted, "**/autodance/*.*"), recursive=True)
@@ -449,6 +569,7 @@ def main():
         print(f" Current VIDEO_OVERRIDE: {v_override}s")
         print(f" Current AUDIO_OFFSET:   {a_offset}s")
         print("="*50)
+        print("This is not a perfect tool, preview the video along with the audio to determine if its on beat or in sync")
         print("Is the audio matched with the video? Select an option:")
         print("0 - All good! (Exit)")
         print("1 - Sync Beatgrid: Use video's offset for audio trimming")
