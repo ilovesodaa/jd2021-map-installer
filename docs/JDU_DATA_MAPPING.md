@@ -19,6 +19,7 @@ This document details how raw data from the Just Dance Unlimited (JDU) JSON payl
 | `jdVersion` | `OriginalJDVersion`| Year of original release (e.g., 2014, 2015). |
 | `DancerName` | `DancerName` | Extracted from CKD, defaults to `"Unknown Dancer"`. |
 | `Credits` | `Credits` | Full rights/credits string from CKD. |
+| `Tags` | `Tags` | Extracted from CKD (e.g. `["Extreme", "Main"]`). Falls back to `["Main"]`. |
 | `Energy` | `Energy` | Energy level indicator, defaults to 1. |
 | `Status` | `Status` | Song status flag, defaults to 3. |
 | `LocaleID` | `LocaleID` | Locale identifier, defaults to 4294967295 (all locales). |
@@ -30,16 +31,30 @@ This document details how raw data from the Just Dance Unlimited (JDU) JSON payl
 ## 2. Audio & Synchronization (MusicTrack)
 
 ### .TRK Logic
-The timing markers in the original `musictrack.tpl.ckd` (JSON) are verbatim audio sample positions at **48kHz**.
 
-- **`markers`**: Array of sample positions for every beat. 
-- **`videoStartTime`**: Scientific offset in seconds (e.g., `-1.901000`). 
-  - **DANGER**: Do not calculate this as `startBeat * beatDuration`. Use the original metadata value to ensure frame-perfect sync.
-- **`startBeat`**: Number of pre-roll beats (e.g., `-4`).
-- **`previewEntry`**: Beat index where the song select preview begins.
-- **`volume`**: dB adjustment (usually 0).
+The timing markers in the original `musictrack.tpl.ckd` are verbatim audio sample positions at **48kHz**.
+
+| Field | Meaning |
+|---|---|
+| `markers` | Array of sample positions for every beat. Marker 0 always = sample 0 of the WAV. |
+| `videoStartTime` | Seconds before/after beat 0 where the video starts. Negative = pre-roll intro. |
+| `startBeat` | Beat index of marker 0 (e.g. `-5` = marker 0 is beat -5, five beats before scoring begins). |
+| `previewEntry` | Beat index where the song select preview begins. |
+| `volume` | dB adjustment (usually 0). |
+
+**DANGER**: Do not calculate `videoStartTime` synthetically. Extract the exact value from the original JDU metadata. Even a small error causes permanent audio/video desync.
+
+### The videoStartTime Coupling
+
+`videoStartTime` controls two inseparable engine behaviors simultaneously:
+
+1. The video player seeks to `videoStartTime` seconds at map start (negative = shows pre-roll frames before beat 0).
+2. The WAV audio is delayed by exactly `abs(videoStartTime)` seconds from game start.
+
+This means any map with `videoStartTime < 0` will have `abs(videoStartTime)` seconds of silence at the start, as the video plays its intro but the WAV hasn't started yet. See **[AUDIO_TIMING.md](AUDIO_TIMING.md)** for the full explanation and the AMB-based solution.
 
 ### SFI (Sound Format Info)
+
 JD2021 PC requires an explicit XML declaration of the sound format:
 ```xml
 <SoundFormatInfo Format="PCM" IsStreamed="1" IsMusic="1" Platform="PC" />
@@ -95,14 +110,26 @@ If no cinematic `.tape.ckd` files exist in the extracted IPK, the pipeline keeps
 
 ## 3.6. Ambient Sounds (`audio/amb/`)
 
-Some maps include ambient sound templates (e.g., intro sounds). These are `.tpl.ckd` files in the `audio/amb/` folder of the extracted IPK. Each is processed into two files:
+### IPK-Sourced AMB
+
+Maps that include ambient sound templates in their IPK (`audio/amb/*.tpl.ckd`) are processed into two files:
 
 | Output File | Contents |
 |------------|----------|
 | `.ilu` (descriptor) | Lua sound list data + `appendTable(component.SoundComponent_Template.soundList, DESCRIPTOR)` call |
 | `.tpl` (template) | Actor_Template wrapper with `includeReference` to the SoundComponent and the `.ilu` file |
 
-These are placed in the map's `Audio/AMB/` directory.
+These are placed in `Audio/AMB/` and injected as SoundComponent actors into the audio ISC. The WAV files they reference are created as silent placeholders, since JDU-hosted AMB audio is not downloadable.
+
+### Synthetic Intro AMB (Pre-Roll Coverage)
+
+Regardless of whether the map has AMB data in its IPK, the pipeline generates a real-content intro AMB whenever `videoStartTime < 0`. This covers the silence caused by the engine's WAV scheduling delay. See **[AUDIO_TIMING.md](AUDIO_TIMING.md)** for full technical details.
+
+The intro AMB:
+- Sources audio from the same OGG as the main track (making any overlap inaudible)
+- Duration: `abs(videoStartTime) + 1.355s`
+- 200ms linear fade-out at the end
+- Automatically regenerated when audio timing is adjusted in the sync loop
 
 ---
 
@@ -140,9 +167,6 @@ The following JDU properties are safely ignored:
 - **`previewAudio`**: Orphaned; the engine plays the main audio file from the `previewEntry` beat marker.
 
 ---
-*Reference: This mapping is derived from high-precision analysis of the "Starships" and "GetGetDown" case studies.*
-
----
 
 ## 7. Default Colors
 
@@ -173,3 +197,7 @@ CKD color keys may use different casing than the hardcoded fallbacks (e.g., CKD 
 - Notes:
   - Some `.tpl.ckd` files are plaintext JSON despite the `.ckd` extension; the pipeline attempts to detect and parse JSON first before applying CKD-specific decoding.
   - Extra color keys from the CKD that are not in the fallback table are included in the output with no fallback (conversion only).
+
+---
+
+*Reference: This mapping is derived from analysis of GetGetDown (reference map), BadRomance, and Albatraoz JDU payloads.*

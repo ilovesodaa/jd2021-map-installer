@@ -180,6 +180,143 @@ def convert_audio(audio_path, map_name, target_dir, a_offset=0.0):
             af_filter = f"adelay={int(a_offset * 1000)}|{int(a_offset * 1000)},asetpts=PTS-STARTPTS"
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", audio_path, "-af", af_filter, "-ar", "48000", wav_out], check=True)
 
+def generate_intro_amb(ogg_path, map_name, target_dir, a_offset):
+    """Generate an intro AMB WAV to cover pre-roll silence caused by negative videoStartTime.
+
+    Strategy: AMB plays from t=0, covering the silence window before the main WAV starts.
+    Both AMB and WAV source the same OGG, so any overlap is inaudible (identical content).
+    A 200ms fade-out at the end of the AMB eliminates the hard-cut volume snap.
+    """
+    map_lower = map_name.lower()
+    amb_dir = os.path.join(target_dir, "Audio", "AMB")
+
+    if a_offset >= 0:
+        # No pre-roll silence. If an intro WAV exists from a previous run, silence it.
+        if os.path.exists(amb_dir):
+            for wav in glob.glob(os.path.join(amb_dir, "*_intro.wav")):
+                with wave.open(wav, 'w') as wf:
+                    wf.setnchannels(2)
+                    wf.setsampwidth(2)
+                    wf.setframerate(48000)
+                    wf.writeframes(b'\x00\x00\x00\x00' * 4800)
+        return
+
+    os.makedirs(amb_dir, exist_ok=True)
+
+    # Duration: abs(offset) + 1.355s tail; 200ms fade-out starting 1.155s past the handoff
+    amb_duration = abs(a_offset) + 1.355
+    fade_start   = abs(a_offset) + 1.155
+
+    # Locate an existing intro WAV placeholder (created by IPK AMB processing)
+    intro_wavs = glob.glob(os.path.join(amb_dir, "*_intro.wav"))
+    if intro_wavs:
+        intro_wav = intro_wavs[0]
+    else:
+        # No AMB came from the IPK — create the full set of files from scratch
+        intro_name    = f"amb_{map_lower}_intro"
+        intro_wav     = os.path.join(amb_dir, f"{intro_name}.wav")
+        wav_rel_path  = f"world/maps/{map_lower}/audio/amb/{intro_name}.wav"
+
+        ilu_content = f'''DESCRIPTOR =
+{{
+\t{{
+\t\tNAME = "SoundDescriptor_Template",
+\t\tSoundDescriptor_Template =
+\t\t{{
+\t\t\tname = "{intro_name}",
+\t\t\tvolume = 0,
+\t\t\tcategory = "amb",
+\t\t\tlimitCategory = "",
+\t\t\tlimitMode = 0,
+\t\t\tmaxInstances = 4294967295,
+\t\t\tfiles =
+\t\t\t{{
+\t\t\t\t{{
+\t\t\t\t\tVAL = "{wav_rel_path}",
+\t\t\t\t}},
+\t\t\t}},
+\t\t\tserialPlayingMode = 0,
+\t\t\tserialStoppingMode = 0,
+\t\t\tparams =
+\t\t\t{{
+\t\t\t\tNAME = "SoundParams",
+\t\t\t\tSoundParams =
+\t\t\t\t{{
+\t\t\t\t\tloop = 0,
+\t\t\t\t\tplayMode = 1,
+\t\t\t\t\tplayModeInput = "",
+\t\t\t\t\trandomVolMin = 0,
+\t\t\t\t\trandomVolMax = 0,
+\t\t\t\t\tdelay = 0,
+\t\t\t\t\trandomDelay = 0,
+\t\t\t\t\trandomPitchMin = 1,
+\t\t\t\t\trandomPitchMax = 1,
+\t\t\t\t\tfadeInTime = 0,
+\t\t\t\t\tfadeOutTime = 0,
+\t\t\t\t\tfilterFrequency = 0,
+\t\t\t\t\tfilterType = 2,
+\t\t\t\t\ttransitionSampleOffset = 0,
+\t\t\t\t}},
+\t\t\t}},
+\t\t\tpauseInsensitiveFlags = 0,
+\t\t\toutDevices = 4294967295,
+\t\t\tsoundPlayAfterdestroy = 0,
+\t\t}},
+\t}},
+}}
+appendTable(component.SoundComponent_Template.soundList,DESCRIPTOR)'''
+
+        tpl_content = f'''params=
+{{
+\tNAME="Actor_Template",
+\tActor_Template=
+\t{{
+\t\tCOMPONENTS=
+\t\t{{
+\t\t}}
+\t}}
+}}
+includeReference("EngineData/Misc/Components/SoundComponent.ilu")
+includeReference("world/maps/{map_name}/audio/amb/{intro_name}.ilu")'''
+
+        with open(os.path.join(amb_dir, f"{intro_name}.ilu"), 'w', encoding='utf-8') as f:
+            f.write(ilu_content)
+        with open(os.path.join(amb_dir, f"{intro_name}.tpl"), 'w', encoding='utf-8') as f:
+            f.write(tpl_content)
+
+        # Inject AMB actor into audio ISC (only if not already present)
+        audio_isc_path = os.path.join(target_dir, f"Audio/{map_name}_audio.isc")
+        if os.path.exists(audio_isc_path):
+            with open(audio_isc_path, "r", encoding="utf-8") as f:
+                isc_data = f.read()
+            if intro_name not in isc_data:
+                amb_actor = (
+                    f'\t\t<ACTORS NAME="Actor">\n'
+                    f'\t\t\t<Actor RELATIVEZ="0.000002" SCALE="1.000000 1.000000" xFLIPPED="0"'
+                    f' USERFRIENDLY="{intro_name}" POS2D="0.000000 0.000000" ANGLE="0.000000"'
+                    f' INSTANCEDATAFILE="" LUA="World/MAPS/{map_name}/audio/AMB/{intro_name}.tpl">\n'
+                    f'\t\t\t\t<COMPONENTS NAME="SoundComponent">\n'
+                    f'\t\t\t\t\t<SoundComponent />\n'
+                    f'\t\t\t\t</COMPONENTS>\n'
+                    f'\t\t\t</Actor>\n'
+                    f'\t\t</ACTORS>\n'
+                )
+                isc_data = isc_data.replace("\t\t<sceneConfigs>", amb_actor + "\t\t<sceneConfigs>")
+                with open(audio_isc_path, "w", encoding="utf-8") as f:
+                    f.write(isc_data)
+                print(f"    Injected intro AMB actor into audio ISC")
+        print(f"    Created intro AMB files: {intro_name}.tpl/.ilu")
+
+    # Generate the intro WAV with a 200ms fade-out at the tail end
+    af_filter = f"atrim=end={amb_duration:.3f},asetpts=PTS-STARTPTS,afade=t=out:st={fade_start:.3f}:d=0.2"
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-i", ogg_path,
+         "-af", af_filter, "-ar", "48000", intro_wav],
+        check=True
+    )
+    print(f"    Generated intro AMB: {os.path.basename(intro_wav)} ({amb_duration:.3f}s, fade from {fade_start:.3f}s)")
+
+
 def show_ffplay_preview(video_path, audio_path, v_override, a_offset):
     """Sync preview using an ffmpeg -> ffplay pipe, considering both offsets."""
     if not os.path.exists(video_path) or not os.path.exists(audio_path):
@@ -556,6 +693,7 @@ def main():
     if audio_path:
         print(f"[12] Converting audio to 48kHz WAV...")
         convert_audio(audio_path, map_name, target_dir, a_offset)
+        generate_intro_amb(audio_path, map_name, target_dir, a_offset)
 
     # 9. Copy Video
     if video_path:
@@ -627,6 +765,7 @@ def main():
         elif choice == '1':
             a_offset = v_override
             convert_audio(audio_path, map_name, target_dir, a_offset)
+            generate_intro_amb(audio_path, map_name, target_dir, a_offset)
             show_ffplay_preview(video_path, audio_path, v_override, a_offset)
         elif choice == '2':
             # Get durations
@@ -642,6 +781,7 @@ def main():
             print(f"    Padding audio by: {diff:.3f}s")
             a_offset = diff
             convert_audio(audio_path, map_name, target_dir, a_offset)
+            generate_intro_amb(audio_path, map_name, target_dir, a_offset)
             show_ffplay_preview(video_path, audio_path, v_override, a_offset)
         elif choice == '3':
             try:
@@ -654,6 +794,7 @@ def main():
                 map_builder.generate_text_files(map_name, ipk_extracted, target_dir, v_override)
                 # Re-convert audio
                 convert_audio(audio_path, map_name, target_dir, a_offset)
+                generate_intro_amb(audio_path, map_name, target_dir, a_offset)
                 show_ffplay_preview(video_path, audio_path, v_override, a_offset)
             except ValueError:
                 print("Invalid number entered.")

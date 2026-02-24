@@ -1,6 +1,6 @@
 # Manual Map Porting Guide (Just Dance 2021 PC)
 
-This guide provides a comprehensive technical breakdown of manually porting a Just Dance Unlimited (JDU) map into the Just Dance 2021 PC engine (UbiArt). This process bridges the gap between basic video parsing and a fully integrated, natively-scored level with Autodance and controller tracking.
+This guide provides a technical breakdown of manually porting a Just Dance Unlimited (JDU) map into the Just Dance 2021 PC engine (UbiArt). The automated pipeline (`map_installer.py`) handles all of this — this guide exists for those who need to understand what the automation does, reproduce a step manually, or debug a problem.
 
 ---
 
@@ -13,6 +13,7 @@ This guide provides a comprehensive technical breakdown of manually porting a Ju
 5. [Critical Timing & Sync](#5-critical-timing--sync)
 6. [Game Integration](#6-game-integration)
 7. [Troubleshooting Guide](#7-troubleshooting-guide)
+8. [Appendix: Batch Preparation](#appendix-batch-preparation)
 
 ---
 
@@ -39,53 +40,53 @@ A complete JD2021 map requires the following structure under `World/MAPS/[MapNam
 ├── SongDesc.act                 # Song metadata actor
 │
 ├── Audio/
-│   ├── [MapName].wav            # Full audio (MUST be 48kHz PCM)
-│   ├── [MapName].ogg            # Original compressed audio
+│   ├── [MapName].wav            # Full audio (MUST be 48kHz PCM, trimmed to abs(vst))
+│   ├── [MapName].ogg            # Original compressed audio (for song select preview)
 │   ├── [MapName].trk            # CRITICAL: Beat timing data (Lua)
 │   ├── [MapName]_musictrack.tpl # Audio template
 │   ├── [MapName]_sequence.tpl   # Sequence template
-│   ├── [MapName]_Audio.isc      # Audio scene
-│   ├── [MapName].stape          # Sequence tape (required, can be empty)
+│   ├── [MapName]_audio.isc      # Audio scene
+│   ├── [MapName].stape          # Sequence tape (BPM/signature data per section)
 │   ├── ConfigMusic.sfi          # Audio format declaration (XML)
-│   └── AMB/                     # Ambient sound files (if present)
-│       ├── set_amb_*.ilu        # Sound descriptors
-│       └── set_amb_*.tpl        # Sound actor templates
+│   └── AMB/
+│       ├── amb_[mapname]_intro.wav  # Intro AMB audio (abs(vst)+1.355s, 200ms fade)
+│       ├── amb_[mapname]_intro.ilu  # Sound descriptor
+│       └── amb_[mapname]_intro.tpl  # Sound actor template
 │
 ├── Timeline/
-│   ├── [MapName]_tml.isc        # Timeline scene
-│   ├── [MapName]_TML_Dance.dtape   # Choreography (Lua)
-│   ├── [MapName]_TML_Dance.tpl     # Dance tape template
-│   ├── [MapName]_TML_Dance.act     # Dance tape actor
-│   ├── [MapName]_TML_Karaoke.ktape # Lyrics (Lua)
-│   ├── [MapName]_TML_Karaoke.tpl   # Karaoke tape template
-│   ├── [MapName]_TML_Karaoke.act   # Karaoke tape actor
+│   ├── [MapName]_tml.isc
+│   ├── [MapName]_TML_Dance.dtape
+│   ├── [MapName]_TML_Dance.tpl
+│   ├── [MapName]_TML_Dance.act
+│   ├── [MapName]_TML_Karaoke.ktape
+│   ├── [MapName]_TML_Karaoke.tpl
+│   ├── [MapName]_TML_Karaoke.act
 │   ├── pictos/
-│   │   └── *.png                # Decoded pictogram images
+│   │   └── *.png
 │   └── Moves/
-│       └── [PLATFORM]/          # Platform-specific gesture files (.msm, .gesture)
+│       └── [PLATFORM]/
 │
 ├── Cinematics/
-│   ├── [MapName]_cine.isc       # Cinematics scene
-│   ├── [MapName]_mainsequence.tpl  # Main sequence template
-│   ├── [MapName]_mainsequence.act  # Main sequence actor
-│   └── [MapName]_MainSequence.tape # Cinematic clips (Lua, may be empty)
+│   ├── [MapName]_cine.isc
+│   ├── [MapName]_mainsequence.tpl
+│   ├── [MapName]_mainsequence.act
+│   └── [MapName]_MainSequence.tape
 │
 ├── Autodance/
-│   ├── [MapName]_autodance.tpl  # Autodance template
-│   ├── [MapName]_autodance.act  # Autodance actor
-│   └── [MapName]_autodance.isc  # Autodance scene
+│   ├── [MapName]_autodance.tpl
+│   ├── [MapName]_autodance.act
+│   └── [MapName]_autodance.isc
 │
 ├── VideosCoach/
-│   ├── [MapName].webm           # Gameplay video
-│   ├── [MapName].mpd            # DASH manifest
-│   ├── [MapName]_video.isc      # Video scene
-│   └── video_player_main.act    # Video actor
+│   ├── [MapName].webm
+│   ├── [MapName].mpd
+│   ├── [MapName]_video.isc
+│   └── video_player_main.act
 │
 └── MenuArt/
-    ├── [MapName]_menuart.isc    # Menu art scene with inline components
-    ├── Actors/                  # Actor files for menu art
+    ├── [MapName]_menuart.isc
+    ├── Actors/
     └── textures/
-        └── [MapName]_coach_1.tga # Decoded menu textures
 ```
 
 ---
@@ -97,9 +98,9 @@ Lua-format file defining sample-perfect beat markers.
 ```lua
 structure = { MusicTrackStructure = {
     markers = { { VAL = 0 }, { VAL = 23040 }, ... }, -- Sample positions @ 48kHz
-    startBeat = -4,
-    endBeat = 500,
-    videoStartTime = -1.901000, -- Seconds before beat 0
+    startBeat = -5,
+    endBeat = 333,
+    videoStartTime = -2.145000, -- Seconds before beat 0; also delays WAV by this amount
     previewEntry = 84.0,
 }}
 ```
@@ -117,47 +118,63 @@ Lua tables containing timed events (Clips) defined in **ticks** (24 ticks per be
 ### 4.1 Extract Original Timing
 Open the JDU `musictrack.tpl.ckd` with a text editor. Even with the `.ckd` extension, it is often plaintext JSON. Extract `markers`, `videoStartTime`, and `startBeat`.
 
-### 4.2 Convert Audio (High Precision)
-Use FFmpeg to convert your OGG to WAV. You **must** force 48kHz:
+### 4.2 Convert Audio
+Use FFmpeg to convert your OGG to WAV at 48kHz. You must also trim to `abs(videoStartTime)` seconds so the WAV begins at the right position when the engine delays it:
 ```bash
-ffmpeg -i input.ogg -ar 48000 output.wav
+ffmpeg -i input.ogg -af "atrim=start=2.145,asetpts=PTS-STARTPTS" -ar 48000 output.wav
 ```
 If the sample rate isn't exactly 48,000Hz, the `.trk` markers will drift, causing massive desync.
 
-### 4.3 Decode Textures
+### 4.3 Generate Intro AMB
+Because `videoStartTime < 0` causes the WAV to be delayed, the gap must be covered by an AMB sound actor. The AMB sources audio from the same OGG (making any overlap inaudible) and is extended past the nominal handoff point to cover engine scheduling jitter:
+
+```bash
+# For videoStartTime = -2.145:
+# amb_duration = 2.145 + 1.355 = 3.500
+# fade_start   = 2.145 + 1.155 = 3.300
+ffmpeg -i input.ogg -af "atrim=end=3.500,asetpts=PTS-STARTPTS,afade=t=out:st=3.300:d=0.2" -ar 48000 amb_mapname_intro.wav
+```
+
+See **[AUDIO_TIMING.md](AUDIO_TIMING.md)** for the full explanation of why this formula works.
+
+For maps where `videoStartTime = 0`, no intro AMB is needed.
+
+### 4.4 Decode Textures
 UbiArt CKD textures have a 44-byte binary header followed by a DDS or XTX payload.
 1. Strip the header.
 2. Convert DDS/XTX to TGA or PNG (using Pillow or XTX-Extractor).
-3. Place in the `MenuArt/textures/` or `Timeline/pictos/` directories.
+3. Place in `MenuArt/textures/` or `Timeline/pictos/`.
 
-### 4.4 Convert JSON Tapes to Lua
+### 4.5 Convert JSON Tapes to Lua
 JDU uses JSON natively, but JD2021 PC expects Lua. The conversion involves both syntax transformation and UbiArt-specific data processing:
 
 **Syntax changes:**
 - Replace `[...]` with `{ ... }`
 - Replace `"key":` with `key =`
 - Booleans must be lowercase: `true` / `false`
-- Floats should use 6 decimal places for consistency (e.g., `0.300000`)
+- Floats should use 6 decimal places for consistency
 - Strings must escape `"`, `\n`, and `\r`
 
 **UbiArt-specific processing (handled by `ubiart_lua.py`):**
 - **MotionClip Color**: Convert `[a, r, g, b]` float arrays to hex strings (e.g., `"0x0e8cd3ff"`)
 - **MotionPlatformSpecifics**: Convert platform dict to KEY/VAL array format
 - **Tracks array**: Build `Tracks = { {TapeTrack = {id = X}}, ... }` from unique TrackIds across all clips
-- **Degenerate TrackId normalization**: When every clip has a unique ID (bad data), group by clip class and assign shared deterministic IDs
+- **Degenerate TrackId normalization**: When every clip has a unique ID (bad source data), group by clip class and assign shared deterministic IDs
 - **Primitive arrays**: Must be wrapped as `{ {VAL = 1}, {VAL = 2} }` to prevent engine crashes
 
-### 4.5 Convert Cinematic Tapes
+### 4.6 Convert Cinematic Tapes
 If the extracted IPK contains files in a `cinematics/` folder (e.g., `*_mainsequence.tape.ckd`), convert them with additional processing:
+- **Curve data**: `[x, y]` keyframe values in cinematic clips must be emitted as `vector2dNew(x, y)`
+- **ActorIndices resolution**: Integer actor references must be resolved against the tape's `ActorPaths` array
 
-- **Curve data**: Cinematic clips (AlphaClip, RotationClip, TranslationClip, SizeClip, ScaleClip, ColorClip, etc.) contain curve keyframes where `[x, y]` arrays must be emitted as `vector2dNew(x, y)` in Lua
-- **ActorIndices resolution**: Clips reference actors by index; these must be dereferenced against the tape's top-level `ActorPaths` array and replaced with resolved path strings
-- If no cinematic tapes exist, keep the empty fallback tape generated by `map_builder.py`
+### 4.7 Process Ambient Sounds from IPK
+If the extracted IPK has files in an `audio/amb/` folder (e.g., `amb_mapname_intro.tpl.ckd`), process each into:
+- `.ilu` (sound descriptor): Lua sound list + `appendTable` call
+- `.tpl` (actor template): Wrapper referencing SoundComponent and the `.ilu`
 
-### 4.6 Process Ambient Sounds
-If the extracted IPK has files in an `audio/amb/` folder (e.g., `set_amb_*.tpl.ckd`), process each into two files:
-- `.ilu` (sound descriptor): Contains the sound list data as Lua with an `appendTable` call
-- `.tpl` (actor template): Wrapper that includes the SoundComponent and references the `.ilu` file
+Then inject a SoundComponent actor into the audio `.isc` for each AMB file.
+
+If no AMB exists in the IPK but the map has `videoStartTime < 0`, create the three intro AMB files from scratch (see step 4.3 above for the WAV generation; the `.tpl` and `.ilu` follow the same structure as any other AMB).
 
 ---
 
@@ -165,21 +182,27 @@ If the extracted IPK has files in an `audio/amb/` folder (e.g., `set_amb_*.tpl.c
 
 ### The Timing Chain
 The engine resolves timing in this order:
-1. **Audio Position** (Sample #) -> **Beat Number** (via `.trk` markers).
-2. **Beat Number** -> **Tick Number** (24 ticks per beat).
-3. **Tick Number** -> **Clip Execution** (via Tape files).
+1. **Audio Position** (Sample #) → **Beat Number** (via `.trk` markers)
+2. **Beat Number** → **Tick Number** (24 ticks per beat)
+3. **Tick Number** → **Clip Execution** (via Tape files)
 
-### Video Start Time
-The `videoStartTime` is usually negative (e.g., `-1.901`). This means the video begins ~1.9 seconds before beat 0. **Do not calculate this synthetically**; extract the exact value from the original JDU metadata.
+### videoStartTime and Pre-Roll Silence
+The `videoStartTime` is typically negative (e.g., `-2.145`). This value controls both the video start offset AND the WAV audio delay. The engine uses the exact same value for both. **Do not calculate this synthetically**; always extract from the original JDU metadata.
+
+Because the WAV is delayed by `abs(videoStartTime)`, every ported map will have silence during the pre-roll period unless an intro AMB is provided. See **[AUDIO_TIMING.md](AUDIO_TIMING.md)**.
+
+### Why the WAV Must Be Trimmed
+The first sample of the WAV corresponds to marker 0 = beat `startBeat`. If `startBeat = -5` and the original OGG starts 2.145 seconds before the song's beat -5 content, then the OGG must be trimmed by 2.145 seconds before being used as the WAV, so that sample 0 of the WAV actually corresponds to beat -5 of the music.
 
 ---
 
 ## 6. Game Integration
 
 1. **Deployment**: Copy your `[MapName]` folder to `jd21/data/World/MAPS/`.
-2. **Registration**: 
-   - Open `SkuScene_Maps_PC_All.isc`.
-   - Add a `JD_SongDescTemplate` entry referencing your map's `SongDesc.tpl`.
+2. **Registration**:
+   - Open `SkuScene_Maps_PC_All.isc`
+   - Add a `JD_SongDescTemplate` entry referencing your map's `SongDesc.tpl`
+   - Add a `CoverflowSong` entry for the song select carousel
 3. **Validation**: Launch the game; if the title is missing, check your `SongDesc` actor configuration.
 
 ---
@@ -188,59 +211,33 @@ The `videoStartTime` is usually negative (e.g., `-1.901`). This means the video 
 
 | Issue | Root Cause | Fix |
 |-------|------------|-----|
-| **Crash at Coach Select** | Missing Cinematics chain | Create `_cine.isc` -> `_MainSequence.tpl` structure. |
-| **Progressive Desync** | Wrong Audio Sample Rate | Re-convert audio with `-ar 48000`. |
-| **Black Video** | Incorrect DASH MPD | Ensure namespace is `urn:mpeg:DASH:schema:MPD:2011`. |
-| **Missing Title** | SkuScene Registration | Verify the map entry in `SkuScene_Maps_PC_All.isc`. |
-| **Autodance Error** | Component Naming | Ensure component name is `JD_AutodanceComponent`. |
+| **Silence at map start** | No intro AMB for pre-roll period | Generate `amb_{mapname}_intro.wav` from OGG and add AMB actor to audio ISC |
+| **Crash at Coach Select** | Missing Cinematics chain | Create `_cine.isc` → `_MainSequence.tpl` structure |
+| **Progressive Desync** | Wrong audio sample rate | Re-convert audio with `-ar 48000` |
+| **Audio too late / too early** | Incorrect audio trim offset | Match `atrim=start=` and WAV delay to `abs(videoStartTime)` |
+| **Pictos / karaoke appear too early** | `videoStartTime` set to 0 on a pre-roll map | Restore original negative `videoStartTime`; use intro AMB for audio coverage |
+| **Black Video** | Incorrect DASH MPD | Ensure namespace is `urn:mpeg:DASH:schema:MPD:2011` |
+| **Missing Title** | SkuScene Registration | Verify the map entry in `SkuScene_Maps_PC_All.isc` |
+| **Autodance Error** | Component naming | Ensure component name is `JD_AutodanceComponent` |
 
 ---
-*For automated conversion, refer to the root `README.md` and the `map_installer.py` script. The automation suite now includes auto-detection of the `jd2021` directory and automatic path normalization to prevent common syntax errors.*
 
-## Appendix A — Batch Preperation (assets.html + nohud.html)
+## Appendix: Batch Preparation
 
-If you plan to convert many maps, prepare a single parent directory where each child's folder contains the two HTML exports (`assets.html` and `nohud.html`) captured from JDHelper. The `batch_install_maps.py` script will scan this directory and launch an installer for each valid map folder.
-
-Example layout:
+If you plan to convert many maps, prepare a single parent directory where each child folder contains the two HTML exports (`assets.html` and `nohud.html`) captured from JDHelper. The `batch_install_maps.py` script will scan this directory and launch an installer for each valid map folder.
 
 ```
 my_maps/
+    Albatraoz/
+        assets.html
+        nohud.html
     BadRomance/
         assets.html
         nohud.html
-    Starships/
-        assets.html
-        nohud.html
 ```
-
-To run the batch installer:
 
 ```bash
 python batch_install_maps.py "C:\path\to\my_maps"
 ```
 
-If the script cannot find your JD installation automatically it will prompt you to input the path (or you can pass `--jd21-path`).
-
-### Verifying `SongDesc.tpl` DefaultColors
-
-After installation, open `jd21/data/World/MAPS/<MapName>/SongDesc.tpl` and look for the `DefaultColors` block. All color keys present in the original JDU metadata (`lyrics`, `theme`, `songcolor_1a`, `songcolor_1b`, `songcolor_2a`, `songcolor_2b`, and any extras) are extracted and converted to hex. The pipeline uses case-insensitive key matching, so CKD keys like `songcolor_1a` correctly map to fallback `songColor_1A` without creating duplicates.
-
-Example snippet:
-
-```
-DefaultColors =
-{
-    { KEY = "lyrics", VAL = "0x2e3fffff" },
-    { KEY = "theme", VAL = "0xFFFFFFFF" },
-    { KEY = "songcolor_1a", VAL = "0xFF0BC7FF" },
-    { KEY = "songcolor_1b", VAL = "0xFF000000" },
-    ...
-}
-```
-
-If a color key is absent from the CKD, the pipeline uses a hardcoded fallback value.
-
-### Troubleshooting batch runs
-
-- If terminals open but installers do nothing, confirm that each map folder contains both required HTML files.
-- If `map_installer.py` cannot find `map_builder.py` or other modules, run the batch script from the project root or pass `--jd21-path` pointing to `d:\jd2021pc\jd21`.
+If the script cannot find your JD installation automatically, pass `--jd-dir "C:\path\to\jd21"` to `map_installer.py` directly, or ensure `jd21/` is in the project root.
