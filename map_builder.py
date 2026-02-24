@@ -207,7 +207,7 @@ params =
                     {{{default_colors_lua}
 					}},
 					VideoPreviewPath = "",
-					Mode = 6,
+					Mode = 0,
 					AudioPreviewFadeTime = {audio_prev_fade:.6f}
 				}}
 			}}
