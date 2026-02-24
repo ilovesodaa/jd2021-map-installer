@@ -277,16 +277,27 @@ def generate_intro_amb(ogg_path, map_name, target_dir, a_offset, v_override=None
     amb_duration      = audio_delay + audio_content_dur
     fade_start        = audio_delay + abs(a_offset) + 1.155  # = intro_dur + 1.155
 
-    # Locate an existing intro WAV placeholder (created by IPK AMB processing)
+    # Locate intro AMB files left by IPK processing (step 09).
+    # The TPL name is the actor name used in the ISC; the WAV name may differ.
+    # Priority: use the TPL name if one exists — otherwise create TPL+ILU from scratch.
     intro_wavs = glob.glob(os.path.join(amb_dir, "*_intro.wav"))
-    if intro_wavs:
-        intro_wav = intro_wavs[0]
-        intro_name = os.path.basename(intro_wav).replace('.wav', '')
+    intro_tpls = glob.glob(os.path.join(amb_dir, "*_intro.tpl"))
+
+    if intro_tpls:
+        # IPK-provided TPL+ILU already exist; derive the actor name from the TPL.
+        # The WAV placeholder (possibly named differently) was created by step 09.
+        intro_name = os.path.basename(intro_tpls[0]).replace('.tpl', '')
+        intro_wav  = intro_wavs[0] if intro_wavs else os.path.join(amb_dir, f"{intro_name}.wav")
     else:
-        # No AMB came from the IPK — create the full set of files from scratch
-        intro_name    = f"amb_{map_lower}_intro"
-        intro_wav     = os.path.join(amb_dir, f"{intro_name}.wav")
-        wav_rel_path  = f"world/maps/{map_lower}/audio/amb/{intro_name}.wav"
+        # No TPL from IPK — create one (use existing WAV name if available).
+        if intro_wavs:
+            intro_wav  = intro_wavs[0]
+            intro_name = os.path.basename(intro_wav).replace('.wav', '')
+        else:
+            intro_name = f"amb_{map_lower}_intro"
+            intro_wav  = os.path.join(amb_dir, f"{intro_name}.wav")
+
+        wav_rel_path  = f"world/maps/{map_lower}/audio/amb/{os.path.basename(intro_wav)}"
 
         ilu_content = f'''DESCRIPTOR =
 {{
