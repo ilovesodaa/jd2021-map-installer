@@ -17,6 +17,51 @@ def find_jd21_path(provided_path=None):
     return None
 
 
+def check_executable(name):
+    """Check if an executable is available on PATH."""
+    try:
+        subprocess.run([name, "-version"], capture_output=True, timeout=5)
+        return True
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def preflight_check(jd21):
+    """Run pre-flight checks before launching batch installers. Returns True if all pass."""
+    print("--- Pre-flight Checks ---")
+    failures = 0
+
+    def ok(msg):
+        print(f"  [OK] {msg}")
+
+    def fail(msg):
+        nonlocal failures
+        failures += 1
+        print(f"  [FAIL] {msg}")
+
+    if os.path.isfile(os.path.join(jd21, "map_installer.py")):
+        ok("map_installer.py found")
+    else:
+        fail(f"map_installer.py not found in {jd21}")
+
+    if os.path.isdir(os.path.join(jd21, "jd21")):
+        ok("JD2021 game data (jd21/)")
+    else:
+        fail(f"jd21/ directory not found in {jd21}")
+
+    if check_executable("ffmpeg"):
+        ok("ffmpeg found")
+    else:
+        fail("ffmpeg not found in PATH (install from https://ffmpeg.org)")
+
+    print("-------------------------")
+
+    if failures > 0:
+        print(f"\nERROR: {failures} critical check(s) failed. Cannot proceed.")
+        return False
+    return True
+
+
 def collect_map_folders(root_dir):
     """Return list of (mapname, asset_html, nohud_html) found under root_dir.
 
@@ -71,6 +116,9 @@ def main():
             print("Aborting: JD install path not provided.")
             print("Usage: batch_install_maps.py <maps_dir> [--jd21-path <path>] -- maps_dir should contain map folders with assets.html and nohud.html")
             return
+
+    if not preflight_check(jd21):
+        return
 
     found = collect_map_folders(maps_root)
     if not found:

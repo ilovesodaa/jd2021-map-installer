@@ -75,7 +75,7 @@ def xtx_to_dds(xtx_data):
     return dds_data, info
 
 
-def dds_to_image(dds_data, output_path):
+def dds_to_image(dds_data, output_path, quiet=False):
     """Convert DDS data to TGA or PNG using Pillow."""
     try:
         from PIL import Image
@@ -91,7 +91,8 @@ def dds_to_image(dds_data, output_path):
     try:
         img = Image.open(temp_dds)
         img.save(output_path)
-        print(f"  Saved: {output_path} ({img.size[0]}x{img.size[1]})")
+        if not quiet:
+            print(f"  Saved: {output_path} ({img.size[0]}x{img.size[1]})")
     except Exception as e:
         # Pillow can't read all DDS formats; fall back to saving as DDS
         dds_fallback = output_path.rsplit('.', 1)[0] + '.dds'
@@ -104,10 +105,11 @@ def dds_to_image(dds_data, output_path):
             os.remove(temp_dds)
 
 
-def decode_ckd(ckd_path, output_path=None):
+def decode_ckd(ckd_path, output_path=None, quiet=False):
     """Full pipeline: CKD → XTX → DDS → TGA/PNG"""
     basename = os.path.basename(ckd_path)
-    print(f"\nDecoding: {basename}")
+    if not quiet:
+        print(f"\nDecoding: {basename}")
 
     # Determine output path
     if output_path is None:
@@ -115,20 +117,23 @@ def decode_ckd(ckd_path, output_path=None):
 
     # Step 1: Strip CKD header
     raw_data, fmt = strip_ckd_header(ckd_path)
-    print(f"  CKD header stripped ({CKD_HEADER_SIZE} bytes), payload format: {fmt}")
+    if not quiet:
+        print(f"  CKD header stripped ({CKD_HEADER_SIZE} bytes), payload format: {fmt}")
 
     if fmt == 'dds':
         # PC CKD - already DDS, just convert to output format
-        print(f"  PC DDS format detected, converting directly...")
-        dds_to_image(raw_data, output_path)
+        if not quiet:
+            print(f"  PC DDS format detected, converting directly...")
+        dds_to_image(raw_data, output_path, quiet=quiet)
         return True
 
     # Step 2: XTX → DDS (deswizzle)
     try:
         dds_data, info = xtx_to_dds(raw_data)
-        print(f"  Deswizzled: {info['width']}x{info['height']}, format: {info['format']}")
+        if not quiet:
+            print(f"  Deswizzled: {info['width']}x{info['height']}, format: {info['format']}")
     except Exception as e:
-        print(f"  ERROR during XTX decode: {e}")
+        print(f"  ERROR during XTX decode of {basename}: {e}")
         # Save raw XTX so user can try manual conversion
         xtx_fallback = output_path.rsplit('.', 1)[0] + '.xtx'
         with open(xtx_fallback, 'wb') as f:
@@ -137,11 +142,11 @@ def decode_ckd(ckd_path, output_path=None):
         return False
 
     # Step 3: DDS → TGA/PNG
-    dds_to_image(dds_data, output_path)
+    dds_to_image(dds_data, output_path, quiet=quiet)
     return True
 
 
-def batch_decode(input_folder, output_folder=None):
+def batch_decode(input_folder, output_folder=None, quiet=False):
     """Decode all CKD files in a folder."""
     if output_folder is None:
         output_folder = os.path.join(input_folder, 'decoded')
@@ -153,8 +158,9 @@ def batch_decode(input_folder, output_folder=None):
         print(f"No .ckd files found in {input_folder}")
         return
 
-    print(f"Found {len(ckd_files)} CKD files in {input_folder}")
-    print(f"Output folder: {output_folder}")
+    if not quiet:
+        print(f"Found {len(ckd_files)} CKD files in {input_folder}")
+        print(f"Output folder: {output_folder}")
 
     success = 0
     for ckd_file in ckd_files:
@@ -165,12 +171,15 @@ def batch_decode(input_folder, output_folder=None):
             out_name += '.tga'
         out_path = os.path.join(output_folder, out_name)
 
-        if decode_ckd(ckd_path, out_path):
+        if decode_ckd(ckd_path, out_path, quiet=quiet):
             success += 1
 
-    print(f"\n{'='*40}")
-    print(f"Done! {success}/{len(ckd_files)} files decoded successfully.")
-    print(f"Output: {output_folder}")
+    if quiet:
+        print(f"    Decoded {success}/{len(ckd_files)} textures.")
+    else:
+        print(f"\n{'='*40}")
+        print(f"Done! {success}/{len(ckd_files)} files decoded successfully.")
+        print(f"Output: {output_folder}")
 
 
 if __name__ == '__main__':
@@ -178,11 +187,15 @@ if __name__ == '__main__':
         print(__doc__)
         sys.exit(1)
 
-    if sys.argv[1] == '--batch':
-        input_folder = sys.argv[2] if len(sys.argv) > 2 else '.'
-        output_folder = sys.argv[3] if len(sys.argv) > 3 else None
-        batch_decode(input_folder, output_folder)
+    # Check for --quiet / -q flag
+    quiet = '--quiet' in sys.argv or '-q' in sys.argv
+    args = [a for a in sys.argv[1:] if a not in ('--quiet', '-q')]
+
+    if args and args[0] == '--batch':
+        input_folder = args[1] if len(args) > 1 else '.'
+        output_folder = args[2] if len(args) > 2 else None
+        batch_decode(input_folder, output_folder, quiet=quiet)
     else:
-        ckd_path = sys.argv[1]
-        output_path = sys.argv[2] if len(sys.argv) > 2 else None
-        decode_ckd(ckd_path, output_path)
+        ckd_path = args[0] if args else sys.argv[1]
+        output_path = args[1] if len(args) > 1 else None
+        decode_ckd(ckd_path, output_path, quiet=quiet)
