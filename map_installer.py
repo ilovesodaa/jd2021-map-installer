@@ -241,12 +241,14 @@ def convert_audio(audio_path, map_name, target_dir, a_offset=0.0):
             af_filter = f"adelay={int(a_offset * 1000)}|{int(a_offset * 1000)},asetpts=PTS-STARTPTS"
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", audio_path, "-af", af_filter, "-ar", "48000", wav_out], check=True)
 
-def generate_intro_amb(ogg_path, map_name, target_dir, a_offset):
+def generate_intro_amb(ogg_path, map_name, target_dir, a_offset, v_override=None):
     """Generate an intro AMB WAV to cover pre-roll silence caused by negative videoStartTime.
 
     Strategy: AMB plays from t=0, covering the silence window before the main WAV starts.
-    Both AMB and WAV source the same OGG, so any overlap is inaudible (identical content).
-    A 200ms fade-out at the end of the AMB eliminates the hard-cut volume snap.
+    The AMB duration is based on abs(v_override) (the actual intro length), not abs(a_offset).
+    When abs(v_override) > abs(a_offset), the OGG has no audio for the initial gap, so the
+    AMB WAV is prepended with that many seconds of silence via adelay.
+    A 200ms fade-out at the end eliminates the hard-cut volume snap.
     """
     map_lower = map_name.lower()
     amb_dir = os.path.join(target_dir, "Audio", "AMB")
@@ -264,9 +266,16 @@ def generate_intro_amb(ogg_path, map_name, target_dir, a_offset):
 
     os.makedirs(amb_dir, exist_ok=True)
 
-    # Duration: abs(offset) + 1.355s tail; 200ms fade-out starting 1.155s past the handoff
-    amb_duration = abs(a_offset) + 1.355
-    fade_start   = abs(a_offset) + 1.155
+    # Intro duration is driven by v_override (videoStartTime); fall back to a_offset if not given.
+    # When |v_override| > |a_offset|, the OGG has no content for the leading gap, so we prepend
+    # silence equal to that difference via adelay.
+    intro_dur    = abs(v_override) if v_override is not None and v_override < 0 else abs(a_offset)
+    audio_delay  = max(0.0, intro_dur - abs(a_offset))   # seconds of silence to prepend
+
+    # AMB audio content length (from OGG t=0); total WAV = audio_delay + audio_content_dur
+    audio_content_dur = abs(a_offset) + 1.355
+    amb_duration      = audio_delay + audio_content_dur
+    fade_start        = audio_delay + abs(a_offset) + 1.155  # = intro_dur + 1.155
 
     # Locate an existing intro WAV placeholder (created by IPK AMB processing)
     intro_wavs = glob.glob(os.path.join(amb_dir, "*_intro.wav"))
@@ -369,8 +378,19 @@ includeReference("world/maps/{map_name}/audio/amb/{intro_name}.ilu")'''
                 f.write(isc_data)
             print(f"    Injected intro AMB actor into audio ISC")
 
-    # Generate the intro WAV with a 200ms fade-out at the tail end
-    af_filter = f"atrim=end={amb_duration:.3f},asetpts=PTS-STARTPTS,afade=t=out:st={fade_start:.3f}:d=0.2"
+    # Generate the intro WAV with a 200ms fade-out at the tail end.
+    # If the video intro is longer than the OGG pre-roll, prepend silence via adelay so
+    # the audio content starts at the right moment relative to the video.
+    delay_ms = int(audio_delay * 1000)
+    if delay_ms > 0:
+        af_filter = (
+            f"atrim=end={audio_content_dur:.3f},asetpts=PTS-STARTPTS,"
+            f"adelay={delay_ms}|{delay_ms},"
+            f"afade=t=out:st={fade_start:.3f}:d=0.2"
+        )
+        print(f"    Intro audio delayed by {audio_delay:.3f}s (video intro longer than OGG pre-roll)")
+    else:
+        af_filter = f"atrim=end={audio_content_dur:.3f},asetpts=PTS-STARTPTS,afade=t=out:st={fade_start:.3f}:d=0.2"
     subprocess.run(
         ["ffmpeg", "-y", "-loglevel", "error", "-i", ogg_path,
          "-af", af_filter, "-ar", "48000", intro_wav],
@@ -780,6 +800,25 @@ def step_11_extract_moves(state):
             for f in glob.glob(os.path.join(folder, "*.*")):
                 shutil.copy2(f, os.path.join(dest_moves, os.path.basename(f)))
 
+    # The game engine resolves ClassifierPath gesture files using the active platform folder
+    # (e.g. moves/PC/ when ITF_Platform=PC, moves/DURANGO/ when ITF_Platform=DURANGO).
+    # JDU songs that never had a PC main scene ship no "pc" move folder in their IPK,
+    # so running in PC mode would fail to find any gestures. Fix: if PC is empty/missing,
+    # copy from DURANGO (Xbox One Kinect) as the equivalent gesture set for PC.
+    # Fall back to SCARLETT (Xbox Series X) if DURANGO is also absent.
+    pc_moves_dir = os.path.join(state.target_dir, "Timeline", "Moves", "PC")
+    pc_gestures = glob.glob(os.path.join(pc_moves_dir, "*.gesture")) if os.path.isdir(pc_moves_dir) else []
+    if not pc_gestures:
+        for donor_plat in ["DURANGO", "SCARLETT"]:
+            donor_dir = os.path.join(state.target_dir, "Timeline", "Moves", donor_plat)
+            donor_gestures = glob.glob(os.path.join(donor_dir, "*.gesture")) if os.path.isdir(donor_dir) else []
+            if donor_gestures:
+                os.makedirs(pc_moves_dir, exist_ok=True)
+                for f in donor_gestures:
+                    shutil.copy2(f, os.path.join(pc_moves_dir, os.path.basename(f)))
+                print(f"    No PC gesture files in IPK — copied {len(donor_gestures)} {donor_plat} gesture(s) to PC/")
+                break
+
     autodance_tpls = glob.glob(os.path.join(state.ipk_extracted, "**/autodance/*.tpl.ckd"), recursive=True)
     for f in autodance_tpls:
         dest_ad = os.path.join(state.target_dir, "Autodance")
@@ -826,7 +865,7 @@ def step_12_convert_audio(state):
     if state.audio_path:
         print(f"[12] Converting audio to 48kHz WAV...")
         convert_audio(state.audio_path, state.map_name, state.target_dir, state.a_offset)
-        generate_intro_amb(state.audio_path, state.map_name, state.target_dir, state.a_offset)
+        generate_intro_amb(state.audio_path, state.map_name, state.target_dir, state.a_offset, state.v_override)
 
 
 def step_13_copy_video(state):
@@ -969,7 +1008,7 @@ def main():
         elif choice == '1':
             a_offset = v_override
             convert_audio(state.audio_path, state.map_name, state.target_dir, a_offset)
-            generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset)
+            generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset, v_override)
             show_ffplay_preview(state.video_path, state.audio_path, v_override, a_offset)
         elif choice == '2':
             def get_dur(p):
@@ -985,7 +1024,7 @@ def main():
             print(f"    Padding audio by: {diff:.3f}s")
             a_offset = diff
             convert_audio(state.audio_path, state.map_name, state.target_dir, a_offset)
-            generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset)
+            generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset, v_override)
             show_ffplay_preview(state.video_path, state.audio_path, v_override, a_offset)
         elif choice == '3':
             try:
@@ -998,7 +1037,7 @@ def main():
                 map_builder.generate_text_files(state.map_name, state.ipk_extracted, state.target_dir, v_override)
                 # Re-convert audio
                 convert_audio(state.audio_path, state.map_name, state.target_dir, a_offset)
-                generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset)
+                generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset, v_override)
                 show_ffplay_preview(state.video_path, state.audio_path, v_override, a_offset)
             except ValueError:
                 print("Invalid number entered.")
