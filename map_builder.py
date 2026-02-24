@@ -89,10 +89,9 @@ def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override
     mt_struct = mt_data["COMPONENTS"][0]["trackData"]["structure"]
     
     markers = ", ".join(f"{{ VAL = {m} }}" for m in mt_struct["markers"])
-        # Use lyric_highlight in the markers or other relevant sections if needed
     sigs = ", ".join(f"{{ MusicSignature = {{ beats = {s['beats']}, marker = {s['marker']} }} }}" for s in mt_struct["signatures"])
     sects = ", ".join(f"{{ MusicSection = {{ sectionType = {s['sectionType']}, marker = {s['marker']} }} }}" for s in mt_struct["sections"])
-    
+
     video_start_time = video_start_time_override if video_start_time_override is not None else mt_struct['videoStartTime']
 
     trk_content = (
@@ -116,17 +115,43 @@ def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override
     coach_imgs = [f for f in os.listdir(os.path.join(target_dir, "MenuArt/textures")) if "_coach_" in f.lower() and f.endswith(".png")]
     num_coach = len(coach_imgs) if coach_imgs else 1
     
-    phone_images_str = ""
-    for i in range(1, num_coach + 1):
-        phone_images_str += f'''
+    ckd_phone = sd_struct.get("PhoneImages", {})
+    if ckd_phone:
+        # Use CKD-provided paths (includes cover + all coaches)
+        phone_images_str = ""
+        for k, v in ckd_phone.items():
+            phone_images_str += f'''
+						{{
+							KEY = "{k}",
+							VAL = "{v}"
+						}},'''
+        phone_images_str = phone_images_str.rstrip(",")
+    else:
+        # Fallback: reconstruct from convention
+        phone_images_str = f'''
+						{{
+							KEY = "cover",
+							VAL = "world/maps/{map_lower}/menuart/textures/{map_lower}_cover_phone.jpg"
+						}}'''
+        for i in range(1, num_coach + 1):
+            phone_images_str += f''',
 						{{
 							KEY = "coach{i}",
 							VAL = "world/maps/{map_lower}/menuart/textures/{map_lower}_coach_{i}_phone.png"
-						}},'''
-    phone_images_str = phone_images_str.rstrip(",")
-    
+						}}'''
+
     # Calculate audio preview fade time (usually 2.0s if it exists)
     audio_prev_fade = 2.0 if float(mt_struct.get('previewEntry', 0)) > 0 else 0.0
+
+    # Extract tags from CKD, fall back to ["Main"]
+    raw_tags = sd_struct.get("Tags", ["Main"]) or ["Main"]
+    tags_lua = ""
+    for t in raw_tags:
+        tags_lua += f'''
+						{{
+							VAL = "{t}"
+						}},'''
+    tags_lua = tags_lua.rstrip(",")
 
     # 1. SongDesc.tpl
     with open(os.path.join(target_dir, "SongDesc.tpl"), "w", encoding="utf-8") as f:
@@ -169,21 +194,14 @@ params =
 					LyricsType = {sd_struct.get('LyricsType', 0)},
 					Energy = {sd_struct.get('Energy', 1)},
 					Tags =
-					{{
-						{{
-							VAL = "Main"
-						}}
+					{{{tags_lua}
 					}},
 					Status = {sd_struct.get('Status', 3)},
 					LocaleID = {sd_struct.get('LocaleID', 4294967295)},
 					MojoValue = {sd_struct.get('MojoValue', 0)},
-					CountInProgression = {sd_struct.get('CountInProgression', 1)},
+					CountInProgression = 0,
 					PhoneImages =
-					{{
-						{{
-							KEY = "cover",
-							VAL = "world/maps/{map_lower}/menuart/textures/{map_lower}_cover_phone.jpg"
-						}},{phone_images_str}
+					{{{phone_images_str}
 					}},
                     DefaultColors =
                     {{{default_colors_lua}
@@ -651,64 +669,56 @@ params =
     with open(os.path.join(target_dir, f"Autodance/{map_name}_autodance.isc"), "w") as f:
         f.write(f'''<?xml version="1.0" encoding="ISO-8859-1"?>
 <root>
-    <Scene>
-        <ACTORS NAME="Actor">
-            <Actor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{map_name}_Autodance" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="World/MAPS/{map_name}/autodance/{map_name}_autodance.act" LUA="World/MAPS/{map_name}/autodance/{map_name}_autodance.tpl">
-                <COMPONENTS NAME="MasterTape">
-                    <MasterTape />
-                </COMPONENTS>
-                <COMPONENTS NAME="JD_AutodanceComponent">
-                    <JD_AutodanceComponent />
-                </COMPONENTS>
-            </Actor>
-        </ACTORS>
-    </Scene>
+	<Scene ENGINE_VERSION="81615" GRIDUNIT="0.500000" DEPTH_SEPARATOR="0" NEAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000" FAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000">
+		<ACTORS NAME="Actor">
+			<Actor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{map_name}_autodance" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="World/MAPS/{map_name}/autodance/{map_name}_autodance.act" LUA="World/MAPS/{map_name}/autodance/{map_name}_autodance.tpl">
+				<COMPONENTS NAME="JD_AutodanceComponent">
+					<JD_AutodanceComponent />
+				</COMPONENTS>
+			</Actor>
+		</ACTORS>
+		<sceneConfigs>
+			<SceneConfigs activeSceneConfig="0" />
+		</sceneConfigs>
+	</Scene>
 </root>''')
 
     with open(os.path.join(target_dir, f"Autodance/{map_name}_autodance.tpl"), "w") as f:
-        f.write(f'''params = 
+        f.write(f'''params =
 {{
-    NAME = "Actor_Template", 
-    Actor_Template = 
-    {{
-        COMPONENTS = 
-        {{
-            {{
-                NAME = "MasterTape_Template", 
-                MasterTape_Template = 
-                {{
-                    TapePath = "World/MAPS/{map_name}/autodance/{map_name}.adtape"
-                }}
-            }},
-            {{
-                NAME = "AutodanceComponent_Template", 
-                AutodanceComponent_Template = 
-                {{
-                    RecordingsPath = "World/MAPS/{map_name}/autodance/{map_name}.adrecording",
-                    VideoConfigPath = "World/MAPS/{map_name}/autodance/{map_name}.advideo"
-                }}
-            }}
-        }}
-    }}
+	NAME = "Actor_Template",
+	Actor_Template =
+	{{
+		COMPONENTS =
+		{{
+			{{
+				NAME = "JD_AutodanceComponent_Template",
+				JD_AutodanceComponent_Template =
+				{{
+					song = "{map_name}",
+					autodanceData =
+					{{
+						JD_AutodanceData =
+						{{
+							recording_structure = {{}},
+							video_structure = {{}},
+							autodanceSoundPath = ""
+						}}
+					}}
+				}}
+			}},
+		}}
+	}}
 }}''')
 
     with open(os.path.join(target_dir, f"Autodance/{map_name}_autodance.act"), "w") as f:
-        f.write(f'''params = 
+        f.write(f'''params =
 {{
-    NAME = "Actor", 
-    Actor = 
-    {{
-        LUA = "world/maps/{map_name}/autodance/{map_name}_autodance.tpl", 
-        COMPONENTS = 
-        {{
-            {{
-                NAME = "MasterTape"
-            }}, 
-            {{
-                NAME = "JD_AutodanceComponent"
-            }}
-        }}
-    }}
+	NAME = "Actor",
+	Actor =
+	{{
+		LUA = "World/MAPS/{map_name}/autodance/{map_name}_autodance.tpl",
+	}}
 }}''')
 
     # 12. Cinematics tape, cine isc, tpl, act
