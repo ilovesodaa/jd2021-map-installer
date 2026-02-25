@@ -866,7 +866,7 @@ def step_05_decode_menuart(state):
     # Decode CKDs to actual TGAs/PNGs
     subprocess.run([sys.executable, os.path.join(state.jd_dir, "ckd_decode.py"), "--batch", "--quiet",
                     os.path.join(state.target_dir, "MenuArt/textures"),
-                    os.path.join(state.target_dir, "MenuArt/textures")], check=False)
+                    os.path.join(state.target_dir, "MenuArt/textures")], check=False, capture_output=True)
 
 
 def step_05b_validate_menuart(state):
@@ -1071,7 +1071,7 @@ def step_10_decode_pictos(state):
         for f in glob.glob(os.path.join(picto_src_dir, "*.png.ckd")):
             shutil.copy2(f, os.path.join(picto_dst_dir, os.path.basename(f)))
         subprocess.run([sys.executable, os.path.join(state.jd_dir, "ckd_decode.py"), "--batch", "--quiet",
-                        picto_dst_dir, picto_dst_dir], check=False)
+                        picto_dst_dir, picto_dst_dir], check=False, capture_output=True)
         for f in glob.glob(os.path.join(picto_dst_dir, "*.ckd")):
             os.remove(f)
 
@@ -1087,39 +1087,31 @@ def step_11_extract_moves(state):
             for f in glob.glob(os.path.join(folder, "*.*")):
                 shutil.copy2(f, os.path.join(dest_moves, os.path.basename(f)))
 
-    # The game engine resolves ClassifierPath gesture files using the active platform folder
-    # (e.g. moves/PC/ when ITF_Platform=PC, moves/DURANGO/ when ITF_Platform=DURANGO).
-    # JDU songs that never had a PC main scene ship no "pc" move folder in their IPK,
-    # so running in PC mode would fail to find any gestures. Fix: if PC is empty/missing,
-    # copy from DURANGO (Xbox One Kinect) as the equivalent gesture set for PC.
-    # Fall back to SCARLETT (Xbox Series X) if DURANGO is also absent.
+    # The game engine resolves ClassifierPath gesture files using the active platform
+    # folder (e.g. moves/PC/).  Dance tapes reference both .gesture and .msm files,
+    # but different platforms ship different subsets — e.g. DURANGO has .gesture,
+    # WIIU has .msm, and ORBIS may have unique .gesture files that other platforms
+    # lack.  Merge gesture/msm files from ALL other platforms into PC/ so that
+    # every ClassifierPath reference can be resolved.
     pc_moves_dir = os.path.join(state.target_dir, "Timeline", "Moves", "PC")
-    pc_gestures = glob.glob(os.path.join(pc_moves_dir, "*.gesture")) if os.path.isdir(pc_moves_dir) else []
-    if not pc_gestures:
-        for donor_plat in ["DURANGO", "SCARLETT"]:
-            donor_dir = os.path.join(state.target_dir, "Timeline", "Moves", donor_plat)
-            donor_gestures = glob.glob(os.path.join(donor_dir, "*.gesture")) if os.path.isdir(donor_dir) else []
-            if donor_gestures:
-                os.makedirs(pc_moves_dir, exist_ok=True)
-                for f in donor_gestures:
-                    shutil.copy2(f, os.path.join(pc_moves_dir, os.path.basename(f)))
-                print(f"    No PC gesture files in IPK — copied {len(donor_gestures)} {donor_plat} gesture(s) to PC/")
-                break
-
-    # Dance tapes reference .msm gesture files in ClassifierPath, but DURANGO/SCARLETT
-    # platforms only ship .gesture files. WIIU (and sometimes WII/ORBIS) ship .msm files
-    # that match the ClassifierPath references. Copy them to PC/ if missing.
-    pc_msm = glob.glob(os.path.join(pc_moves_dir, "*.msm")) if os.path.isdir(pc_moves_dir) else []
-    if not pc_msm:
-        for donor_plat in ["WIIU", "WII", "ORBIS", "DURANGO"]:
-            donor_dir = os.path.join(state.target_dir, "Timeline", "Moves", donor_plat)
-            donor_msm = glob.glob(os.path.join(donor_dir, "*.msm")) if os.path.isdir(donor_dir) else []
-            if donor_msm:
-                os.makedirs(pc_moves_dir, exist_ok=True)
-                for f in donor_msm:
-                    shutil.copy2(f, os.path.join(pc_moves_dir, os.path.basename(f)))
-                print(f"    No PC .msm gesture files — copied {len(donor_msm)} from {donor_plat}/")
-                break
+    moves_root = os.path.join(state.target_dir, "Timeline", "Moves")
+    total_copied = 0
+    if os.path.isdir(moves_root):
+        for plat_name in os.listdir(moves_root):
+            if plat_name.upper() == "PC":
+                continue
+            plat_dir = os.path.join(moves_root, plat_name)
+            if not os.path.isdir(plat_dir):
+                continue
+            for ext in ("*.gesture", "*.msm"):
+                for src in glob.glob(os.path.join(plat_dir, ext)):
+                    dest = os.path.join(pc_moves_dir, os.path.basename(src))
+                    if not os.path.exists(dest):
+                        os.makedirs(pc_moves_dir, exist_ok=True)
+                        shutil.copy2(src, dest)
+                        total_copied += 1
+    if total_copied:
+        print(f"    Merged {total_copied} missing gesture/msm file(s) from other platforms into PC/")
 
     autodance_tpls = glob.glob(os.path.join(state.ipk_extracted, "**/autodance/*.tpl.ckd"), recursive=True)
     for f in autodance_tpls:
