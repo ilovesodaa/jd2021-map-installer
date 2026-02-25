@@ -64,7 +64,10 @@ A complete JD2021 map requires the following structure under `World/MAPS/[MapNam
 │   ├── pictos/
 │   │   └── *.png
 │   └── Moves/
-│       └── [PLATFORM]/
+│       ├── PC/             # Must contain the union of all platform gesture files
+│       ├── DURANGO/        # Xbox One Kinect .gesture files
+│       ├── ORBIS/          # PS4 .gesture files (incompatible format with PC)
+│       └── WIIU/           # .msm skeleton files
 │
 ├── Cinematics/
 │   ├── [MapName]_cine.isc
@@ -218,7 +221,9 @@ The first sample of the WAV corresponds to marker 0 = beat `startBeat`. If `star
 | **Pictos / karaoke appear too early** | `videoStartTime` set to 0 on a pre-roll map | Restore original negative `videoStartTime`; use intro AMB for audio coverage |
 | **Black Video** | Incorrect DASH MPD | Ensure namespace is `urn:mpeg:DASH:schema:MPD:2011` |
 | **Missing Title** | SkuScene Registration | Verify the map entry in `SkuScene_Maps_PC_All.isc` |
-| **Autodance Error** | Component naming | Ensure component name is `JD_AutodanceComponent` |
+| **Autodance error after Apply** | Sync refinement regenerated empty stub over converted data | Reinstall the map; the pipeline now protects autodance files from overwrite |
+| **Kinect gesture load failure** | ORBIS (PS4) `.gesture` files copied to PC/ | Only use `.gesture` files from DURANGO/SCARLETT (Kinect format); substitute ORBIS-exclusive variants with the base Kinect gesture |
+| **"Can't find gesture resource"** | Missing gesture file in PC/ Moves folder | Ensure PC/ contains the union of `.gesture` (from DURANGO) and `.msm` (from WIIU) files from all platforms |
 
 ---
 

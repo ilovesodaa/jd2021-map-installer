@@ -148,12 +148,14 @@ The engine uses DASH for video quality fallback. To work locally, the manifest m
 ## 5. Autodance & Recording
 
 The engine looks for a specific actor chain to enable recaps:
-- **Template**: `JD_AutodanceComponent_Template`
+- **Template**: `JD_AutodanceComponent_Template` — populated from `autodance/*.tpl.ckd` via `json_to_lua.py` during step 11. Contains the full `recording_structure`, `video_structure`, and `autodanceSoundPath`. An empty stub is created in step 6 as a placeholder and is only kept if no CKD data exists.
 - **Actor Component**: `JD_AutodanceComponent`
 - **Tapes**:
   - `.adtape`: Scoring/Title/Picto timings for the recap.
   - `.advideo`: Video encoding parameters for the exporter.
   - `.adrecording`: Raw controller movement data (6-axis/IMU).
+
+The pipeline protects converted autodance data from being overwritten by the empty stub during sync refinement ("Apply & Finish").
 
 ---
 

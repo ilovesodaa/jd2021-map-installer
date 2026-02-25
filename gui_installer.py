@@ -106,7 +106,7 @@ class MapInstallerGUI:
         cfg.pack(fill="x", pady=(0, 4))
 
         for i, (label_text, attr_name, browse_type) in enumerate([
-            ("Map Name (opt):", "map_name_entry", None),
+            ("Map Name:", "map_name_entry", None),
             ("Asset HTML:", "asset_html_entry", "html"),
             ("NOHUD HTML:", "nohud_html_entry", "html"),
             ("JD Directory:", "jd_dir_entry", "dir"),
@@ -123,6 +123,9 @@ class MapInstallerGUI:
                     cmd = (lambda e=entry, bt=browse_type: self._browse(e, bt))
                 ttk.Button(cfg, text="Browse", width=8, command=cmd).grid(
                     row=i, column=2, padx=(4, 0))
+
+        # Map name is auto-derived from Asset HTML; readonly unless detection fails
+        self.map_name_entry.configure(state="readonly")
 
         cfg.columnconfigure(1, weight=1)
 
@@ -267,7 +270,7 @@ class MapInstallerGUI:
         if path:
             entry.delete(0, tk.END)
             entry.insert(0, path)
-            if autofill_entry is not None and not autofill_entry.get().strip():
+            if autofill_entry is not None:
                 derived = None
                 try:
                     urls = map_downloader.extract_urls(path)
@@ -276,8 +279,12 @@ class MapInstallerGUI:
                     pass
                 if not derived:
                     derived = os.path.basename(os.path.dirname(os.path.abspath(path)))
+                autofill_entry.configure(state="normal")
                 autofill_entry.delete(0, tk.END)
-                autofill_entry.insert(0, derived)
+                if derived:
+                    autofill_entry.insert(0, derived)
+                    autofill_entry.configure(state="readonly")
+                # else: leave editable so user can type manually
 
     def _redirect_stdout(self):
         self._redirector = StdoutRedirector(self.log_text, self.root)
@@ -400,8 +407,16 @@ class MapInstallerGUI:
                 map_name = map_downloader.extract_codename_from_urls(urls)
             if not map_name:
                 map_name = os.path.basename(os.path.dirname(os.path.abspath(asset_html)))
+            self.map_name_entry.configure(state="normal")
             self.map_name_entry.delete(0, tk.END)
-            self.map_name_entry.insert(0, map_name)
+            if map_name:
+                self.map_name_entry.insert(0, map_name)
+                self.map_name_entry.configure(state="readonly")
+            else:
+                messagebox.showerror(
+                    "Missing Input",
+                    "Could not detect map name. Please enter it manually.")
+                return
 
         # Disable controls during pipeline
         self.install_btn.configure(state="disabled")
