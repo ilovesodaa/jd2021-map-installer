@@ -16,6 +16,7 @@ import json
 import map_downloader
 import map_builder
 import ubiart_lua
+import ipk_unpack
 
 
 class TeeOutput:
@@ -226,50 +227,21 @@ def _install_ffmpeg(jd_dir):
     return True
 
 
-def _install_git_repo(jd_dir, repo_url, target_name, branch="main"):
-    """Download a GitHub repo as a zip and extract it."""
-    zip_path = os.path.join(jd_dir, f"{target_name}.zip")
-    target = os.path.join(jd_dir, target_name)
-
-    print(f"    Downloading {target_name}...")
-    urllib_req = __import__('urllib.request', fromlist=['urlretrieve'])
-    urllib_req.urlretrieve(repo_url, zip_path)
-
-    print(f"    Extracting...")
-    with zipfile.ZipFile(zip_path, 'r') as z:
-        z.extractall(jd_dir)
-
-    # Rename extracted folder (e.g., repo-main -> target_name)
-    extracted = os.path.join(jd_dir, f"{target_name}-{branch}")
-    if os.path.isdir(extracted):
-        if os.path.exists(target):
-            shutil.rmtree(target)
-        os.rename(extracted, target)
-
-    if os.path.exists(zip_path):
-        os.remove(zip_path)
-    print(f"    {target_name} installed to {target}")
-    return True
-
-
-def _install_pillow():
-    """Install Pillow via pip."""
-    print(f"    Installing Pillow via pip...")
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "Pillow"],
-        capture_output=True, text=True)
-    if result.returncode == 0:
-        print(f"    Pillow installed successfully.")
-        return True
-    else:
-        print(f"    Pillow installation failed: {result.stderr}")
-        return False
-
-def preflight_check(jd_dir, asset_html, nohud_html, auto_install=False):
+def preflight_check(jd_dir, asset_html, nohud_html, auto_install=False,
+                    interactive=True):
     """Run pre-flight dependency checks. Returns True if all critical checks pass.
-    If auto_install is True, offer to install missing dependencies."""
+
+    Args:
+        auto_install: If True, automatically install missing downloadable
+                      dependencies (currently only ffmpeg).
+        interactive:  If True (default, CLI mode), missing downloadable deps
+                      trigger an input() prompt.  Set to False when calling
+                      from a GUI so input() is never invoked and the caller
+                      can handle prompting via dialog boxes.
+    """
     print("--- Pre-flight Checks ---")
     failures = 0
+    ffmpeg_missing = False
 
     def ok(msg):
         print(f"  [OK] {msg}")
@@ -282,7 +254,7 @@ def preflight_check(jd_dir, asset_html, nohud_html, auto_install=False):
     def warn(msg):
         print(f"  [WARN] {msg}")
 
-    # Critical: ffmpeg
+    # Critical: ffmpeg (the ONLY dependency that may need downloading)
     # Check local tools/ directory first, then PATH
     tools_ffmpeg = os.path.join(jd_dir, "tools", "ffmpeg")
     if os.path.isdir(tools_ffmpeg):
@@ -291,7 +263,8 @@ def preflight_check(jd_dir, asset_html, nohud_html, auto_install=False):
     if check_executable("ffmpeg"):
         ok("ffmpeg found")
     else:
-        if auto_install or _prompt_install("ffmpeg"):
+        should_install = auto_install or (interactive and _prompt_install("ffmpeg"))
+        if should_install:
             try:
                 _install_ffmpeg(jd_dir)
                 if check_executable("ffmpeg"):
@@ -301,7 +274,8 @@ def preflight_check(jd_dir, asset_html, nohud_html, auto_install=False):
             except Exception as e:
                 fail(f"ffmpeg auto-install failed: {e}")
         else:
-            fail("ffmpeg not found in PATH (install from https://ffmpeg.org)")
+            ffmpeg_missing = True
+            fail("ffmpeg not found in PATH")
 
     # Critical: jd21 game data
     if os.path.isdir(os.path.join(jd_dir, "jd21")):
@@ -316,24 +290,12 @@ def preflight_check(jd_dir, asset_html, nohud_html, auto_install=False):
     else:
         fail(f"SkuScene_Maps_PC_All.isc not found at {sku_path}")
 
-    # Critical: ubiart-archive-tools
-    ipk_unpacker = os.path.join(jd_dir, "ubiart-archive-tools", "ipk_unpacker.py")
-    if os.path.isfile(ipk_unpacker):
-        ok("ubiart-archive-tools")
-    else:
-        if auto_install or _prompt_install("ubiart-archive-tools"):
-            try:
-                _install_git_repo(jd_dir,
-                    "https://github.com/AntonioDePau/ubiart-archive-tools/archive/refs/heads/main.zip",
-                    "ubiart-archive-tools", branch="main")
-                if os.path.isfile(ipk_unpacker):
-                    ok("ubiart-archive-tools installed")
-                else:
-                    fail("ubiart-archive-tools installed but ipk_unpacker.py not found")
-            except Exception as e:
-                fail(f"ubiart-archive-tools auto-install failed: {e}")
-        else:
-            fail(f"ubiart-archive-tools/ipk_unpacker.py not found (see GETTING_STARTED.md Step 2)")
+    # Critical: ipk_unpack (integrated IPK unpacker)
+    try:
+        import ipk_unpack as _ipk_check
+        ok("ipk_unpack (IPK unpacker)")
+    except ImportError:
+        fail("ipk_unpack.py not found in project root")
 
     # Critical: ckd_decode.py
     if os.path.isfile(os.path.join(jd_dir, "ckd_decode.py")):
@@ -347,39 +309,19 @@ def preflight_check(jd_dir, asset_html, nohud_html, auto_install=False):
     else:
         fail("json_to_lua.py not found in project root")
 
-    # Critical: XTX-Extractor
-    if os.path.isdir(os.path.join(jd_dir, "XTX-Extractor")):
-        ok("XTX-Extractor")
-    else:
-        if auto_install or _prompt_install("XTX-Extractor"):
-            try:
-                _install_git_repo(jd_dir,
-                    "https://github.com/aboood40091/XTX-Extractor/archive/refs/heads/master.zip",
-                    "XTX-Extractor", branch="master")
-                if os.path.isdir(os.path.join(jd_dir, "XTX-Extractor")):
-                    ok("XTX-Extractor installed")
-                else:
-                    fail("XTX-Extractor install failed")
-            except Exception as e:
-                fail(f"XTX-Extractor auto-install failed: {e}")
-        else:
-            fail("XTX-Extractor/ directory not found (see GETTING_STARTED.md Step 2)")
+    # Critical: xtx_extractor (integrated XTX texture deswizzler)
+    try:
+        from xtx_extractor import xtx_extract as _xtx_check
+        ok("xtx_extractor (texture deswizzler)")
+    except ImportError:
+        fail("xtx_extractor/ package not found in project root")
 
-    # Critical: Pillow
+    # Critical: Pillow (expected to be pre-installed with Python environment)
     try:
         from PIL import Image
         ok("Pillow (image library)")
     except ImportError:
-        if auto_install or _prompt_install("Pillow"):
-            try:
-                if _install_pillow():
-                    ok("Pillow installed")
-                else:
-                    fail("Pillow installation failed")
-            except Exception as e:
-                fail(f"Pillow auto-install failed: {e}")
-        else:
-            fail("Pillow not installed (run: pip install Pillow)")
+        fail("Pillow not installed (run: pip install Pillow)")
 
     # Critical: input HTML files
     if os.path.isfile(asset_html):
@@ -408,6 +350,8 @@ def preflight_check(jd_dir, asset_html, nohud_html, auto_install=False):
 
     if failures > 0:
         print(f"\nERROR: {failures} critical check(s) failed. Cannot proceed.")
+        if not interactive and ffmpeg_missing:
+            return False, True   # (passed, ffmpeg_missing)
         return False
     return True
 
@@ -844,8 +788,10 @@ def step_04_unpack_ipk(state):
     ipk_files = glob.glob(os.path.join(state.extracted_zip_dir, "*.ipk"))
     for ipk in ipk_files:
         print(f"    Unpacking {os.path.basename(ipk)}...")
-        subprocess.run([sys.executable, os.path.join(state.jd_dir, "ubiart-archive-tools", "ipk_unpacker.py"),
-                        ipk, state.ipk_extracted], check=False, capture_output=True)
+        try:
+            ipk_unpack.extract(ipk, state.ipk_extracted)
+        except Exception as e:
+            print(f"    Warning: IPK extraction issue: {e}")
 
 
 def step_05_decode_menuart(state):

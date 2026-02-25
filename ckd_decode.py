@@ -1,7 +1,7 @@
 """
 CKD Texture Decoder for Just Dance (NX/Switch CKD → TGA/PNG)
 
-Pipeline: .ckd → strip 44-byte UbiArt header → .xtx → XTX-Extractor deswizzle → .dds → Pillow → .tga/.png
+Pipeline: .ckd → strip 44-byte UbiArt header → .xtx → deswizzle → .dds → Pillow → .tga/.png
 
 Usage:
     python ckd_decode.py <input.ckd> [output.tga]
@@ -13,10 +13,6 @@ import sys
 import struct
 import tempfile
 import shutil
-
-# Add XTX-Extractor to path
-XTX_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'XTX-Extractor')
-sys.path.insert(0, XTX_DIR)
 
 CKD_HEADER_SIZE = 44  # UbiArt TEX header is always 44 bytes
 CKD_MAGIC = b'\x00\x00\x00\x09'
@@ -47,8 +43,8 @@ def strip_ckd_header(ckd_path):
 
 
 def xtx_to_dds(xtx_data):
-    """Convert XTX data to DDS using XTX-Extractor's readNv + deswizzle."""
-    import xtx_extract
+    """Convert XTX data to DDS using integrated XTX-Extractor deswizzle."""
+    from xtx_extractor import xtx_extract
 
     nv = xtx_extract.readNv(xtx_data)
 
