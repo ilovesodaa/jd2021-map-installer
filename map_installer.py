@@ -1088,13 +1088,19 @@ def step_11_extract_moves(state):
                 shutil.copy2(f, os.path.join(dest_moves, os.path.basename(f)))
 
     # The game engine resolves ClassifierPath gesture files using the active platform
-    # folder (e.g. moves/PC/).  Dance tapes reference both .gesture and .msm files,
-    # but different platforms ship different subsets — e.g. DURANGO has .gesture,
-    # WIIU has .msm, and ORBIS may have unique .gesture files that other platforms
-    # lack.  Merge gesture/msm files from ALL other platforms into PC/ so that
-    # every ClassifierPath reference can be resolved.
+    # folder (e.g. moves/PC/).  Different platforms use different binary formats:
+    #   DURANGO/SCARLETT = Kinect 2 .gesture format (compatible with PC)
+    #   ORBIS/ORBIS2     = PlayStation Camera .gesture format (INCOMPATIBLE with PC)
+    #   WIIU/WII         = .msm skeleton files (platform-neutral)
+    # Strategy:
+    #   1. Copy .gesture files ONLY from Kinect-compatible platforms (DURANGO, SCARLETT)
+    #   2. Copy .msm files from all platforms
+    #   3. For any .gesture file that only exists on non-Kinect platforms (e.g. an
+    #      ORBIS-exclusive numbered variant like "handstoheart0.gesture"), substitute
+    #      it with the base Kinect gesture (strip trailing digits) so the file loads.
     pc_moves_dir = os.path.join(state.target_dir, "Timeline", "Moves", "PC")
     moves_root = os.path.join(state.target_dir, "Timeline", "Moves")
+    KINECT_PLATFORMS = {"DURANGO", "SCARLETT"}
     total_copied = 0
     if os.path.isdir(moves_root):
         for plat_name in os.listdir(moves_root):
@@ -1103,15 +1109,48 @@ def step_11_extract_moves(state):
             plat_dir = os.path.join(moves_root, plat_name)
             if not os.path.isdir(plat_dir):
                 continue
-            for ext in ("*.gesture", "*.msm"):
-                for src in glob.glob(os.path.join(plat_dir, ext)):
+            # .gesture: Kinect platforms only (format-compatible with PC adapter)
+            if plat_name.upper() in KINECT_PLATFORMS:
+                for src in glob.glob(os.path.join(plat_dir, "*.gesture")):
                     dest = os.path.join(pc_moves_dir, os.path.basename(src))
                     if not os.path.exists(dest):
                         os.makedirs(pc_moves_dir, exist_ok=True)
                         shutil.copy2(src, dest)
                         total_copied += 1
+            # .msm: all platforms (platform-neutral skeleton format)
+            for src in glob.glob(os.path.join(plat_dir, "*.msm")):
+                dest = os.path.join(pc_moves_dir, os.path.basename(src))
+                if not os.path.exists(dest):
+                    os.makedirs(pc_moves_dir, exist_ok=True)
+                    shutil.copy2(src, dest)
+                    total_copied += 1
+
+        # For .gesture files that are exclusive to non-Kinect platforms (e.g. ORBIS),
+        # substitute them with the base Kinect gesture by stripping trailing digits.
+        # E.g. "brokenheart_handstoheart0.gesture" (ORBIS-only) → copy
+        # "brokenheart_handstoheart.gesture" (DURANGO) under the numbered name.
+        pc_gestures = {os.path.basename(f)
+                       for f in glob.glob(os.path.join(pc_moves_dir, "*.gesture"))}
+        for plat_name in os.listdir(moves_root):
+            if plat_name.upper() in KINECT_PLATFORMS or plat_name.upper() == "PC":
+                continue
+            plat_dir = os.path.join(moves_root, plat_name)
+            if not os.path.isdir(plat_dir):
+                continue
+            for src in glob.glob(os.path.join(plat_dir, "*.gesture")):
+                fname = os.path.basename(src)
+                if fname in pc_gestures or os.path.exists(os.path.join(pc_moves_dir, fname)):
+                    continue
+                stem = os.path.splitext(fname)[0]       # e.g. "brokenheart_handstoheart0"
+                base = stem.rstrip("0123456789")        # e.g. "brokenheart_handstoheart"
+                sub_src = os.path.join(pc_moves_dir, base + ".gesture")
+                if base != stem and os.path.exists(sub_src):
+                    os.makedirs(pc_moves_dir, exist_ok=True)
+                    shutil.copy2(sub_src, os.path.join(pc_moves_dir, fname))
+                    total_copied += 1
+
     if total_copied:
-        print(f"    Merged {total_copied} missing gesture/msm file(s) from other platforms into PC/")
+        print(f"    Merged {total_copied} missing gesture/msm file(s) into PC/")
 
     autodance_tpls = glob.glob(os.path.join(state.ipk_extracted, "**/autodance/*.tpl.ckd"), recursive=True)
     for f in autodance_tpls:
