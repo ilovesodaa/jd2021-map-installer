@@ -109,7 +109,7 @@ class MapInstallerGUI:
             ("Map Name:", "map_name_entry", None),
             ("Asset HTML:", "asset_html_entry", "html"),
             ("NOHUD HTML:", "nohud_html_entry", "html"),
-            ("JD Directory:", "jd_dir_entry", "dir"),
+            ("Game Directory:", "jd_dir_entry", "dir"),
         ]):
             ttk.Label(cfg, text=label_text, width=16, anchor="e").grid(
                 row=i, column=0, sticky="e", padx=(0, 4))
@@ -146,6 +146,9 @@ class MapInstallerGUI:
         self.install_btn = ttk.Button(
             btn_row, text="Install Map", command=self._on_install, state="disabled")
         self.install_btn.pack(side="left")
+        ttk.Button(
+            btn_row, text="Clear Path Cache", command=self._on_clear_cache).pack(
+            side="left", padx=(12, 0))
 
         # ===================== MIDDLE: PROGRESS + PREVIEW =====================
         middle = ttk.Frame(container)
@@ -342,7 +345,7 @@ class MapInstallerGUI:
         nohud = self.nohud_html_entry.get().strip()
         if not jd_dir:
             messagebox.showerror("Missing",
-                                 "JD Directory is required for pre-flight check.")
+                                 "Game Directory is required for pre-flight check.")
             return
 
         self.preflight_btn.configure(state="disabled")
@@ -404,6 +407,16 @@ class MapInstallerGUI:
             messagebox.showwarning(
                 "Pre-flight", "Some checks failed. See log for details.")
 
+    def _on_clear_cache(self):
+        cleared = map_installer.clear_paths_cache()
+        if cleared:
+            messagebox.showinfo(
+                "Cache Cleared",
+                "Path cache cleared.\n\n"
+                "The next Pre-flight Check or Install will re-scan for game data.")
+        else:
+            messagebox.showinfo("Cache Cleared", "No path cache found (already clear).")
+
     # ------------------------------------------------------------------
     # Install pipeline
     # ------------------------------------------------------------------
@@ -455,7 +468,7 @@ class MapInstallerGUI:
 
         # Load saved config if available (applies saved sync values)
         saved = map_installer.load_map_config(
-            self.pipeline_state.jd_dir, self.pipeline_state.map_name)
+            self.pipeline_state.map_name)
         if saved:
             if self.pipeline_state.v_override is None:
                 self.pipeline_state.v_override = saved.get('v_override')
@@ -469,7 +482,7 @@ class MapInstallerGUI:
             except Exception:
                 pass
         self._log_file = map_installer.setup_log_file(
-            self.pipeline_state.jd_dir, self.pipeline_state.map_name)
+            self.pipeline_state.map_name)
         self._redirector.log_file = self._log_file
         print(f"Log file: {self._log_file.name}")
 
@@ -481,7 +494,8 @@ class MapInstallerGUI:
         state = self.pipeline_state
 
         print(f"--- Environment ---")
-        print(f"JD Base Dir: {state.jd_dir}")
+        print(f"Game Dir:    {state.jd21_dir}")
+        print(f"Search Root: {state.jd_dir}")
         print(f"Map Name:    {state.map_name}")
         print(f"Asset HTML:  {state.asset_html}")
         print(f"-------------------")
@@ -765,7 +779,7 @@ class MapInstallerGUI:
 
                 # Save sync config for future re-installs
                 map_installer.save_map_config(
-                    state.jd_dir, state.map_name,
+                    state.map_name,
                     v_override, a_offset,
                     quality=getattr(state, 'quality', 'ULTRA'),
                     codename=state.codename)
