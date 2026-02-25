@@ -1106,6 +1106,21 @@ def step_11_extract_moves(state):
                 print(f"    No PC gesture files in IPK — copied {len(donor_gestures)} {donor_plat} gesture(s) to PC/")
                 break
 
+    # Dance tapes reference .msm gesture files in ClassifierPath, but DURANGO/SCARLETT
+    # platforms only ship .gesture files. WIIU (and sometimes WII/ORBIS) ship .msm files
+    # that match the ClassifierPath references. Copy them to PC/ if missing.
+    pc_msm = glob.glob(os.path.join(pc_moves_dir, "*.msm")) if os.path.isdir(pc_moves_dir) else []
+    if not pc_msm:
+        for donor_plat in ["WIIU", "WII", "ORBIS", "DURANGO"]:
+            donor_dir = os.path.join(state.target_dir, "Timeline", "Moves", donor_plat)
+            donor_msm = glob.glob(os.path.join(donor_dir, "*.msm")) if os.path.isdir(donor_dir) else []
+            if donor_msm:
+                os.makedirs(pc_moves_dir, exist_ok=True)
+                for f in donor_msm:
+                    shutil.copy2(f, os.path.join(pc_moves_dir, os.path.basename(f)))
+                print(f"    No PC .msm gesture files — copied {len(donor_msm)} from {donor_plat}/")
+                break
+
     autodance_tpls = glob.glob(os.path.join(state.ipk_extracted, "**/autodance/*.tpl.ckd"), recursive=True)
     for f in autodance_tpls:
         dest_ad = os.path.join(state.target_dir, "Autodance")

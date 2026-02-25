@@ -706,8 +706,18 @@ params =
 </root>''')
 
     # 11.5 Autodance Templates
-    with open(os.path.join(target_dir, f"Autodance/{map_name}_autodance.isc"), "w") as f:
-        f.write(f'''<?xml version="1.0" encoding="ISO-8859-1"?>
+    # Guard: don't overwrite autodance files if the TPL already contains real
+    # converted data (>1KB).  Step 11 of the pipeline converts CKD autodance
+    # data into full TPLs (~50-65KB).  This function is called again during
+    # sync refinement ("Apply"), and without this guard it would replace the
+    # real data with an empty stub.
+    autodance_tpl_path = os.path.join(target_dir, f"Autodance/{map_name}_autodance.tpl")
+    _skip_autodance = (os.path.exists(autodance_tpl_path)
+                       and os.path.getsize(autodance_tpl_path) >= 1024)
+
+    if not _skip_autodance:
+        with open(os.path.join(target_dir, f"Autodance/{map_name}_autodance.isc"), "w") as f:
+            f.write(f'''<?xml version="1.0" encoding="ISO-8859-1"?>
 <root>
 	<Scene ENGINE_VERSION="81615" GRIDUNIT="0.500000" DEPTH_SEPARATOR="0" NEAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000" FAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000">
 		<ACTORS NAME="Actor">
@@ -723,8 +733,8 @@ params =
 	</Scene>
 </root>''')
 
-    with open(os.path.join(target_dir, f"Autodance/{map_name}_autodance.tpl"), "w") as f:
-        f.write(f'''params =
+        with open(autodance_tpl_path, "w") as f:
+            f.write(f'''params =
 {{
 	NAME = "Actor_Template",
 	Actor_Template =
@@ -751,8 +761,8 @@ params =
 	}}
 }}''')
 
-    with open(os.path.join(target_dir, f"Autodance/{map_name}_autodance.act"), "w") as f:
-        f.write(f'''params =
+        with open(os.path.join(target_dir, f"Autodance/{map_name}_autodance.act"), "w") as f:
+            f.write(f'''params =
 {{
 	NAME = "Actor",
 	Actor =

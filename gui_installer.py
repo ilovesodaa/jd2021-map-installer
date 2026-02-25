@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import map_installer
 import map_builder
+import map_downloader
 
 
 class StdoutRedirector:
@@ -105,12 +106,12 @@ class MapInstallerGUI:
         cfg.pack(fill="x", pady=(0, 4))
 
         for i, (label_text, attr_name, browse_type) in enumerate([
-            ("Map Name:", "map_name_entry", None),
+            ("Map Name (opt):", "map_name_entry", None),
             ("Asset HTML:", "asset_html_entry", "html"),
             ("NOHUD HTML:", "nohud_html_entry", "html"),
             ("JD Directory:", "jd_dir_entry", "dir"),
         ]):
-            ttk.Label(cfg, text=label_text, width=14, anchor="e").grid(
+            ttk.Label(cfg, text=label_text, width=16, anchor="e").grid(
                 row=i, column=0, sticky="e", padx=(0, 4))
             entry = ttk.Entry(cfg, width=64)
             entry.grid(row=i, column=1, sticky="ew", pady=1)
@@ -126,7 +127,7 @@ class MapInstallerGUI:
         cfg.columnconfigure(1, weight=1)
 
         # Video quality selector
-        ttk.Label(cfg, text="Video Quality:", width=14, anchor="e").grid(
+        ttk.Label(cfg, text="Video Quality:", width=16, anchor="e").grid(
             row=4, column=0, sticky="e", padx=(0, 4))
         self.quality_var = tk.StringVar(value="ultra_hd")
         quality_combo = ttk.Combobox(cfg, textvariable=self.quality_var,
@@ -387,11 +388,20 @@ class MapInstallerGUI:
         nohud_html = self.nohud_html_entry.get().strip()
         jd_dir = self.jd_dir_entry.get().strip()
 
-        if not all([map_name, asset_html, nohud_html]):
+        if not asset_html or not nohud_html:
             messagebox.showerror(
                 "Missing Input",
-                "Map Name, Asset HTML, and NOHUD HTML are all required.")
+                "Asset HTML and NOHUD HTML are required.")
             return
+
+        if not map_name:
+            if os.path.exists(asset_html):
+                urls = map_downloader.extract_urls(asset_html)
+                map_name = map_downloader.extract_codename_from_urls(urls)
+            if not map_name:
+                map_name = os.path.basename(os.path.dirname(os.path.abspath(asset_html)))
+            self.map_name_entry.delete(0, tk.END)
+            self.map_name_entry.insert(0, map_name)
 
         # Disable controls during pipeline
         self.install_btn.configure(state="disabled")
