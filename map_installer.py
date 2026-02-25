@@ -466,14 +466,21 @@ def convert_audio(audio_path, map_name, target_dir, a_offset=0.0):
 
     if a_offset == 0.0:
         print(f"    Converting to 48kHz WAV (no offset)...")
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", audio_path, "-ar", "48000", wav_out], check=True)
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
+                        "-i", audio_path, "-ar", "48000", wav_out], check=True)
+    elif a_offset < 0:
+        trim_s = abs(a_offset)
+        print(f"    Converting to 48kHz WAV (trimming first {trim_s:.3f}s)...")
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
+                        "-i", audio_path, "-ss", f"{trim_s:.6f}",
+                        "-ar", "48000", wav_out], check=True)
     else:
-        print(f"    Converting to 48kHz WAV (offset: {a_offset}s)...")
-        if a_offset < 0:
-            af_filter = f"atrim=start={abs(a_offset)},asetpts=PTS-STARTPTS"
-        else:
-            af_filter = f"adelay={int(a_offset * 1000)}|{int(a_offset * 1000)},asetpts=PTS-STARTPTS"
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", audio_path, "-af", af_filter, "-ar", "48000", wav_out], check=True)
+        delay_ms = int(a_offset * 1000)
+        print(f"    Converting to 48kHz WAV (padding {delay_ms}ms silence)...")
+        af_filter = f"adelay={delay_ms}|{delay_ms},asetpts=PTS-STARTPTS"
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
+                        "-i", audio_path, "-af", af_filter,
+                        "-ar", "48000", wav_out], check=True)
 
 def generate_intro_amb(ogg_path, map_name, target_dir, a_offset, v_override=None):
     """Generate an intro AMB WAV to cover pre-roll silence caused by negative videoStartTime.
@@ -626,18 +633,19 @@ includeReference("world/maps/{map_name}/audio/amb/{intro_name}.ilu")'''
     # Generate the intro WAV with a 200ms fade-out at the tail end.
     # If the video intro is longer than the OGG pre-roll, prepend silence via adelay so
     # the audio content starts at the right moment relative to the video.
+    # Uses -t to limit input duration instead of atrim for reliability.
     delay_ms = int(audio_delay * 1000)
     if delay_ms > 0:
         af_filter = (
-            f"atrim=end={audio_content_dur:.3f},asetpts=PTS-STARTPTS,"
-            f"adelay={delay_ms}|{delay_ms},"
+            f"adelay={delay_ms}|{delay_ms},asetpts=PTS-STARTPTS,"
             f"afade=t=out:st={fade_start:.3f}:d=0.2"
         )
         print(f"    Intro audio delayed by {audio_delay:.3f}s (video intro longer than OGG pre-roll)")
     else:
-        af_filter = f"atrim=end={audio_content_dur:.3f},asetpts=PTS-STARTPTS,afade=t=out:st={fade_start:.3f}:d=0.2"
+        af_filter = f"afade=t=out:st={fade_start:.3f}:d=0.2"
     subprocess.run(
-        ["ffmpeg", "-y", "-loglevel", "error", "-i", ogg_path,
+        ["ffmpeg", "-y", "-loglevel", "error",
+         "-t", f"{audio_content_dur:.3f}", "-i", ogg_path,
          "-af", af_filter, "-ar", "48000", intro_wav],
         check=True
     )
