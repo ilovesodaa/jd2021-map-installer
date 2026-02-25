@@ -1,8 +1,8 @@
-![Screenshot](docs/img/gui_installer_screenshot.png)
-
 # JD2021 Map Installer
 
 An automated pipeline for extracting, building, and installing JDU (Just Dance Unlimited) maps into Just Dance 2021 PC.
+
+<img src="docs/img/gui_installer_screenshot.png" alt="Screenshot" style="max-width: 600px; width: 100%; height: auto; display: block; margin: 0 auto;" />
 
 ## Features
 
