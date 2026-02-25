@@ -116,14 +116,26 @@ class MapInstallerGUI:
             entry.grid(row=i, column=1, sticky="ew", pady=1)
             setattr(self, attr_name, entry)
             if browse_type:
-                cmd = (lambda e=entry, bt=browse_type: self._browse(e, bt))
+                if attr_name == "asset_html_entry":
+                    cmd = (lambda e=entry, bt=browse_type: self._browse(e, bt, self.map_name_entry))
+                else:
+                    cmd = (lambda e=entry, bt=browse_type: self._browse(e, bt))
                 ttk.Button(cfg, text="Browse", width=8, command=cmd).grid(
                     row=i, column=2, padx=(4, 0))
 
         cfg.columnconfigure(1, weight=1)
 
+        # Video quality selector
+        ttk.Label(cfg, text="Video Quality:", width=14, anchor="e").grid(
+            row=4, column=0, sticky="e", padx=(0, 4))
+        self.quality_var = tk.StringVar(value="ultra_hd")
+        quality_combo = ttk.Combobox(cfg, textvariable=self.quality_var,
+                                     values=["ultra_hd", "ultra", "high_hd", "high", "mid_hd", "mid", "low_hd", "low"],
+                                     state="readonly", width=12)
+        quality_combo.grid(row=4, column=1, sticky="w", pady=1)
+
         btn_row = ttk.Frame(cfg)
-        btn_row.grid(row=4, column=0, columnspan=3, pady=(6, 0))
+        btn_row.grid(row=5, column=0, columnspan=3, pady=(6, 0))
         self.preflight_btn = ttk.Button(
             btn_row, text="Pre-flight Check", command=self._on_preflight)
         self.preflight_btn.pack(side="left", padx=(0, 12))
@@ -245,7 +257,7 @@ class MapInstallerGUI:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _browse(self, entry, browse_type):
+    def _browse(self, entry, browse_type, autofill_entry=None):
         if browse_type == "html":
             path = filedialog.askopenfilename(
                 filetypes=[("HTML files", "*.html"), ("All files", "*.*")])
@@ -254,6 +266,17 @@ class MapInstallerGUI:
         if path:
             entry.delete(0, tk.END)
             entry.insert(0, path)
+            if autofill_entry is not None and not autofill_entry.get().strip():
+                derived = None
+                try:
+                    urls = map_downloader.extract_urls(path)
+                    derived = map_downloader.extract_codename_from_urls(urls)
+                except Exception:
+                    pass
+                if not derived:
+                    derived = os.path.basename(os.path.dirname(os.path.abspath(path)))
+                autofill_entry.delete(0, tk.END)
+                autofill_entry.insert(0, derived)
 
     def _redirect_stdout(self):
         self._redirector = StdoutRedirector(self.log_text, self.root)
@@ -319,10 +342,30 @@ class MapInstallerGUI:
         def _run():
             ok = map_installer.preflight_check(
                 jd_dir, asset or "(not set)", nohud or "(not set)")
+            if not ok:
+                # Offer auto-install via GUI dialog
+                self.root.after(0, self._offer_auto_install, jd_dir, asset, nohud)
+                return
             self._preflight_passed = ok
             self.root.after(0, self._on_preflight_done, ok)
 
         threading.Thread(target=_run, daemon=True).start()
+
+    def _offer_auto_install(self, jd_dir, asset, nohud):
+        result = messagebox.askyesno(
+            "Missing Dependencies",
+            "Some dependencies are missing.\nWould you like to auto-install them?")
+        if result:
+            def _run_auto():
+                ok = map_installer.preflight_check(
+                    jd_dir, asset or "(not set)", nohud or "(not set)",
+                    auto_install=True)
+                self._preflight_passed = ok
+                self.root.after(0, self._on_preflight_done, ok)
+            threading.Thread(target=_run_auto, daemon=True).start()
+        else:
+            self._preflight_passed = False
+            self._on_preflight_done(False)
 
     def _on_preflight_done(self, passed):
         self.preflight_btn.configure(state="normal")
@@ -363,7 +406,17 @@ class MapInstallerGUI:
             asset_html=asset_html,
             nohud_html=nohud_html,
             jd_dir=jd_dir or None,
+            quality=self.quality_var.get(),
         )
+
+        # Load saved config if available (applies saved sync values)
+        saved = map_installer.load_map_config(
+            self.pipeline_state.jd_dir, self.pipeline_state.map_name)
+        if saved:
+            if self.pipeline_state.v_override is None:
+                self.pipeline_state.v_override = saved.get('v_override')
+            if self.pipeline_state.a_offset is None:
+                self.pipeline_state.a_offset = saved.get('a_offset')
 
         # Close any previous log file and open a new one for this install run
         if self._log_file:
@@ -666,7 +719,19 @@ class MapInstallerGUI:
                     state.target_dir, a_offset, v_override)
                 state.a_offset = a_offset
 
-                print("    Sync changes applied successfully.")
+                # Save sync config for future re-installs
+                map_installer.save_map_config(
+                    state.jd_dir, state.map_name,
+                    v_override, a_offset,
+                    quality=getattr(state, 'quality', 'ULTRA'),
+                    codename=state.codename)
+
+                # Clear game cache so the engine picks up the new audio files
+                if state.cache_dir and os.path.exists(state.cache_dir):
+                    map_installer._safe_rmtree(state.cache_dir)
+                    print(f"    Cleared game cache for {state.map_name}.")
+
+                print("    Sync changes applied and config saved.")
                 self.root.after(0, lambda: messagebox.showinfo(
                     "Applied",
                     f"Sync values applied and files regenerated.\n\n"

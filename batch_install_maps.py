@@ -80,17 +80,26 @@ def collect_map_folders(root_dir):
     return out
 
 
-def launch_installer_for(map_name, asset_html, nohud_html, jd21_cwd):
+def launch_installer_for(map_name, asset_html, nohud_html, jd21_cwd, quality="ultra_hd"):
     print(f"\n========================================")
     print(f"Launching installer for {map_name} in new terminal...")
     print(f"========================================\n")
     # Build inner command with proper quoting for paths that may contain spaces
-    inner_cmd = subprocess.list2cmdline([
+    inner_cmd_parts = [
         sys.executable, "map_installer.py",
         "--map-name", map_name,
         "--asset-html", asset_html,
         "--nohud-html", nohud_html,
-    ])
+        "--quality", quality,
+    ]
+
+    # Pass saved sync config if one exists for this map
+    config_path = os.path.join(jd21_cwd, "map_configs", f"{map_name}.json")
+    if os.path.isfile(config_path):
+        inner_cmd_parts += ["--sync-config", config_path]
+        print(f"    Using saved config: {config_path}")
+
+    inner_cmd = subprocess.list2cmdline(inner_cmd_parts)
     # cmd /k strips the outermost quotes (old behavior), leaving the inner command intact
     cmd = f'start "Install {map_name}" cmd /k "{inner_cmd}"'
     subprocess.Popen(cmd, shell=True, cwd=jd21_cwd)
@@ -100,6 +109,8 @@ def main():
     parser = argparse.ArgumentParser(description="Batch-install map folders. Provide a directory containing map subfolders (each with assets.html and nohud.html).")
     parser.add_argument("maps_dir", nargs="?", help="Path to folder that contains map subfolders (each with assets.html and nohud.html)")
     parser.add_argument("--jd21-path", help="Path to your JD installation root (optional). If not provided the script will try common defaults and then prompt.")
+    parser.add_argument("--quality", choices=["ultra_hd", "ultra", "high_hd", "high", "mid_hd", "mid", "low_hd", "low"],
+                        default="ultra_hd", help="Video quality for all maps (default: ultra_hd)")
     args = parser.parse_args()
 
     maps_root = args.maps_dir or os.getcwd()
@@ -132,7 +143,7 @@ def main():
 
     print(f"Found {len(found)} map(s) to install. JD root: {jd21}")
     for name, asset, nohud in found:
-        launch_installer_for(name, asset, nohud, jd21)
+        launch_installer_for(name, asset, nohud, jd21, quality=args.quality)
 
     print("\nAll installers launched in separate terminals. Review offsets individually.")
 
