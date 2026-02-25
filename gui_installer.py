@@ -348,29 +348,48 @@ class MapInstallerGUI:
         self.preflight_btn.configure(state="disabled")
 
         def _run():
-            ok = map_installer.preflight_check(
-                jd_dir, asset or "(not set)", nohud or "(not set)")
-            if not ok:
-                # Offer auto-install via GUI dialog
-                self.root.after(0, self._offer_auto_install, jd_dir, asset, nohud)
+            result = map_installer.preflight_check(
+                jd_dir, asset or "(not set)", nohud or "(not set)",
+                interactive=False)
+            # preflight_check returns (False, True) when ffmpeg is missing in
+            # non-interactive mode, plain False for other failures, or True.
+            if isinstance(result, tuple):
+                passed, ffmpeg_missing = result
+            else:
+                passed = result
+                ffmpeg_missing = False
+
+            if not passed and ffmpeg_missing:
+                # FFmpeg is missing — offer to download it via GUI dialog
+                self.root.after(0, self._offer_ffmpeg_install, jd_dir, asset, nohud)
                 return
-            self._preflight_passed = ok
-            self.root.after(0, self._on_preflight_done, ok)
+            if not passed:
+                # Other failures (bundled tools missing, etc.)
+                self._preflight_passed = False
+                self.root.after(0, self._on_preflight_done, False)
+                return
+            self._preflight_passed = True
+            self.root.after(0, self._on_preflight_done, True)
 
         threading.Thread(target=_run, daemon=True).start()
 
-    def _offer_auto_install(self, jd_dir, asset, nohud):
+    def _offer_ffmpeg_install(self, jd_dir, asset, nohud):
         result = messagebox.askyesno(
-            "Missing Dependencies",
-            "Some dependencies are missing.\nWould you like to auto-install them?")
+            "FFmpeg Not Found",
+            "FFmpeg is required but was not found on your system.\n\n"
+            "Would you like to download and install it automatically?\n"
+            "(This may take a few minutes)")
         if result:
-            def _run_auto():
+            def _run_install():
                 ok = map_installer.preflight_check(
                     jd_dir, asset or "(not set)", nohud or "(not set)",
-                    auto_install=True)
-                self._preflight_passed = ok
-                self.root.after(0, self._on_preflight_done, ok)
-            threading.Thread(target=_run_auto, daemon=True).start()
+                    auto_install=True, interactive=False)
+                # When auto_install=True ffmpeg gets installed, so the
+                # return is plain bool (no tuple).
+                passed = ok if not isinstance(ok, tuple) else ok[0]
+                self._preflight_passed = passed
+                self.root.after(0, self._on_preflight_done, passed)
+            threading.Thread(target=_run_install, daemon=True).start()
         else:
             self._preflight_passed = False
             self._on_preflight_done(False)

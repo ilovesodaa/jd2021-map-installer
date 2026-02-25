@@ -7,9 +7,7 @@ world/
 errors.txt
 dump*
 __pycache__/
-XTX-Extractor/
 JustDanceTools/
-ubiart-archive-tools/
 
 .vscode/
 BadRomance/
@@ -26,11 +24,13 @@ Albatraoz/
 jd21.rar
 
 JustDanceTools/
-XTX-Extractor/
-ubiart-archive-tools/
 jd2021pc tools/
 jd2021pc tools.zip
 MapDownloads/
+
+# Legacy external tool directories (now integrated into project)
+XTX-Extractor/
+ubiart-archive-tools/
 
 tmpclaude*
 JD2021MapInstaller.zip
