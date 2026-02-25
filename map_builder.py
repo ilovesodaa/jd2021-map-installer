@@ -6,6 +6,41 @@ import subprocess
 import glob
 import zipfile
 
+def lua_long_string(text):
+    """Wrap text in a Lua long string literal, handling edge cases.
+
+    Standard: [[text]]
+    If text contains ']]': use [=[text]=]
+    If text contains ']=]': use [==[text]==]
+    And so on, incrementing the level until safe.
+    """
+    if text is None:
+        text = ""
+    text = str(text)
+
+    level = 0
+    while True:
+        close_marker = "]" + ("=" * level) + "]"
+        if close_marker not in text:
+            break
+        level += 1
+
+    open_marker = "[" + ("=" * level) + "["
+    close_marker = "]" + ("=" * level) + "]"
+    return f"{open_marker}{text}{close_marker}"
+
+
+def warn_non_ascii_map_name(map_name):
+    """Print a warning if map_name contains non-ASCII characters."""
+    try:
+        map_name.encode('ascii')
+    except UnicodeEncodeError:
+        non_ascii = [c for c in map_name if ord(c) > 127]
+        print(f"    WARNING: Map name '{map_name}' contains non-ASCII characters: {non_ascii}")
+        print(f"    This may cause issues with file paths on some systems.")
+        print(f"    Consider renaming the map to use only ASCII characters.")
+
+
 def color_array_to_hex(val, default="0xFFFFFFFF"):
     if isinstance(val, str) and val.startswith("0x"):
         return val
@@ -30,6 +65,7 @@ def setup_dirs(target_dir):
     os.makedirs(os.path.join(target_dir, "Autodance"), exist_ok=True)
 
 def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override=None):
+    warn_non_ascii_map_name(map_name)
     map_lower = map_name.lower()
     
     # Find musictrack.tpl.ckd
@@ -143,6 +179,10 @@ def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override
     # Calculate audio preview fade time (usually 2.0s if it exists)
     audio_prev_fade = 2.0 if float(mt_struct.get('previewEntry', 0)) > 0 else 0.0
 
+    # Sanitize metadata strings for Lua output
+    dancer_name = str(sd_struct.get('DancerName', 'Unknown Dancer'))
+    dancer_name = dancer_name.replace('"', '\\"').replace('\n', ' ').replace('\r', '')
+
     # Extract tags from CKD, fall back to ["Main"]
     raw_tags = sd_struct.get("Tags", ["Main"]) or ["Main"]
     tags_lua = ""
@@ -182,10 +222,10 @@ params =
 					MapName = "{map_name}",
 					JDVersion = {sd_struct.get('JDVersion', 2021)},
 					OriginalJDVersion = {sd_struct.get('OriginalJDVersion', 2021)},
-					Artist = [[{sd_struct.get('Artist', 'Unknown Artist')}]],
-					DancerName = "{sd_struct.get('DancerName', 'Unknown Dancer')}",
-					Title = [[{sd_struct.get('Title', map_name)}]],
-					Credits = [[{sd_struct.get('Credits', 'All rights of the producer and other rightholders to the recorded work reserved. Unless otherwise authorized, the duplication, rental, loan, exchange or use of this video game for public performance, broadcasting and online distribution to the public are prohibited.')}]],
+					Artist = {lua_long_string(sd_struct.get('Artist', 'Unknown Artist'))},
+					DancerName = "{dancer_name}",
+					Title = {lua_long_string(sd_struct.get('Title', map_name))},
+					Credits = {lua_long_string(sd_struct.get('Credits', 'All rights of the producer and other rightholders to the recorded work reserved. Unless otherwise authorized, the duplication, rental, loan, exchange or use of this video game for public performance, broadcasting and online distribution to the public are prohibited.'))},
 					NumCoach = {num_coach},
 					MainCoach = {sd_struct.get('MainCoach', -1)},
 					Difficulty = {sd_struct.get('Difficulty', 2)},

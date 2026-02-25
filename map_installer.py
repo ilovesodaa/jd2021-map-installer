@@ -10,6 +10,7 @@ import fnmatch
 import re
 import datetime
 import time
+import json
 
 # Import our individual scripts
 import map_downloader
@@ -25,7 +26,10 @@ class TeeOutput:
         self.log_file = log_file
 
     def write(self, text):
-        self.original.write(text)
+        try:
+            self.original.write(text)
+        except UnicodeEncodeError:
+            self.original.write(text.encode('ascii', errors='replace').decode('ascii'))
         self.log_file.write(text)
         self.log_file.flush()
 
@@ -46,12 +50,15 @@ def setup_log_file(jd_dir, map_name):
 class PipelineState:
     """Holds all intermediate state for a map installation pipeline run."""
     def __init__(self, map_name, asset_html, nohud_html, jd_dir=None,
-                 video_override=None, audio_offset=None):
+                 video_override=None, audio_offset=None, quality="ultra_hd"):
         self.map_name = map_name.strip()
         self.map_lower = self.map_name.lower()
         self.asset_html = clean_path(asset_html)
         self.nohud_html = clean_path(nohud_html)
         self.jd_dir = detect_jd_dir(jd_dir)
+
+        # Video quality preference
+        self.quality = quality.upper()
 
         # Derived paths
         self.download_dir = os.path.dirname(self.asset_html)
@@ -117,6 +124,49 @@ def detect_jd_dir(provided_dir=None):
     # Fallback to the first candidate or current script dir if nothing found
     return candidates[0] if candidates else script_dir
 
+
+CONFIG_DIR_NAME = "map_configs"
+
+
+def _config_dir(jd_dir):
+    """Return the path to {jd_dir}/map_configs/, creating it if needed."""
+    d = os.path.join(jd_dir, CONFIG_DIR_NAME)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def load_map_config(jd_dir, map_name):
+    """Load a saved config JSON for a map. Returns dict or None."""
+    config_path = os.path.join(_config_dir(jd_dir), f"{map_name}.json")
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            print(f"    Found previous config for {map_name}, using saved sync values")
+            print(f"      v_override={data.get('v_override')}, a_offset={data.get('a_offset')}, quality={data.get('quality')}")
+            return data
+        except Exception as e:
+            print(f"    Warning: Could not load config for {map_name}: {e}")
+    return None
+
+
+def save_map_config(jd_dir, map_name, v_override, a_offset, quality="ULTRA", codename=None):
+    """Save a sync config JSON for a map."""
+    config_path = os.path.join(_config_dir(jd_dir), f"{map_name}.json")
+    data = {
+        "map_name": map_name,
+        "v_override": v_override,
+        "a_offset": a_offset,
+        "quality": quality,
+        "codename": codename or map_name,
+        "installed_at": datetime.datetime.now().isoformat(),
+    }
+    with open(config_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
+    print(f"    Config saved to {config_path}")
+    return config_path
+
+
 def check_executable(name):
     """Check if an executable is available on PATH."""
     try:
@@ -125,8 +175,99 @@ def check_executable(name):
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return False
 
-def preflight_check(jd_dir, asset_html, nohud_html):
-    """Run pre-flight dependency checks. Returns True if all critical checks pass."""
+
+def _prompt_install(tool_name):
+    """Ask user if they want to auto-install a missing dependency. Returns True if yes."""
+    try:
+        resp = input(f"    Install {tool_name} automatically? [y/N]: ").strip().lower()
+        return resp in ('y', 'yes')
+    except EOFError:
+        return False
+
+
+def _install_ffmpeg(jd_dir):
+    """Download ffmpeg static build for Windows into {jd_dir}/tools/ffmpeg/."""
+    import ssl as _ssl
+    ctx = _ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = _ssl.CERT_NONE
+
+    FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+    tools_dir = os.path.join(jd_dir, "tools")
+    ffmpeg_dir = os.path.join(tools_dir, "ffmpeg")
+    os.makedirs(ffmpeg_dir, exist_ok=True)
+
+    zip_path = os.path.join(tools_dir, "ffmpeg.zip")
+    print(f"    Downloading ffmpeg from {FFMPEG_URL}...")
+    print(f"    This may take a few minutes...")
+    urllib_req = __import__('urllib.request', fromlist=['urlretrieve'])
+    urllib_req.urlretrieve(FFMPEG_URL, zip_path)
+
+    print(f"    Extracting ffmpeg...")
+    with zipfile.ZipFile(zip_path, 'r') as z:
+        z.extractall(tools_dir)
+
+    # Find the extracted folder (name varies by version) and move bin/ contents
+    for entry in os.listdir(tools_dir):
+        bin_path = os.path.join(tools_dir, entry, "bin")
+        if entry.startswith("ffmpeg-") and os.path.isdir(bin_path):
+            for exe in os.listdir(bin_path):
+                shutil.move(os.path.join(bin_path, exe),
+                            os.path.join(ffmpeg_dir, exe))
+            shutil.rmtree(os.path.join(tools_dir, entry))
+            break
+
+    if os.path.exists(zip_path):
+        os.remove(zip_path)
+
+    # Add to PATH for this session
+    os.environ['PATH'] = ffmpeg_dir + os.pathsep + os.environ.get('PATH', '')
+    print(f"    ffmpeg installed to {ffmpeg_dir}")
+    return True
+
+
+def _install_git_repo(jd_dir, repo_url, target_name, branch="main"):
+    """Download a GitHub repo as a zip and extract it."""
+    zip_path = os.path.join(jd_dir, f"{target_name}.zip")
+    target = os.path.join(jd_dir, target_name)
+
+    print(f"    Downloading {target_name}...")
+    urllib_req = __import__('urllib.request', fromlist=['urlretrieve'])
+    urllib_req.urlretrieve(repo_url, zip_path)
+
+    print(f"    Extracting...")
+    with zipfile.ZipFile(zip_path, 'r') as z:
+        z.extractall(jd_dir)
+
+    # Rename extracted folder (e.g., repo-main -> target_name)
+    extracted = os.path.join(jd_dir, f"{target_name}-{branch}")
+    if os.path.isdir(extracted):
+        if os.path.exists(target):
+            shutil.rmtree(target)
+        os.rename(extracted, target)
+
+    if os.path.exists(zip_path):
+        os.remove(zip_path)
+    print(f"    {target_name} installed to {target}")
+    return True
+
+
+def _install_pillow():
+    """Install Pillow via pip."""
+    print(f"    Installing Pillow via pip...")
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "Pillow"],
+        capture_output=True, text=True)
+    if result.returncode == 0:
+        print(f"    Pillow installed successfully.")
+        return True
+    else:
+        print(f"    Pillow installation failed: {result.stderr}")
+        return False
+
+def preflight_check(jd_dir, asset_html, nohud_html, auto_install=False):
+    """Run pre-flight dependency checks. Returns True if all critical checks pass.
+    If auto_install is True, offer to install missing dependencies."""
     print("--- Pre-flight Checks ---")
     failures = 0
 
@@ -142,10 +283,25 @@ def preflight_check(jd_dir, asset_html, nohud_html):
         print(f"  [WARN] {msg}")
 
     # Critical: ffmpeg
+    # Check local tools/ directory first, then PATH
+    tools_ffmpeg = os.path.join(jd_dir, "tools", "ffmpeg")
+    if os.path.isdir(tools_ffmpeg):
+        os.environ['PATH'] = tools_ffmpeg + os.pathsep + os.environ.get('PATH', '')
+
     if check_executable("ffmpeg"):
         ok("ffmpeg found")
     else:
-        fail("ffmpeg not found in PATH (install from https://ffmpeg.org)")
+        if auto_install or _prompt_install("ffmpeg"):
+            try:
+                _install_ffmpeg(jd_dir)
+                if check_executable("ffmpeg"):
+                    ok("ffmpeg installed and verified")
+                else:
+                    fail("ffmpeg installed but not working")
+            except Exception as e:
+                fail(f"ffmpeg auto-install failed: {e}")
+        else:
+            fail("ffmpeg not found in PATH (install from https://ffmpeg.org)")
 
     # Critical: jd21 game data
     if os.path.isdir(os.path.join(jd_dir, "jd21")):
@@ -165,7 +321,19 @@ def preflight_check(jd_dir, asset_html, nohud_html):
     if os.path.isfile(ipk_unpacker):
         ok("ubiart-archive-tools")
     else:
-        fail(f"ubiart-archive-tools/ipk_unpacker.py not found (see GETTING_STARTED.md Step 2)")
+        if auto_install or _prompt_install("ubiart-archive-tools"):
+            try:
+                _install_git_repo(jd_dir,
+                    "https://github.com/AntonioDePau/ubiart-archive-tools/archive/refs/heads/main.zip",
+                    "ubiart-archive-tools", branch="main")
+                if os.path.isfile(ipk_unpacker):
+                    ok("ubiart-archive-tools installed")
+                else:
+                    fail("ubiart-archive-tools installed but ipk_unpacker.py not found")
+            except Exception as e:
+                fail(f"ubiart-archive-tools auto-install failed: {e}")
+        else:
+            fail(f"ubiart-archive-tools/ipk_unpacker.py not found (see GETTING_STARTED.md Step 2)")
 
     # Critical: ckd_decode.py
     if os.path.isfile(os.path.join(jd_dir, "ckd_decode.py")):
@@ -183,14 +351,35 @@ def preflight_check(jd_dir, asset_html, nohud_html):
     if os.path.isdir(os.path.join(jd_dir, "XTX-Extractor")):
         ok("XTX-Extractor")
     else:
-        fail("XTX-Extractor/ directory not found (see GETTING_STARTED.md Step 2)")
+        if auto_install or _prompt_install("XTX-Extractor"):
+            try:
+                _install_git_repo(jd_dir,
+                    "https://github.com/aboood40091/XTX-Extractor/archive/refs/heads/master.zip",
+                    "XTX-Extractor", branch="master")
+                if os.path.isdir(os.path.join(jd_dir, "XTX-Extractor")):
+                    ok("XTX-Extractor installed")
+                else:
+                    fail("XTX-Extractor install failed")
+            except Exception as e:
+                fail(f"XTX-Extractor auto-install failed: {e}")
+        else:
+            fail("XTX-Extractor/ directory not found (see GETTING_STARTED.md Step 2)")
 
     # Critical: Pillow
     try:
         from PIL import Image
         ok("Pillow (image library)")
     except ImportError:
-        fail("Pillow not installed (run: pip install Pillow)")
+        if auto_install or _prompt_install("Pillow"):
+            try:
+                if _install_pillow():
+                    ok("Pillow installed")
+                else:
+                    fail("Pillow installation failed")
+            except Exception as e:
+                fail(f"Pillow auto-install failed: {e}")
+        else:
+            fail("Pillow not installed (run: pip install Pillow)")
 
     # Critical: input HTML files
     if os.path.isfile(asset_html):
@@ -588,7 +777,8 @@ def step_02_download(state):
     print("[2] Downloading assets from JDU servers...")
     urls1 = map_downloader.extract_urls(state.asset_html) if state.asset_html and os.path.exists(state.asset_html) else []
     urls2 = map_downloader.extract_urls(state.nohud_html) if state.nohud_html and os.path.exists(state.nohud_html) else []
-    map_downloader.download_files(urls1 + urls2, state.download_dir)
+    map_downloader.download_files(urls1 + urls2, state.download_dir,
+                                  quality=state.quality, interactive=False)
 
     # Auto-detect internal codename from downloaded files
     state.codename = state.map_name
@@ -613,9 +803,15 @@ def step_02_download(state):
     state.audio_path = audio_path
 
     video_path = None
-    for qual in ["ULTRA", "HIGH", "MID", "LOW"]:
-        vp = os.path.join(state.download_dir, f"{state.codename}_{qual}.webm")
+    # Search for video in quality preference order starting from user's choice
+    preferred_idx = map_downloader.QUALITY_ORDER.index(state.quality) if state.quality in map_downloader.QUALITY_ORDER else 0
+    search_order = map_downloader.QUALITY_ORDER[preferred_idx:] + map_downloader.QUALITY_ORDER[:preferred_idx]
+    for qual in search_order:
+        pattern = map_downloader.QUALITY_PATTERNS[qual]  # e.g. "_ULTRA.hd.webm"
+        vp = os.path.join(state.download_dir, f"{state.codename}{pattern}")
         if os.path.exists(vp):
+            if qual != state.quality:
+                print(f"    Note: Requested {state.quality} quality not found, using {qual}")
             video_path = vp
             break
     if not video_path:
@@ -671,6 +867,86 @@ def step_05_decode_menuart(state):
     subprocess.run([sys.executable, os.path.join(state.jd_dir, "ckd_decode.py"), "--batch", "--quiet",
                     os.path.join(state.target_dir, "MenuArt/textures"),
                     os.path.join(state.target_dir, "MenuArt/textures")], check=False)
+
+
+def step_05b_validate_menuart(state):
+    """Validate and fix cover TGA files after MenuArt decoding."""
+    from PIL import Image
+
+    tex_dir = os.path.join(state.target_dir, "MenuArt", "textures")
+    if not os.path.isdir(tex_dir):
+        print("    WARNING: MenuArt/textures directory not found!")
+        return
+
+    # Expected cover TGAs (lowercase as ISC references them)
+    expected_covers = [
+        f"{state.map_name}_cover_generic.tga",
+        f"{state.map_name}_cover_online.tga",
+        f"{state.map_name}_cover_albumbkg.tga",
+        f"{state.map_name}_cover_albumcoach.tga",
+        f"{state.map_name}_banner_bkg.tga",
+        f"{state.map_name}_map_bkg.tga",
+    ]
+
+    # Build case-insensitive lookup of what actually exists
+    actual_files = os.listdir(tex_dir)
+    actual_lower_map = {f.lower(): f for f in actual_files}
+
+    print("    --- MenuArt Diagnostic ---")
+    found_tgas = {}
+    for expected in expected_covers:
+        actual = actual_lower_map.get(expected.lower())
+        if actual:
+            full_path = os.path.join(tex_dir, actual)
+            size = os.path.getsize(full_path)
+            print(f"    [OK]   {expected} ({size:,} bytes)")
+            found_tgas[expected.lower()] = full_path
+
+            # Fix case mismatch: rename if case differs from what ISC expects
+            if actual != expected:
+                correct_path = os.path.join(tex_dir, expected)
+                os.rename(full_path, correct_path)
+                found_tgas[expected.lower()] = correct_path
+                print(f"           Renamed {actual} -> {expected} (case fix)")
+        else:
+            print(f"    [MISS] {expected}")
+
+    # If cover_online is missing but cover_generic exists, copy it (and vice versa)
+    online_key = f"{state.map_name}_cover_online.tga".lower()
+    generic_key = f"{state.map_name}_cover_generic.tga".lower()
+
+    if online_key not in found_tgas and generic_key in found_tgas:
+        src = found_tgas[generic_key]
+        dst = os.path.join(tex_dir, f"{state.map_name}_cover_online.tga")
+        shutil.copy2(src, dst)
+        found_tgas[online_key] = dst
+        print(f"    [FIX]  Created cover_online.tga from cover_generic.tga")
+
+    if generic_key not in found_tgas and online_key in found_tgas:
+        src = found_tgas[online_key]
+        dst = os.path.join(tex_dir, f"{state.map_name}_cover_generic.tga")
+        shutil.copy2(src, dst)
+        found_tgas[generic_key] = dst
+        print(f"    [FIX]  Created cover_generic.tga from cover_online.tga")
+
+    # Re-save all found cover TGAs through Pillow to ensure consistent
+    # uncompressed TGA format (RGBA, 32-bit, no RLE compression)
+    resaved = 0
+    for key, path in found_tgas.items():
+        if not path.lower().endswith('.tga'):
+            continue
+        try:
+            img = Image.open(path)
+            if img.mode != 'RGBA':
+                img = img.convert('RGBA')
+            img.save(path, format='TGA')
+            resaved += 1
+        except Exception as e:
+            print(f"    [WARN] Could not re-save {os.path.basename(path)}: {e}")
+
+    if resaved:
+        print(f"    Re-saved {resaved} TGA(s) as uncompressed 32-bit RGBA")
+    print("    --- End MenuArt Diagnostic ---")
 
 
 def step_06_generate_configs(state):
@@ -932,6 +1208,7 @@ PIPELINE_STEPS = [
     ("Extract scene archives",                  step_03_extract_scenes),
     ("Unpack IPK archives",                     step_04_unpack_ipk),
     ("Decode MenuArt textures",                 step_05_decode_menuart),
+    ("Validate MenuArt covers",                 step_05b_validate_menuart),
     ("Generate UbiArt config files",            step_06_generate_configs),
     ("Convert choreography/karaoke tapes",      step_07_convert_tapes),
     ("Convert cinematic tapes",                 step_08_convert_cinematics),
@@ -946,23 +1223,54 @@ PIPELINE_STEPS = [
 
 def main():
     parser = argparse.ArgumentParser(description="Fully Automated Just Dance 2021 Map Installer")
-    parser.add_argument("--map-name", required=True, help="E.g. Rockabye")
+    parser.add_argument("--map-name", default=None, help="Map name (default: derived from asset-html parent folder)")
     parser.add_argument("--asset-html", required=True, help="Path to asset mapping HTML")
     parser.add_argument("--nohud-html", required=True, help="Path to nohud mapping HTML")
     parser.add_argument("--jd-dir", default=None, help="Base directory of JD tools / JD21 install (auto-detected if omitted)")
+    parser.add_argument("--quality", choices=["ultra_hd", "ultra", "high_hd", "high", "mid_hd", "mid", "low_hd", "low"],
+                        default="ultra_hd", help="Video quality to download (default: ultra_hd)")
     parser.add_argument("--video-override", type=float, default=None, help="Force a specific video start time")
     parser.add_argument("--audio-offset", type=float, default=None, help="Force a specific audio trim offset")
+    parser.add_argument("--sync-config", default=None, help="Path to a JSON config file to load sync values from")
     args = parser.parse_args()
+
+    # Derive map name from JDU asset URLs first (most reliable), fallback to folder name
+    map_name = args.map_name
+    if not map_name:
+        if os.path.exists(args.asset_html):
+            urls = map_downloader.extract_urls(args.asset_html)
+            map_name = map_downloader.extract_codename_from_urls(urls)
+            if map_name:
+                print(f"    Auto-detected map name from URLs: {map_name}")
+        if not map_name:
+            map_name = os.path.basename(os.path.dirname(os.path.abspath(args.asset_html)))
+            print(f"    Auto-detected map name from folder: {map_name}")
 
     # Create pipeline state
     state = PipelineState(
-        map_name=args.map_name,
+        map_name=map_name,
         asset_html=args.asset_html,
         nohud_html=args.nohud_html,
         jd_dir=args.jd_dir,
         video_override=args.video_override,
         audio_offset=args.audio_offset,
+        quality=args.quality,
     )
+
+    # Load saved sync config (explicit path takes priority, then auto-detect)
+    saved = None
+    if args.sync_config and os.path.isfile(args.sync_config):
+        with open(args.sync_config, 'r', encoding='utf-8') as f:
+            saved = json.load(f)
+        print(f"    Loaded sync config from {args.sync_config}")
+    else:
+        saved = load_map_config(state.jd_dir, state.map_name)
+
+    if saved:
+        if state.v_override is None:
+            state.v_override = saved.get('v_override')
+        if state.a_offset is None:
+            state.a_offset = saved.get('a_offset')
 
     # Start logging to file — everything from here on is captured to both terminal and log
     _log_file = setup_log_file(state.jd_dir, state.map_name)
@@ -1015,11 +1323,15 @@ def main():
         choice = input("Choice [0-4]: ").strip()
 
         if choice == '0':
+            save_map_config(state.jd_dir, state.map_name, v_override, a_offset,
+                            quality=state.quality, codename=state.codename)
             sys.exit(0)
         elif choice == '1':
             a_offset = v_override
             convert_audio(state.audio_path, state.map_name, state.target_dir, a_offset)
             generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset, v_override)
+            _safe_rmtree(state.cache_dir)
+            print("    Cleared game cache.")
             show_ffplay_preview(state.video_path, state.audio_path, v_override, a_offset)
         elif choice == '2':
             def get_dur(p):
@@ -1036,6 +1348,8 @@ def main():
             a_offset = diff
             convert_audio(state.audio_path, state.map_name, state.target_dir, a_offset)
             generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset, v_override)
+            _safe_rmtree(state.cache_dir)
+            print("    Cleared game cache.")
             show_ffplay_preview(state.video_path, state.audio_path, v_override, a_offset)
         elif choice == '3':
             try:
@@ -1049,6 +1363,8 @@ def main():
                 # Re-convert audio
                 convert_audio(state.audio_path, state.map_name, state.target_dir, a_offset)
                 generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset, v_override)
+                _safe_rmtree(state.cache_dir)
+                print("    Cleared game cache.")
                 show_ffplay_preview(state.video_path, state.audio_path, v_override, a_offset)
             except ValueError:
                 print("Invalid number entered.")
