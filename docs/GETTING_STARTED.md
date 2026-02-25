@@ -1,12 +1,10 @@
 # Getting Started
 
-This guide walks you through setting up the project from scratch. Some required components are **not included in this repository** and must be downloaded separately.
+This guide walks you through setting up the project from scratch.
 
 ---
 
 ## Step 1 — Install System Dependencies
-
-These must be installed before running any scripts:
 
 ### Python 3.6+
 Download from https://www.python.org/downloads/
@@ -18,44 +16,16 @@ Verify after installing:
 python --version
 ```
 
-### FFmpeg
-Download from https://ffmpeg.org/download.html
-
-Extract it and add the `bin/` folder to your system `PATH`.
-
-Verify after installing:
-```
-ffmpeg -version
-```
-
 ### Pillow (Python image library)
 ```
 pip install Pillow
 ```
 
----
-
-## Step 2 — Download Third-Party Tools (Not Included in Repo)
-
-These tools must be downloaded separately and placed inside the project root folder.
-
-### ubiart-archive-tools *(required)*
-Used to unpack `.ipk` archive files.
-
-Download: https://github.com/PartyService/ubiart-archive-tools
-
-Clone or download the ZIP and place the folder in the project root as `ubiart-archive-tools/`.
-
-### XTX-Extractor *(required for Switch textures)*
-Used to extract textures from Nintendo Switch XTX containers.
-
-Download: https://github.com/aboood40091/XTX-Extractor
-
-Clone or download the ZIP and place the folder in the project root as `XTX-Extractor/`.
+> **Note on FFmpeg:** The installer checks for FFmpeg during the Pre-flight Check. If it is not found on your system, the installer will offer to download and install it automatically into the project's `tools/ffmpeg/` folder — no manual setup required.
 
 ---
 
-## Step 3 — Obtain Just Dance 2021 PC
+## Step 2 — Obtain Just Dance 2021 PC
 
 You need a **Just Dance 2021 PC development build**. This is not publicly available for download — you need to obtain it through the Just Dance modding community.
 
@@ -75,9 +45,9 @@ The script auto-detects the `jd21` folder if it is in the project root. If yours
 
 ---
 
-## Step 4 — Verify Your Folder Structure
+## Step 3 — Verify Your Folder Structure
 
-After completing steps 1–3, your project root should look like this:
+After completing steps 1–2, your project root should look like this:
 
 ```
 projectRoot/
@@ -86,9 +56,11 @@ projectRoot/
 ├── map_downloader.py
 ├── gui_installer.py
 ├── ckd_decode.py
+├── ipk_unpack.py
 ├── json_to_lua.py
 ├── ubiart_lua.py
 ├── batch_install_maps.py
+├── xtx_extractor/           <- bundled, no download needed
 ├── README.md
 ├── docs/
 │   ├── GETTING_STARTED.md
@@ -96,14 +68,14 @@ projectRoot/
 │   ├── MANUAL_PORTING_GUIDE.md
 │   ├── JDU_DATA_MAPPING.md
 │   └── JDU_UNUSED_DATA_OPPORTUNITIES.md
-├── ubiart-archive-tools/    <- downloaded in Step 2
-├── XTX-Extractor/           <- downloaded in Step 2
-└── jd21/                    <- your JD2021 PC install from Step 3
+└── jd21/                    <- your JD2021 PC install from Step 2
 ```
+
+All required tools (`ipk_unpack.py`, `xtx_extractor/`) are already included in the repository — no separate downloads are needed.
 
 ---
 
-## Step 5 — Get Map Data from JDHelper
+## Step 4 — Get Map Data from JDHelper
 
 Each map install requires **two HTML files** exported from the **JDHelper** Discord bot (one for the JDU assets, one for the NOHUD video). Asset links expire quickly, so do this right before running the installer.
 
@@ -129,7 +101,7 @@ Each map install requires **two HTML files** exported from the **JDHelper** Disc
 
 ---
 
-## Step 6 — Run the Installer
+## Step 5 — Run the Installer
 
 ### GUI (Recommended)
 
@@ -141,9 +113,10 @@ python gui_installer.py
 
 1. Browse to your **Asset HTML** and **NOHUD HTML** files — the map name is auto-detected from the asset URLs.
 2. Select a **Video Quality** tier (default: Ultra HD).
-3. Click **Pre-flight Check** to verify dependencies, then **Install Map**.
-4. After installation, use the **Sync Refinement** panel to fine-tune audio/video timing with live FFplay preview.
-5. Click **Apply & Finish** to save your settings.
+3. Click **Pre-flight Check** to verify dependencies. If FFmpeg is missing, the GUI will offer to auto-install it.
+4. Click **Install Map**.
+5. After installation, use the **Sync Refinement** panel to fine-tune audio/video timing with live FFplay preview.
+6. Click **Apply & Finish** to save your settings.
 
 Sync settings are saved per map — on reinstall, they are reloaded automatically.
 
