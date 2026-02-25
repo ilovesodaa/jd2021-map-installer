@@ -84,6 +84,7 @@ projectRoot/
 ├── map_installer.py
 ├── map_builder.py
 ├── map_downloader.py
+├── gui_installer.py
 ├── ckd_decode.py
 ├── json_to_lua.py
 ├── ubiart_lua.py
@@ -130,7 +131,29 @@ Each map install requires **two HTML files** exported from the **JDHelper** Disc
 
 ## Step 6 — Run the Installer
 
-Open a terminal in the project root and run:
+### GUI (Recommended)
+
+Double-click `gui_installer.py` or run:
+
+```bash
+python gui_installer.py
+```
+
+1. Browse to your **Asset HTML** and **NOHUD HTML** files — the map name is auto-detected from the asset URLs.
+2. Select a **Video Quality** tier (default: Ultra HD).
+3. Click **Pre-flight Check** to verify dependencies, then **Install Map**.
+4. After installation, use the **Sync Refinement** panel to fine-tune audio/video timing with live FFplay preview.
+5. Click **Apply & Finish** to save your settings.
+
+Sync settings are saved per map — on reinstall, they are reloaded automatically.
+
+### CLI
+
+```bash
+python map_installer.py --asset-html assets.html --nohud-html nohud.html
+```
+
+The map name is auto-detected from the asset URLs. To override it manually:
 
 ```bash
 python map_installer.py --map-name YourMapName --asset-html assets.html --nohud-html nohud.html
@@ -139,7 +162,7 @@ python map_installer.py --map-name YourMapName --asset-html assets.html --nohud-
 If the auto-detection can't find your JD installation:
 
 ```bash
-python map_installer.py --map-name YourMapName --asset-html assets.html --nohud-html nohud.html --jd-dir "C:\path\to\jd21"
+python map_installer.py --asset-html assets.html --nohud-html nohud.html --jd-dir "C:\path\to\jd21"
 ```
 
 ### Batch Installation (Multiple Maps)

@@ -5,18 +5,23 @@ An automated pipeline for extracting, building, and installing JDU (Just Dance U
 ## Features
 
 - **Full Playable Extraction**: Downloads and parses `MAIN_SCENE_*.zip` assets dynamically based on provided HTML configuration files.
+- **GUI & CLI Installers**: Provides both a graphical interface (`gui_installer.py`) with live preview, sync refinement panel, and progress tracking, and a full CLI installer (`map_installer.py`) for scripted or headless use.
+- **Automatic Map Name Detection**: Derives the map codename from JDU asset URLs automatically — no manual entry needed.
+- **Video Quality Selection**: Choose from 8 quality tiers (Ultra HD down to Low) in both GUI and CLI. The installer handles link expiration and quality re-selection gracefully.
+- **Map Config Persistence**: Saves sync refinement settings (video override, audio offset, quality) per map. On reinstall, previously saved configs are automatically reloaded.
 - **Multiformat Texture Support**: Automatically strips `.ckd` headers and converts internal texture formats (including compressed DDS and Nintendo Switch XTX) into standard formats (PNG/TGA/JPG) for UI usage.
 - **UbiArt-Aware Tape Conversion**: Converts choreography, karaoke, and cinematic tapes from JDU JSON to engine-compatible Lua with proper MotionClip color hex encoding, platform-specific motion data (KEY/VAL), `Tracks` array generation, and cinematic curve processing (`vector2dNew`) with actor path resolution.
 - **Cinematic & Ambient Sound Support**: Processes cinematic tapes with curve data and ambient sound templates into engine-ready `.ilu`/`.tpl` pairs.
 - **Pre-Roll Audio Coverage**: Generates an intro AMB that covers the silence window caused by negative `videoStartTime` (the engine's WAV scheduling delay). Sources audio from the same OGG as the main track, making the overlap inaudible. Formula scales automatically to any map.
 - **Full DefaultColors Extraction**: Extracts all song theme colors (`lyrics`, `theme`, `songColor_1A/1B/2A/2B`, and any extras) from JDU metadata with case-insensitive key matching and hex conversion.
-- **Gesture Tracking Support (Moves)**: Automatically identifies, extracts, and injects platform-specific controller scoring logic (`.msm` and `.msq`) for NX (JoyCon), Durango/Scarlett (Kinect), Orbis/Prospero, and Wii controllers.
-- **Autodance Generation**: Builds native Autodance camera logic (`.act` / `.isc` / `.tpl`) from cooked JSON templates so matches can output their video recaps correctly.
+- **Cross-Platform Gesture Merging**: Automatically merges gesture files (`.gesture`, `.msm`) from all platform folders into PC/. Only copies Kinect-compatible `.gesture` files (from DURANGO/SCARLETT) and substitutes ORBIS-exclusive variants with the nearest Kinect equivalent to avoid format mismatches.
+- **Autodance Generation**: Converts cooked autodance data (CKD) into native Autodance camera logic (`.act` / `.isc` / `.tpl`) with full recording/video structures and FX parameters. Protected against accidental overwrite during sync refinement.
 - **Audio Sync Tools**: Provides a built-in syncing loop with interactive FFplay preview to ensure custom audio correctly pads or matches your gameplay video offset. Intro AMB regenerates automatically on every sync adjustment.
 
 ## Core Scripts
 
-* `map_installer.py`: The main orchestrator. Handles downloading, unzipping, IPK unpacking, tape conversion, audio/video synchronization, intro AMB generation, asset conversion, and engine integration.
+* `gui_installer.py`: Graphical interface for the installer. Provides file browsing, auto-detected map name, video quality selection, real-time progress, sync refinement with FFplay preview, and map config persistence.
+* `map_installer.py`: The main orchestrator. Handles downloading, unzipping, IPK unpacking, tape conversion, audio/video synchronization, intro AMB generation, asset conversion, and engine integration. Can be used standalone via CLI.
 * `map_builder.py`: Autogenerates the UbiArt `.isc`, `.tpl`, `.act`, `.trk`, and `.mpd` configurations for the map, including enriched SongDesc metadata and full DefaultColors extraction from CKD data.
 * `map_downloader.py`: Scrapes and downloads all necessary IPKs, ZIPs, WebMs, and CKD assets from JDU server mapping HTML files.
 * `ubiart_lua.py`: UbiArt-aware Lua converter for tapes and game data. Handles MotionClip color encoding, MotionPlatformSpecifics KEY/VAL conversion, cinematic curve processing with `vector2dNew()`, ActorIndices-to-ActorPaths resolution, `Tracks` array generation, and ambient sound template processing.

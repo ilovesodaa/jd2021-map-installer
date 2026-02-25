@@ -60,7 +60,7 @@ This means the JD2021 PC engine runs fine without SlotClip data, but the data co
 improve beat sync accuracy for sections with tempo changes, or enable future rhythm-based UI
 features.
 
-**Where in code:** `map_builder.py` lines 287-296
+**Where in code:** `map_builder.py` `generate_text_files()` function (stape generation block)
 
 **Effort:** Medium -- need to convert SlotClip JSON arrays through `json_to_lua.py` and insert
 into the stape template. Requires testing whether the engine actually reads them.
@@ -95,8 +95,7 @@ Tags =
 },
 ```
 
-**Where in code:** `map_builder.py` lines 171-176. The CKD songdesc payload does contain the
-real Tags array, it's just not being extracted and passed through.
+**Where in code:** `map_builder.py` `generate_text_files()` function (SongDesc generation block)
 
 **Effort:** Trivial -- extract `Tags` array from the CKD JSON and format as Lua VAL entries
 instead of hardcoding. A few lines of code in the SongDesc generation block.
@@ -130,7 +129,7 @@ the on-disk reference. The `alpha_mul_b.msh` shader appears in JDU's embedded IS
 uses `EMBED_SCENE="1"` (inline XML) vs our `EMBED_SCENE="0"` (separate files). Both approaches
 are valid; the visual difference is subtle (rounded vs sharp corners on album art).
 
-**Where in code:** `map_builder.py` line 529
+**Where in code:** `map_builder.py` `generate_text_files()` function (menuart shader assignment)
 
 **Effort:** Medium -- would need to bundle the mask texture and switch shaders. Low priority
 given that the reference map doesn't use it either.
@@ -167,11 +166,12 @@ gesture scoring.
 
 ### 2.2 Autodance FX Parameters -- RESOLVED
 
-> **Resolved:** The installer already converts `autodance/*.tpl.ckd` via `json_to_lua.py`
-> (`map_installer.py:492-501`), which overwrites the empty fallback TPL from `map_builder.py`.
+> **Resolved:** The installer converts `autodance/*.tpl.ckd` via `json_to_lua.py`
+> in `step_11_extract_moves`, which overwrites the empty fallback TPL from `map_builder.py`.
 > The CKD contains the full `AutoDanceFxDesc` structure with all 60+ effect parameters, and
-> `json_to_lua.py` handles `__class` objects, nested dicts, and arrays correctly. No additional
-> changes needed -- FX data already flows through the existing pipeline.
+> `json_to_lua.py` handles `__class` objects, nested dicts, and arrays correctly. A guard in
+> `generate_text_files()` prevents sync refinement ("Apply") from overwriting the converted
+> TPL with the empty stub. No additional changes needed.
 
 **What JDU provides:**
 Some maps include `AutoDanceFxDesc` data with 60+ visual effect parameters for the autodance
@@ -199,7 +199,7 @@ map's `.adrecording.ckd` and `.advideo.ckd` files are converted (added in recent
 contain some of this data, but FX parameters embedded in the main autodance TPL are not
 extracted.
 
-**Where in code:** `map_builder.py` autodance TPL generation (lines 668-694)
+**Where in code:** `map_builder.py` `generate_text_files()` function (autodance TPL generation)
 
 **Effort:** Complex -- the FX system has many interacting parameters and would need testing to
 verify engine behavior. Low priority since autodance is a secondary feature.
@@ -232,7 +232,7 @@ KEY = "cover",  VAL = "world/maps/{map_lower}/menuart/textures/{map_lower}_cover
 KEY = "coach1", VAL = "world/maps/{map_lower}/menuart/textures/{map_lower}_coach_1_phone.png"
 ```
 
-Source: `map_builder.py` lines 119-126 (coach loop) and lines 181-187 (SongDesc output).
+Source: `map_builder.py` `generate_text_files()` function (PhoneImages section).
 
 **In practice:** The reconstructed paths match the CKD paths for all standard maps. This only
 matters if a map uses non-standard naming, which hasn't been observed.
