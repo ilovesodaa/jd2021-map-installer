@@ -12,6 +12,12 @@ import datetime
 import time
 import json
 
+# Directory containing this script - always the project root regardless of
+# where the user's game data lives.
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# Cached discovered game-data paths so we don't scan on every run.
+PATHS_CACHE_FILE = os.path.join(SCRIPT_DIR, "installer_paths.json")
+
 # Import our individual scripts
 import map_downloader
 import map_builder
@@ -39,9 +45,9 @@ class TeeOutput:
         self.log_file.flush()
 
 
-def setup_log_file(jd_dir, map_name):
-    """Create a timestamped log file in {jd_dir}/logs/ and return the open file handle."""
-    logs_dir = os.path.join(jd_dir, "logs")
+def setup_log_file(map_name):
+    """Create a timestamped log file in the project logs/ dir."""
+    logs_dir = os.path.join(SCRIPT_DIR, "logs")
     os.makedirs(logs_dir, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     log_path = os.path.join(logs_dir, f"install_{map_name}_{timestamp}.log")
@@ -56,17 +62,32 @@ class PipelineState:
         self.map_lower = self.map_name.lower()
         self.asset_html = clean_path(asset_html)
         self.nohud_html = clean_path(nohud_html)
-        self.jd_dir = detect_jd_dir(jd_dir)
+
+        # jd_dir is the user's search-root hint for finding game data
+        search_root = clean_path(jd_dir) if jd_dir else SCRIPT_DIR
+        self.jd_dir = search_root  # kept for display and as the search hint
+
+        # Resolve the actual jd21 game-data directory
+        game_paths = resolve_game_paths(search_root)
+        if game_paths:
+            self.jd21_dir = game_paths['jd21_dir']
+        else:
+            # Best-guess fallback; preflight will fail with a clear message
+            _base = os.path.normpath(search_root)
+            if os.path.basename(_base).lower() == 'jd21':
+                self.jd21_dir = _base
+            else:
+                self.jd21_dir = os.path.join(_base, "jd21")
 
         # Video quality preference
         self.quality = quality.upper()
 
-        # Derived paths
+        # Derived paths (all game-data paths use jd21_dir, not jd_dir)
         self.download_dir = os.path.dirname(self.asset_html)
         self.target_dir = os.path.join(
-            self.jd_dir, "jd21", "data", "World", "MAPS", self.map_name)
+            self.jd21_dir, "data", "World", "MAPS", self.map_name)
         self.cache_dir = os.path.join(
-            self.jd_dir, "jd21", "data", "cache", "itf_cooked", "pc", "world", "maps", self.map_lower)
+            self.jd21_dir, "data", "cache", "itf_cooked", "pc", "world", "maps", self.map_lower)
         self.extracted_zip_dir = os.path.join(self.download_dir, "main_scene_extracted")
         self.ipk_extracted = os.path.join(self.download_dir, "ipk_extracted")
 
@@ -95,50 +116,37 @@ def clean_path(path):
     return path
 
 def detect_jd_dir(provided_dir=None):
+    """Return the best default to pre-fill the 'Game Directory' field in the GUI.
+
+    Checks the cached discovered path first, then falls back to SCRIPT_DIR.
+    Actual path resolution (including scanning) happens in resolve_game_paths()
+    when the pipeline or preflight runs.
     """
-    Finds the JD2021 base directory.
-    Priority:
-    1. Provided path (if valid)
-    2. Directory of this script (if it contains jd21 folder)
-    3. Current working directory (if it contains jd21 folder)
-    """
-    candidates = []
+    cached = load_paths_cache()
+    if cached and os.path.isdir(cached.get('jd21_dir', '')):
+        return cached['jd21_dir']
+
     if provided_dir:
         cleaned = clean_path(provided_dir)
-        candidates.append(cleaned)
+        if cleaned and os.path.isdir(cleaned):
+            return cleaned
 
-    # Script's own directory
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    candidates.append(script_dir)
-
-    # Current working directory
-    cwd = os.getcwd()
-    if cwd not in candidates:
-        candidates.append(cwd)
-
-    for cand in candidates:
-        if cand and os.path.isdir(cand):
-            # Signature check: Look for the 'jd21' data directory
-            if os.path.exists(os.path.join(cand, "jd21")):
-                return cand
-
-    # Fallback to the first candidate or current script dir if nothing found
-    return candidates[0] if candidates else script_dir
+    return SCRIPT_DIR
 
 
 CONFIG_DIR_NAME = "map_configs"
 
 
-def _config_dir(jd_dir):
-    """Return the path to {jd_dir}/map_configs/, creating it if needed."""
-    d = os.path.join(jd_dir, CONFIG_DIR_NAME)
+def _config_dir():
+    """Return the path to the project map_configs/ dir, creating it if needed."""
+    d = os.path.join(SCRIPT_DIR, CONFIG_DIR_NAME)
     os.makedirs(d, exist_ok=True)
     return d
 
 
-def load_map_config(jd_dir, map_name):
+def load_map_config(map_name):
     """Load a saved config JSON for a map. Returns dict or None."""
-    config_path = os.path.join(_config_dir(jd_dir), f"{map_name}.json")
+    config_path = os.path.join(_config_dir(), f"{map_name}.json")
     if os.path.isfile(config_path):
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
@@ -151,9 +159,9 @@ def load_map_config(jd_dir, map_name):
     return None
 
 
-def save_map_config(jd_dir, map_name, v_override, a_offset, quality="ULTRA", codename=None):
+def save_map_config(map_name, v_override, a_offset, quality="ULTRA", codename=None):
     """Save a sync config JSON for a map."""
-    config_path = os.path.join(_config_dir(jd_dir), f"{map_name}.json")
+    config_path = os.path.join(_config_dir(), f"{map_name}.json")
     data = {
         "map_name": map_name,
         "v_override": v_override,
@@ -166,6 +174,108 @@ def save_map_config(jd_dir, map_name, v_override, a_offset, quality="ULTRA", cod
         json.dump(data, f, indent=2)
     print(f"    Config saved to {config_path}")
     return config_path
+
+
+# ---------------------------------------------------------------------------
+# Game-data path discovery and caching
+# ---------------------------------------------------------------------------
+
+def load_paths_cache():
+    """Load previously discovered game-data paths. Returns dict or None."""
+    if os.path.isfile(PATHS_CACHE_FILE):
+        try:
+            with open(PATHS_CACHE_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            # Validate: SkuScene must still exist on disk
+            if os.path.isfile(data.get('sku_scene', '')):
+                return data
+        except Exception:
+            pass
+    return None
+
+
+def save_paths_cache(paths):
+    """Persist discovered game-data paths to disk."""
+    try:
+        with open(PATHS_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(paths, f, indent=2)
+    except Exception:
+        pass
+
+
+def clear_paths_cache():
+    """Delete the cached game-data paths. Returns True if anything was deleted."""
+    if os.path.isfile(PATHS_CACHE_FILE):
+        os.remove(PATHS_CACHE_FILE)
+        return True
+    return False
+
+
+def _scan_for_sku_scene(search_root):
+    """Walk search_root recursively to find SkuScene_Maps_PC_All.isc."""
+    target = "SkuScene_Maps_PC_All.isc"
+    skip = {'__pycache__', '.git', 'logs', 'map_configs', 'downloads',
+            'main_scene_extracted', 'ipk_extracted', 'tools', 'xtx_extractor'}
+    for root, dirs, files in os.walk(search_root):
+        dirs[:] = [d for d in dirs if d not in skip]
+        if target in files:
+            return os.path.join(root, target)
+    return None
+
+
+def resolve_game_paths(search_root, use_cache=True):
+    """Locate the JD2021 game-data directory from any starting point.
+
+    Checks, in order:
+      1. Cached paths (installer_paths.json) — skipped when use_cache=False.
+      2. search_root/jd21/ — classic layout where the project sits beside jd21/.
+      3. search_root itself — user pointed directly at the jd21 folder.
+      4. SCRIPT_DIR/jd21/ — in case search_root was wrong but classic layout exists.
+      5. Recursive scan under search_root.
+
+    Returns dict with keys 'jd21_dir' and 'sku_scene', or None if not found.
+    Saves the result to installer_paths.json for future runs.
+    """
+    if use_cache:
+        cached = load_paths_cache()
+        if cached:
+            return cached
+
+    search_root = os.path.normpath(search_root)
+
+    def _found(jd21_dir, sku):
+        paths = {'jd21_dir': jd21_dir, 'sku_scene': sku}
+        save_paths_cache(paths)
+        return paths
+
+    # Case 1: search_root/jd21/data/World/SkuScenes/…
+    jd21_sub = os.path.join(search_root, "jd21")
+    sku = os.path.join(jd21_sub, "data", "World", "SkuScenes", "SkuScene_Maps_PC_All.isc")
+    if os.path.isfile(sku):
+        return _found(jd21_sub, sku)
+
+    # Case 2: search_root IS the jd21 folder
+    sku = os.path.join(search_root, "data", "World", "SkuScenes", "SkuScene_Maps_PC_All.isc")
+    if os.path.isfile(sku):
+        return _found(search_root, sku)
+
+    # Case 3: classic layout next to the scripts
+    if search_root != SCRIPT_DIR:
+        jd21_next = os.path.join(SCRIPT_DIR, "jd21")
+        sku = os.path.join(jd21_next, "data", "World", "SkuScenes", "SkuScene_Maps_PC_All.isc")
+        if os.path.isfile(sku):
+            return _found(jd21_next, sku)
+
+    # Case 4: recursive scan
+    print(f"    Scanning {search_root} for JD2021 game data (this may take a moment)...")
+    sku_found = _scan_for_sku_scene(search_root)
+    if sku_found:
+        # sku is at  jd21_dir/data/World/SkuScenes/SkuScene_Maps_PC_All.isc
+        jd21_dir = os.path.normpath(
+            os.path.join(os.path.dirname(sku_found), '..', '..', '..'))
+        return _found(jd21_dir, sku_found)
+
+    return None
 
 
 def check_executable(name):
@@ -186,15 +296,15 @@ def _prompt_install(tool_name):
         return False
 
 
-def _install_ffmpeg(jd_dir):
-    """Download ffmpeg static build for Windows into {jd_dir}/tools/ffmpeg/."""
+def _install_ffmpeg():
+    """Download ffmpeg static build for Windows into the project tools/ffmpeg/ dir."""
     import ssl as _ssl
     ctx = _ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = _ssl.CERT_NONE
 
     FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-    tools_dir = os.path.join(jd_dir, "tools")
+    tools_dir = os.path.join(SCRIPT_DIR, "tools")
     ffmpeg_dir = os.path.join(tools_dir, "ffmpeg")
     os.makedirs(ffmpeg_dir, exist_ok=True)
 
@@ -232,12 +342,12 @@ def preflight_check(jd_dir, asset_html, nohud_html, auto_install=False,
     """Run pre-flight dependency checks. Returns True if all critical checks pass.
 
     Args:
-        auto_install: If True, automatically install missing downloadable
-                      dependencies (currently only ffmpeg).
-        interactive:  If True (default, CLI mode), missing downloadable deps
-                      trigger an input() prompt.  Set to False when calling
-                      from a GUI so input() is never invoked and the caller
-                      can handle prompting via dialog boxes.
+        jd_dir:       User-provided search root for finding JD2021 game data.
+                      Can be the parent of jd21/, the jd21/ folder itself, or
+                      any ancestor — resolve_game_paths() will scan if needed.
+        auto_install: If True, auto-download ffmpeg without prompting.
+        interactive:  If False (GUI mode), never call input(); return a
+                      (False, True) tuple to signal that ffmpeg is missing.
     """
     print("--- Pre-flight Checks ---")
     failures = 0
@@ -254,9 +364,8 @@ def preflight_check(jd_dir, asset_html, nohud_html, auto_install=False,
     def warn(msg):
         print(f"  [WARN] {msg}")
 
-    # Critical: ffmpeg (the ONLY dependency that may need downloading)
-    # Check local tools/ directory first, then PATH
-    tools_ffmpeg = os.path.join(jd_dir, "tools", "ffmpeg")
+    # Critical: ffmpeg — always look in project tools/ first
+    tools_ffmpeg = os.path.join(SCRIPT_DIR, "tools", "ffmpeg")
     if os.path.isdir(tools_ffmpeg):
         os.environ['PATH'] = tools_ffmpeg + os.pathsep + os.environ.get('PATH', '')
 
@@ -266,7 +375,7 @@ def preflight_check(jd_dir, asset_html, nohud_html, auto_install=False,
         should_install = auto_install or (interactive and _prompt_install("ffmpeg"))
         if should_install:
             try:
-                _install_ffmpeg(jd_dir)
+                _install_ffmpeg()
                 if check_executable("ffmpeg"):
                     ok("ffmpeg installed and verified")
                 else:
@@ -277,46 +386,38 @@ def preflight_check(jd_dir, asset_html, nohud_html, auto_install=False,
             ffmpeg_missing = True
             fail("ffmpeg not found in PATH")
 
-    # Critical: jd21 game data
-    if os.path.isdir(os.path.join(jd_dir, "jd21")):
-        ok("JD2021 game data (jd21/)")
-    else:
-        fail(f"jd21/ directory not found in {jd_dir}")
-
-    # Critical: SkuScene registry
-    sku_path = os.path.join(jd_dir, "jd21", "data", "World", "SkuScenes", "SkuScene_Maps_PC_All.isc")
-    if os.path.isfile(sku_path):
+    # Critical: JD2021 game data — scan from the provided directory
+    game_paths = resolve_game_paths(jd_dir)
+    if game_paths:
+        ok(f"JD2021 game data ({game_paths['jd21_dir']})")
         ok("SkuScene registry file")
     else:
-        fail(f"SkuScene_Maps_PC_All.isc not found at {sku_path}")
+        fail(f"JD2021 game data not found under '{jd_dir}' — try a parent folder or click Clear Cache and re-scan")
+        fail("SkuScene_Maps_PC_All.isc not found (game data missing)")
 
-    # Critical: ipk_unpack (integrated IPK unpacker)
+    # Critical: project scripts — always in SCRIPT_DIR, never in the game dir
     try:
         import ipk_unpack as _ipk_check
         ok("ipk_unpack (IPK unpacker)")
     except ImportError:
         fail("ipk_unpack.py not found in project root")
 
-    # Critical: ckd_decode.py
-    if os.path.isfile(os.path.join(jd_dir, "ckd_decode.py")):
+    if os.path.isfile(os.path.join(SCRIPT_DIR, "ckd_decode.py")):
         ok("ckd_decode.py")
     else:
         fail("ckd_decode.py not found in project root")
 
-    # Critical: json_to_lua.py
-    if os.path.isfile(os.path.join(jd_dir, "json_to_lua.py")):
+    if os.path.isfile(os.path.join(SCRIPT_DIR, "json_to_lua.py")):
         ok("json_to_lua.py")
     else:
         fail("json_to_lua.py not found in project root")
 
-    # Critical: xtx_extractor (integrated XTX texture deswizzler)
     try:
         from xtx_extractor import xtx_extract as _xtx_check
         ok("xtx_extractor (texture deswizzler)")
     except ImportError:
         fail("xtx_extractor/ package not found in project root")
 
-    # Critical: Pillow (expected to be pre-installed with Python environment)
     try:
         from PIL import Image
         ok("Pillow (image library)")
@@ -810,7 +911,7 @@ def step_05_decode_menuart(state):
             shutil.copy2(src, dst)
 
     # Decode CKDs to actual TGAs/PNGs
-    subprocess.run([sys.executable, os.path.join(state.jd_dir, "ckd_decode.py"), "--batch", "--quiet",
+    subprocess.run([sys.executable, os.path.join(SCRIPT_DIR, "ckd_decode.py"), "--batch", "--quiet",
                     os.path.join(state.target_dir, "MenuArt/textures"),
                     os.path.join(state.target_dir, "MenuArt/textures")], check=False, capture_output=True)
 
@@ -965,7 +1066,7 @@ def step_09_process_amb(state):
                 print(f"    Generated AMB: {base}.ilu + {base}.tpl")
                 # Generate silent WAV placeholders for any referenced audio files that don't exist
                 for rel_path in audio_file_paths:
-                    abs_path = os.path.join(state.jd_dir, "jd21", "data", rel_path.replace("/", os.sep))
+                    abs_path = os.path.join(state.jd21_dir, "data", rel_path.replace("/", os.sep))
                     if not os.path.exists(abs_path):
                         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
                         with wave.open(abs_path, 'w') as wf:
@@ -1016,7 +1117,7 @@ def step_10_decode_pictos(state):
         os.makedirs(picto_dst_dir, exist_ok=True)
         for f in glob.glob(os.path.join(picto_src_dir, "*.png.ckd")):
             shutil.copy2(f, os.path.join(picto_dst_dir, os.path.basename(f)))
-        subprocess.run([sys.executable, os.path.join(state.jd_dir, "ckd_decode.py"), "--batch", "--quiet",
+        subprocess.run([sys.executable, os.path.join(SCRIPT_DIR, "ckd_decode.py"), "--batch", "--quiet",
                         picto_dst_dir, picto_dst_dir], check=False, capture_output=True)
         for f in glob.glob(os.path.join(picto_dst_dir, "*.ckd")):
             os.remove(f)
@@ -1103,7 +1204,7 @@ def step_11_extract_moves(state):
         dest_ad = os.path.join(state.target_dir, "Autodance")
         os.makedirs(dest_ad, exist_ok=True)
         dst_tpl = os.path.join(dest_ad, f"{state.map_name}_autodance.tpl")
-        subprocess.run([sys.executable, os.path.join(state.jd_dir, "json_to_lua.py"), f, dst_tpl],
+        subprocess.run([sys.executable, os.path.join(SCRIPT_DIR, "json_to_lua.py"), f, dst_tpl],
                        check=True, capture_output=True)
 
     # Convert autodance data CKDs (adtape, adrecording, advideo)
@@ -1113,7 +1214,7 @@ def step_11_extract_moves(state):
             dest_ad = os.path.join(state.target_dir, "Autodance")
             os.makedirs(dest_ad, exist_ok=True)
             dst_file = os.path.join(dest_ad, f"{state.map_name}.{ext}")
-            subprocess.run([sys.executable, os.path.join(state.jd_dir, "json_to_lua.py"), f, dst_file],
+            subprocess.run([sys.executable, os.path.join(SCRIPT_DIR, "json_to_lua.py"), f, dst_file],
                            check=False, capture_output=True)
 
     # Copy any other Autodance media if they exist (ogg, etc.)
@@ -1129,7 +1230,7 @@ def step_11_extract_moves(state):
     stape_ckds = glob.glob(os.path.join(state.ipk_extracted, "**/*.stape.ckd"), recursive=True)
     if stape_ckds:
         dst_stape = os.path.join(state.target_dir, f"Audio/{state.map_name}.stape")
-        subprocess.run([sys.executable, os.path.join(state.jd_dir, "json_to_lua.py"),
+        subprocess.run([sys.executable, os.path.join(SCRIPT_DIR, "json_to_lua.py"),
                         stape_ckds[0], dst_stape], check=False, capture_output=True)
 
 
@@ -1158,7 +1259,7 @@ def step_13_copy_video(state):
 
 def step_14_register_sku(state):
     """Register map in SkuScene_Maps_PC_All."""
-    sku_isc = os.path.join(state.jd_dir, "jd21", "data", "World", "SkuScenes", "SkuScene_Maps_PC_All.isc")
+    sku_isc = os.path.join(state.jd21_dir, "data", "World", "SkuScenes", "SkuScene_Maps_PC_All.isc")
     if os.path.exists(sku_isc):
         with open(sku_isc, "r", encoding="utf-8") as f:
             sku_data = f.read()
@@ -1256,7 +1357,7 @@ def main():
             saved = json.load(f)
         print(f"    Loaded sync config from {args.sync_config}")
     else:
-        saved = load_map_config(state.jd_dir, state.map_name)
+        saved = load_map_config(state.map_name)
 
     if saved:
         if state.v_override is None:
@@ -1265,11 +1366,12 @@ def main():
             state.a_offset = saved.get('a_offset')
 
     # Start logging to file — everything from here on is captured to both terminal and log
-    _log_file = setup_log_file(state.jd_dir, state.map_name)
+    _log_file = setup_log_file(state.map_name)
     sys.stdout = TeeOutput(sys.stdout, _log_file)
 
     print(f"--- Environment ---")
-    print(f"JD Base Dir: {state.jd_dir}")
+    print(f"Game Dir:    {state.jd21_dir}")
+    print(f"Search Root: {state.jd_dir}")
     print(f"Map Name:    {state.map_name}")
     print(f"Asset HTML:  {state.asset_html}")
     print(f"Log file:    {_log_file.name}")
@@ -1315,7 +1417,7 @@ def main():
         choice = input("Choice [0-4]: ").strip()
 
         if choice == '0':
-            save_map_config(state.jd_dir, state.map_name, v_override, a_offset,
+            save_map_config(state.map_name, v_override, a_offset,
                             quality=state.quality, codename=state.codename)
             sys.exit(0)
         elif choice == '1':
