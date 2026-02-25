@@ -124,7 +124,7 @@ Open the JDU `musictrack.tpl.ckd` with a text editor. Even with the `.ckd` exten
 ### 4.2 Convert Audio
 Use FFmpeg to convert your OGG to WAV at 48kHz. You must also trim to `abs(videoStartTime)` seconds so the WAV begins at the right position when the engine delays it:
 ```bash
-ffmpeg -i input.ogg -af "atrim=start=2.145,asetpts=PTS-STARTPTS" -ar 48000 output.wav
+ffmpeg -i input.ogg -ss 2.145 -ar 48000 output.wav
 ```
 If the sample rate isn't exactly 48,000Hz, the `.trk` markers will drift, causing massive desync.
 
@@ -135,7 +135,7 @@ Because `videoStartTime < 0` causes the WAV to be delayed, the gap must be cover
 # For videoStartTime = -2.145:
 # amb_duration = 2.145 + 1.355 = 3.500
 # fade_start   = 2.145 + 1.155 = 3.300
-ffmpeg -i input.ogg -af "atrim=end=3.500,asetpts=PTS-STARTPTS,afade=t=out:st=3.300:d=0.2" -ar 48000 amb_mapname_intro.wav
+ffmpeg -t 3.500 -i input.ogg -af "afade=t=out:st=3.300:d=0.2" -ar 48000 amb_mapname_intro.wav
 ```
 
 See **[AUDIO_TIMING.md](AUDIO_TIMING.md)** for the full explanation of why this formula works.
@@ -217,7 +217,7 @@ The first sample of the WAV corresponds to marker 0 = beat `startBeat`. If `star
 | **Silence at map start** | No intro AMB for pre-roll period | Generate `amb_{mapname}_intro.wav` from OGG and add AMB actor to audio ISC |
 | **Crash at Coach Select** | Missing Cinematics chain | Create `_cine.isc` → `_MainSequence.tpl` structure |
 | **Progressive Desync** | Wrong audio sample rate | Re-convert audio with `-ar 48000` |
-| **Audio too late / too early** | Incorrect audio trim offset | Match `atrim=start=` and WAV delay to `abs(videoStartTime)` |
+| **Audio too late / too early** | Incorrect audio trim offset | Match `-ss` seek value and WAV delay to `abs(videoStartTime)` |
 | **Pictos / karaoke appear too early** | `videoStartTime` set to 0 on a pre-roll map | Restore original negative `videoStartTime`; use intro AMB for audio coverage |
 | **Black Video** | Incorrect DASH MPD | Ensure namespace is `urn:mpeg:DASH:schema:MPD:2011` |
 | **Missing Title** | SkuScene Registration | Verify the map entry in `SkuScene_Maps_PC_All.isc` |
