@@ -877,14 +877,36 @@ def step_02_download(state):
 
 
 def step_03_extract_scenes(state):
-    """Extract scene ZIP archives."""
+    """Extract scene ZIP archives, preferring DURANGO platform."""
     print("[3] Extracting scene archives...")
     sys.stdout.flush()
 
     os.makedirs(state.extracted_zip_dir, exist_ok=True)
 
+    # Collect all scene ZIPs and identify preferred platform
+    scene_zips = []
     for f in os.listdir(state.download_dir):
         if "SCENE" in f and f.endswith(".zip"):
+            scene_zips.append(f)
+
+    # Prefer DURANGO > NX > SCARLETT > any
+    PREFERRED_PLATFORMS = ["DURANGO", "NX", "SCARLETT"]
+    selected = None
+    for plat in PREFERRED_PLATFORMS:
+        matches = [z for z in scene_zips if f"_MAIN_SCENE_{plat}" in z.upper()]
+        if matches:
+            selected = matches[0]
+            break
+
+    if selected:
+        # Extract only the preferred platform scene
+        scene_zip = os.path.join(state.download_dir, selected)
+        print(f"    Extracting {selected}...")
+        with zipfile.ZipFile(scene_zip, 'r') as z:
+            z.extractall(state.extracted_zip_dir)
+    else:
+        # Fallback: extract all scene ZIPs (legacy behavior)
+        for f in scene_zips:
             scene_zip = os.path.join(state.download_dir, f)
             print(f"    Extracting {f}...")
             with zipfile.ZipFile(scene_zip, 'r') as z:

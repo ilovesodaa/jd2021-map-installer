@@ -76,9 +76,11 @@ def download_files(urls, download_dir, quality="ULTRA_HD", interactive=True):
         quality = "ULTRA_HD"
 
     main_scene_zip = None
-    gesture_zips = []
     video_url = None
     audio_url = None
+
+    # Collect all available mainscene ZIPs by platform
+    scene_zips_by_platform = {}
 
     # Build a map of quality -> URL for all available video URLs
     video_urls_by_quality = {}
@@ -90,10 +92,26 @@ def download_files(urls, download_dir, quality="ULTRA_HD", interactive=True):
         if ".ogg" in u and "AudioPreview" not in u:
             audio_url = u
         elif "MAIN_SCENE" in u and ".zip" in u:
-            if "MAIN_SCENE_NX" in u:
-                main_scene_zip = u
-            else:
-                gesture_zips.append(u)
+            # Identify platform from URL (e.g. MAIN_SCENE_DURANGO, MAIN_SCENE_NX)
+            for plat in ["DURANGO", "NX", "SCARLETT", "ORBIS", "PROSPERO", "PC", "GGP", "WIIU"]:
+                if f"MAIN_SCENE_{plat}" in u:
+                    scene_zips_by_platform[plat] = u
+                    break
+
+    # Select mainscene ZIP: prefer DURANGO (Kinect-compatible with PC),
+    # fallback to NX, then any available platform
+    SCENE_PREFERENCE = ["DURANGO", "NX", "SCARLETT"]
+    for plat in SCENE_PREFERENCE:
+        if plat in scene_zips_by_platform:
+            main_scene_zip = scene_zips_by_platform[plat]
+            if plat != "DURANGO" and "DURANGO" not in scene_zips_by_platform:
+                print(f"    Note: DURANGO mainscene not available, using {plat}")
+            break
+    if not main_scene_zip and scene_zips_by_platform:
+        # Fallback: pick any available platform
+        fallback_plat = next(iter(scene_zips_by_platform))
+        main_scene_zip = scene_zips_by_platform[fallback_plat]
+        print(f"    Note: Using {fallback_plat} mainscene (no preferred platform found)")
 
     # Select video URL by quality preference (starting from requested, falling back)
     preferred_idx = QUALITY_ORDER.index(quality)
@@ -125,14 +143,10 @@ def download_files(urls, download_dir, quality="ULTRA_HD", interactive=True):
                 # In non-interactive mode (GUI), always download requested quality
                 break
 
-    if not main_scene_zip and gesture_zips:
-        main_scene_zip = gesture_zips.pop(0)
-
     important_urls = []
     if video_url: important_urls.append(video_url)
     if audio_url: important_urls.append(audio_url)
     if main_scene_zip: important_urls.append(main_scene_zip)
-    important_urls.extend(gesture_zips)
 
     for u in urls:
         if ".ckd" in u or ".jpg" in u or ".png" in u or ".ad" in u:
