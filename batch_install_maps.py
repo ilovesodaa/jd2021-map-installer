@@ -72,6 +72,22 @@ PROCESS_STEPS = [
 ]
 
 
+def detect_existing_quality(download_dir):
+    """Check download_dir for an existing gameplay .webm and return its quality tier.
+
+    Returns the quality string (e.g. 'ULTRA_HD', 'ULTRA') or None if no video found.
+    """
+    if not os.path.isdir(download_dir):
+        return None
+    for f in os.listdir(download_dir):
+        if not f.endswith('.webm') or 'MapPreview' in f or 'VideoPreview' in f:
+            continue
+        for q, pattern in map_downloader.QUALITY_PATTERNS.items():
+            if f.endswith(pattern):
+                return q
+    return None
+
+
 def create_state(map_name, asset_html, nohud_html, jd_dir, quality="ultra_hd"):
     """Create a PipelineState for a map, loading saved sync config."""
     detected_name = map_name
@@ -81,12 +97,23 @@ def create_state(map_name, asset_html, nohud_html, jd_dir, quality="ultra_hd"):
         if codename:
             detected_name = codename
 
+    # Auto-detect quality from existing downloads — use it instead of the
+    # global default so already-downloaded videos are reused as-is.
+    download_dir = os.path.dirname(asset_html)
+    existing_quality = detect_existing_quality(download_dir)
+    effective_quality = quality
+    if existing_quality:
+        effective_quality = existing_quality
+        if existing_quality.upper() != quality.upper():
+            print(f"    Auto-detected existing video quality: {existing_quality} "
+                  f"(requested {quality.upper()})")
+
     state = map_installer.PipelineState(
         map_name=detected_name,
         asset_html=asset_html,
         nohud_html=nohud_html,
         jd_dir=jd_dir,
-        quality=quality,
+        quality=effective_quality,
     )
 
     saved = map_installer.load_map_config(state.map_name)

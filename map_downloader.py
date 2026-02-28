@@ -140,8 +140,11 @@ def download_files(urls, download_dir, quality="ULTRA_HD", interactive=True):
                     elif choice == 'R':
                         video_url = None  # Skip downloading new video
                         break
-                # In non-interactive mode (GUI), always download requested quality
-                break
+                else:
+                    # Non-interactive (batch/GUI): reuse existing video silently
+                    print(f"    Reusing existing video: {existing} (skipping {requested_fname})")
+                    video_url = None
+                    break
 
     important_urls = []
     if video_url: important_urls.append(video_url)

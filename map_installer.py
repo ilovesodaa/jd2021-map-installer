@@ -1290,36 +1290,77 @@ def step_13_copy_video(state):
 def step_14_register_sku(state):
     """Register map in SkuScene_Maps_PC_All."""
     sku_isc = os.path.join(state.jd21_dir, "data", "World", "SkuScenes", "SkuScene_Maps_PC_All.isc")
-    if os.path.exists(sku_isc):
-        with open(sku_isc, "r", encoding="utf-8") as f:
-            sku_data = f.read()
+    if not os.path.exists(sku_isc):
+        print(f"[14] ERROR: SkuScene file not found: {sku_isc}")
+        return
 
-        if f'USERFRIENDLY="{state.map_name}"' not in sku_data:
-            print(f"[14] Registering {state.map_name} in SkuScene...")
-            actor_xml = f'''           <ACTORS NAME="Actor">
-              <Actor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{state.map_name}" POS2D="0 0" ANGLE="0.000000" INSTANCEDATAFILE="world/maps/{state.map_name}/songdesc.act" LUA="world/maps/{state.map_name}/songdesc.tpl">
-                  <COMPONENTS NAME="JD_SongDescComponent">
-                      <JD_SongDescComponent />
-                  </COMPONENTS>
-              </Actor>
-          </ACTORS>\n'''
-            sku_data = sku_data.replace("          <sceneConfigs>", actor_xml + "          <sceneConfigs>")
+    with open(sku_isc, "r", encoding="utf-8") as f:
+        sku_data = f.read()
 
-            coverflow_xml = f'''                          <CoverflowSkuSongs>
-                            <CoverflowSong name="{state.map_name}"  cover_path="world/maps/{state.map_name}/menuart/actors/{state.map_name}_cover_generic.act">
-                              </CoverflowSong>
-                          </CoverflowSkuSongs>
-                          <CoverflowSkuSongs>
-                            <CoverflowSong name="{state.map_name}"  cover_path="world/maps/{state.map_name}/menuart/actors/{state.map_name}_cover_online.act">
-                              </CoverflowSong>
-                          </CoverflowSkuSongs>\n'''
-            sku_data = sku_data.replace("                      </JD_SongDatabaseSceneConfig>",
-                                        coverflow_xml + "                      </JD_SongDatabaseSceneConfig>")
+    if f'USERFRIENDLY="{state.map_name}"' in sku_data:
+        print(f"[14] {state.map_name} is already registered in SkuScene.")
+        return
 
-            with open(sku_isc, "w", encoding="utf-8") as f:
-                f.write(sku_data)
-        else:
-            print(f"[14] {state.map_name} is already registered in SkuScene.")
+    print(f"[14] Registering {state.map_name} in SkuScene...")
+
+    # --- Actor XML block to insert before <sceneConfigs> ---
+    actor_xml = (
+        f'           <ACTORS NAME="Actor">\n'
+        f'              <Actor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0"'
+        f' USERFRIENDLY="{state.map_name}" POS2D="0 0" ANGLE="0.000000"'
+        f' INSTANCEDATAFILE="world/maps/{state.map_name}/songdesc.act"'
+        f' LUA="world/maps/{state.map_name}/songdesc.tpl">\n'
+        f'                  <COMPONENTS NAME="JD_SongDescComponent">\n'
+        f'                      <JD_SongDescComponent />\n'
+        f'                  </COMPONENTS>\n'
+        f'              </Actor>\n'
+        f'          </ACTORS>\n'
+    )
+
+    # Use regex to find <sceneConfigs> with any leading whitespace
+    new_data, count = re.subn(
+        r'([ \t]*<sceneConfigs>)',
+        actor_xml + r'\1',
+        sku_data,
+        count=1
+    )
+    if count == 0:
+        print(f"[14] WARNING: Could not find <sceneConfigs> insertion point!")
+        print(f"     The SkuScene file may have been modified by another tool.")
+        return
+
+    # --- Coverflow XML block to insert before </JD_SongDatabaseSceneConfig> ---
+    coverflow_xml = (
+        f'                          <CoverflowSkuSongs>\n'
+        f'                            <CoverflowSong name="{state.map_name}"'
+        f'  cover_path="world/maps/{state.map_name}/menuart/actors/{state.map_name}_cover_generic.act">\n'
+        f'                              </CoverflowSong>\n'
+        f'                          </CoverflowSkuSongs>\n'
+        f'                          <CoverflowSkuSongs>\n'
+        f'                            <CoverflowSong name="{state.map_name}"'
+        f'  cover_path="world/maps/{state.map_name}/menuart/actors/{state.map_name}_cover_online.act">\n'
+        f'                              </CoverflowSong>\n'
+        f'                          </CoverflowSkuSongs>\n'
+    )
+
+    new_data, count2 = re.subn(
+        r'([ \t]*</JD_SongDatabaseSceneConfig>)',
+        coverflow_xml + r'\1',
+        new_data,
+        count=1
+    )
+    if count2 == 0:
+        print(f"[14] WARNING: Could not find </JD_SongDatabaseSceneConfig> insertion point!")
+        print(f"     Coverflow entries were NOT added. The map may not appear in the song menu.")
+
+    # --- Post-insertion verification ---
+    if f'USERFRIENDLY="{state.map_name}"' not in new_data:
+        print(f"[14] ERROR: Registration verification failed — map name not found after insertion!")
+        return
+
+    with open(sku_isc, "w", encoding="utf-8") as f:
+        f.write(new_data)
+    print(f"[14] Successfully registered {state.map_name} in SkuScene.")
 
 
 # ---------------------------------------------------------------------------
