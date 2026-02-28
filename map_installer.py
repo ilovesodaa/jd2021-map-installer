@@ -1477,6 +1477,14 @@ PIPELINE_STEPS = [
 
 
 def main():
+    print("==================================================")
+    print("           JD2021 Custom Map Installer            ")
+    print("==================================================")
+    print("⚠ IMPORTANT: 'Asset' and 'NoHUD' HTML links expire")
+    print("  after roughly 30 minutes! If your download fails,")
+    print("  fetch fresh links from the server.")
+    print("==================================================\n")
+
     parser = argparse.ArgumentParser(description="Fully Automated Just Dance 2021 Map Installer")
     parser.add_argument("--map-name", default=None, help="Map name (default: derived from asset-html parent folder)")
     parser.add_argument("--asset-html", required=True, help="Path to asset mapping HTML")

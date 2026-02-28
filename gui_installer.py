@@ -105,6 +105,15 @@ class MapInstallerGUI:
         cfg = ttk.LabelFrame(container, text="Configuration", padding=6)
         cfg.pack(fill="x", pady=(0, 4))
 
+        # Warning Label (Asset expiration)
+        warning_lbl = tk.Label(
+            cfg, 
+            text="⚠ Asset/NoHUD links expire after ~30 minutes! Fetch fresh links if download fails.",
+            fg="#ffcc00", # Warning yellow/orange
+            font=("Consolas", 9, "bold")
+        )
+        warning_lbl.grid(row=0, column=0, columnspan=3, pady=(0, 6), sticky="w")
+
         for i, (label_text, attr_name, browse_type) in enumerate([
             ("Map Name:", "map_name_entry", None),
             ("Asset HTML:", "asset_html_entry", "html"),
@@ -112,9 +121,9 @@ class MapInstallerGUI:
             ("Game Directory:", "jd_dir_entry", "dir"),
         ]):
             ttk.Label(cfg, text=label_text, width=16, anchor="e").grid(
-                row=i, column=0, sticky="e", padx=(0, 4))
+                row=i+1, column=0, sticky="e", padx=(0, 4))
             entry = ttk.Entry(cfg, width=64)
-            entry.grid(row=i, column=1, sticky="ew", pady=1)
+            entry.grid(row=i+1, column=1, sticky="ew", pady=1)
             setattr(self, attr_name, entry)
             if browse_type:
                 if attr_name == "asset_html_entry":
@@ -122,7 +131,7 @@ class MapInstallerGUI:
                 else:
                     cmd = (lambda e=entry, bt=browse_type: self._browse(e, bt))
                 ttk.Button(cfg, text="Browse", width=8, command=cmd).grid(
-                    row=i, column=2, padx=(4, 0))
+                    row=i+1, column=2, padx=(4, 0))
 
         # Map name is auto-derived from Asset HTML; readonly unless detection fails
         self.map_name_entry.configure(state="readonly")
@@ -131,15 +140,15 @@ class MapInstallerGUI:
 
         # Video quality selector
         ttk.Label(cfg, text="Video Quality:", width=16, anchor="e").grid(
-            row=4, column=0, sticky="e", padx=(0, 4))
+            row=5, column=0, sticky="e", padx=(0, 4))
         self.quality_var = tk.StringVar(value="ultra_hd")
         quality_combo = ttk.Combobox(cfg, textvariable=self.quality_var,
                                      values=["ultra_hd", "ultra", "high_hd", "high", "mid_hd", "mid", "low_hd", "low"],
                                      state="readonly", width=12)
-        quality_combo.grid(row=4, column=1, sticky="w", pady=1)
+        quality_combo.grid(row=5, column=1, sticky="w", pady=1)
 
         btn_row = ttk.Frame(cfg)
-        btn_row.grid(row=5, column=0, columnspan=3, pady=(6, 0))
+        btn_row.grid(row=6, column=0, columnspan=3, pady=(6, 0))
         self.preflight_btn = ttk.Button(
             btn_row, text="Pre-flight Check", command=self._on_preflight)
         self.preflight_btn.pack(side="left", padx=(0, 12))
