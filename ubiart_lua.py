@@ -234,11 +234,11 @@ def process_tape(json_data, tape_type="dance"):
             else:
                 clip["Color"] = "0xffffffff"
 
-            # MotionPlatformSpecifics -> KEY/VAL pairs
+            # Keep MotionPlatformSpecifics as dict-key format (engine expects this for proper Kinect/Camera tracking)
             if "MotionPlatformSpecifics" in clip:
-                mps = []
+                mps = {}
                 for platform, pdata in clip["MotionPlatformSpecifics"].items():
-                    mps.append({"KEY": platform, "VAL": remove_class(pdata)})
+                    mps[platform] = remove_class(pdata)
                 clip["MotionPlatformSpecifics"] = mps
 
     # --- Degenerate TrackId normalization ---
@@ -285,7 +285,15 @@ def process_tape(json_data, tape_type="dance"):
     tape["Tracks"] = tracks
 
     # --- Serialize ---
-    processed = remove_falsy(remove_class(tape))
+    # PRESERVE_KEYS defends against regression if remove_falsy is ever made recursive
+    PRESERVE_KEYS = [
+        "Id", "TrackId", "IsActive", "StartTime", "Duration",
+        "GoldMove", "CoachId", "MoveType", "Color",
+        "TapeClock", "TapeBarCount", "FreeResourcesAfterPlay",
+        "ScoringMode", "ScoreSmoothing", "ScoreScale",
+        "LowThreshold", "HighThreshold", "SoundwichEvent"
+    ]
+    processed = remove_falsy(remove_class(tape), excluded_keys=PRESERVE_KEYS)
     return "params =" + dict_to_lua(processed)
 
 
