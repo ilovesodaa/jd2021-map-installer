@@ -54,11 +54,38 @@ def setup_log_file(map_name):
     return open(log_path, "w", encoding="utf-8", buffering=1)
 
 
+def sanitize_map_name(map_name, interactive=True):
+    """Check for non-ASCII or problematic characters. Prompt for replacement if found."""
+    try:
+        map_name.encode('ascii')
+        return map_name  # All ASCII, no issues
+    except UnicodeEncodeError:
+        pass
+
+    non_ascii = [c for c in map_name if ord(c) > 127]
+    print(f"\n    ⚠ Map name '{map_name}' contains non-standard characters: {non_ascii}")
+    print(f"    These characters can cause file path and game engine issues.")
+
+    if interactive:
+        replacement = input(f"    Enter a replacement name (or press Enter to keep '{map_name}'): ").strip()
+        if replacement:
+            print(f"    Using replacement name: {replacement}")
+            return replacement
+
+    # Non-interactive fallback: strip non-ASCII chars
+    safe_name = ''.join(c for c in map_name if ord(c) < 128)
+    if safe_name and safe_name != map_name:
+        print(f"    Auto-stripped to: {safe_name}")
+        return safe_name
+
+    return map_name
+
+
 class PipelineState:
     """Holds all intermediate state for a map installation pipeline run."""
     def __init__(self, map_name, asset_html, nohud_html, jd_dir=None,
                  video_override=None, audio_offset=None, quality="ultra_hd"):
-        self.map_name = map_name.strip()
+        self.map_name = sanitize_map_name(map_name.strip(), interactive=False)
         self.map_lower = self.map_name.lower()
         self.asset_html = clean_path(asset_html)
         self.nohud_html = clean_path(nohud_html)

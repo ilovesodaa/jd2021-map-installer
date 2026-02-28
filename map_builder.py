@@ -30,15 +30,6 @@ def lua_long_string(text):
     return f"{open_marker}{text}{close_marker}"
 
 
-def warn_non_ascii_map_name(map_name):
-    """Print a warning if map_name contains non-ASCII characters."""
-    try:
-        map_name.encode('ascii')
-    except UnicodeEncodeError:
-        non_ascii = [c for c in map_name if ord(c) > 127]
-        print(f"    WARNING: Map name '{map_name}' contains non-ASCII characters: {non_ascii}")
-        print(f"    This may cause issues with file paths on some systems.")
-        print(f"    Consider renaming the map to use only ASCII characters.")
 
 
 def color_array_to_hex(val, default="0xFFFFFFFF"):
@@ -65,7 +56,6 @@ def setup_dirs(target_dir):
     os.makedirs(os.path.join(target_dir, "Autodance"), exist_ok=True)
 
 def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override=None):
-    warn_non_ascii_map_name(map_name)
     map_lower = map_name.lower()
     
     # Find musictrack.tpl.ckd
