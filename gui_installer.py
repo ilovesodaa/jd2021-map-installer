@@ -3,7 +3,7 @@ JD2021 Map Installer - GUI
 Launch with: python gui_installer.py
 """
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 import threading
 import queue
 import subprocess
@@ -449,6 +449,24 @@ class MapInstallerGUI:
                     "Missing Input",
                     "Could not detect map name. Please enter it manually.")
                 return
+
+        # Check for non-ASCII characters and prompt for replacement
+        if any(ord(c) > 127 for c in map_name):
+            non_ascii = [c for c in map_name if ord(c) > 127]
+            replacement = simpledialog.askstring(
+                "Non-ASCII Characters Detected",
+                f"Map name '{map_name}' contains non-standard characters: {non_ascii}\n"
+                f"These can cause file path and game engine issues.\n\n"
+                f"Enter a safe replacement name:",
+                initialvalue=map_name,
+                parent=self.root
+            )
+            if replacement and replacement.strip():
+                map_name = replacement.strip()
+                self.map_name_entry.configure(state="normal")
+                self.map_name_entry.delete(0, tk.END)
+                self.map_name_entry.insert(0, map_name)
+                self.map_name_entry.configure(state="readonly")
 
         # Disable controls during pipeline
         self.install_btn.configure(state="disabled")
