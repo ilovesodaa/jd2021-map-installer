@@ -451,6 +451,7 @@ class MapInstallerGUI:
                 return
 
         # Check for non-ASCII characters and prompt for replacement
+        original_map_name = map_name
         if any(ord(c) > 127 for c in map_name):
             non_ascii = [c for c in map_name if ord(c) > 127]
             replacement = simpledialog.askstring(
@@ -482,6 +483,7 @@ class MapInstallerGUI:
             nohud_html=nohud_html,
             jd_dir=jd_dir or None,
             quality=self.quality_var.get(),
+            original_map_name=original_map_name
         )
 
         # Load saved config if available (applies saved sync values)

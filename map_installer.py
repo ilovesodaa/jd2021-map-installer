@@ -84,8 +84,10 @@ def sanitize_map_name(map_name, interactive=True):
 class PipelineState:
     """Holds all intermediate state for a map installation pipeline run."""
     def __init__(self, map_name, asset_html, nohud_html, jd_dir=None,
-                 video_override=None, audio_offset=None, quality="ultra_hd"):
-        self.map_name = sanitize_map_name(map_name.strip(), interactive=False)
+                 video_override=None, audio_offset=None, quality="ultra_hd",
+                 original_map_name=None):
+        self.original_map_name = (original_map_name or map_name).strip()
+        self.map_name = sanitize_map_name(self.original_map_name, interactive=False)
         self.map_lower = self.map_name.lower()
         self.asset_html = clean_path(asset_html)
         self.nohud_html = clean_path(nohud_html)
@@ -843,6 +845,67 @@ def _safe_rmtree(path):
             print("    Continuing anyway...")
 
 
+def unregister_sku(jd21_dir, map_name):
+    """Remove a map from SkuScene_Maps_PC_All.isc if present."""
+    sku_isc = os.path.join(jd21_dir, "data", "World", "SkuScenes", "SkuScene_Maps_PC_All.isc")
+    if not os.path.exists(sku_isc):
+        return
+
+    with open(sku_isc, "r", encoding="utf-8") as f:
+        sku_data = f.read()
+
+    # Early exit if map name isn't in file at all
+    if f'USERFRIENDLY="{map_name}"' not in sku_data and f'name="{map_name}"' not in sku_data:
+        return
+
+    print(f"    Removing old SkuScene registration for: {map_name}")
+    
+    # 1. Remove Actor blocks using a regex that captures <ACTORS...><Actor...USERFRIENDLY="name"...</ACTORS>
+    # We use non-greedy .*? to match everything within the actor block safely.
+    pattern_actor = r'[ \t]*<ACTORS NAME="Actor">\s*<Actor[^>]*USERFRIENDLY="' + re.escape(map_name) + r'"[^>]*>.*?</ACTORS>\s*'
+    new_data, count_act = re.subn(pattern_actor, '\n', sku_data, flags=re.DOTALL)
+    
+    # 2. Remove CoverflowSkuSongs blocks
+    pattern_cover = r'[ \t]*<CoverflowSkuSongs>\s*<CoverflowSong[^>]*name="' + re.escape(map_name) + r'"[^>]*>.*?</CoverflowSkuSongs>\s*'
+    new_data, count_cov = re.subn(pattern_cover, '\n', new_data, flags=re.DOTALL)
+
+    if count_act > 0 or count_cov > 0:
+        # Clean up any excessive newlines left behind by the removal
+        new_data = re.sub(r'\n{3,}', '\n\n', new_data)
+        with open(sku_isc, "w", encoding="utf-8") as f:
+            f.write(new_data)
+
+
+def step_00_pre_install_cleanup(state):
+    """Clean up any previous installation of this map, including bad codenames."""
+    names_to_clean = [state.map_name]
+    if state.original_map_name and state.original_map_name != state.map_name:
+        names_to_clean.append(state.original_map_name)
+
+    print("[0] Performing pre-install cleanup for target map...")
+    for name in names_to_clean:
+        # Delete main map directory
+        map_dir = os.path.join(state.jd21_dir, "data", "World", "MAPS", name)
+        if os.path.exists(map_dir):
+            print(f"    Deleting previous map directory: {name}")
+            _safe_rmtree(map_dir)
+
+        # Delete cooked cache directories
+        name_lower = name.lower()
+        map_cache = os.path.join(state.jd21_dir, "data", "cache", "itf_cooked", "pc", "world", "maps", name_lower)
+        auto_cache = map_cache + "_autodance"
+        cine_cache = map_cache + "_cine"
+        audio_cache = os.path.join(state.jd21_dir, "data", "cache", "itf_cooked", "pc", "world", "maps", name_lower, "audio")
+
+        for cache_path in [map_cache, auto_cache, cine_cache, audio_cache]:
+            if os.path.exists(cache_path):
+                print(f"    Deleting cache: {os.path.basename(cache_path)}")
+                _safe_rmtree(cache_path)
+
+        # Unregister from SkuScene
+        unregister_sku(state.jd21_dir, name)
+
+
 def step_01_clean(state):
     """Clean previous build artifacts."""
     print("[1] Cleaning up if there is a previous build...")
@@ -1394,6 +1457,7 @@ def step_14_register_sku(state):
 # All pipeline steps in order, for easy iteration
 # ---------------------------------------------------------------------------
 PIPELINE_STEPS = [
+    ("Pre-install cleanup",                     step_00_pre_install_cleanup),
     ("Clean previous builds",                   step_01_clean),
     ("Download assets from JDU servers",        step_02_download),
     ("Extract scene archives",                  step_03_extract_scenes),
