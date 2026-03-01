@@ -55,7 +55,40 @@ def setup_dirs(target_dir):
     os.makedirs(os.path.join(target_dir, "Timeline/Moves"), exist_ok=True)
     os.makedirs(os.path.join(target_dir, "Autodance"), exist_ok=True)
 
-def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override=None):
+def _has_non_ascii(text):
+    """Return True if text contains any non-ASCII characters."""
+    if not text:
+        return False
+    try:
+        str(text).encode('ascii')
+        return False
+    except UnicodeEncodeError:
+        return True
+
+
+def check_metadata_encoding(ipk_dir):
+    """Scan CKD songdesc for non-ASCII characters in Title, Artist, Credits.
+
+    Returns a dict of {field_name: original_value} for any field that contains
+    non-ASCII characters.  Returns empty dict if all fields are clean.
+    """
+    songdesc_paths = glob.glob(os.path.join(ipk_dir, "**", "*songdesc.tpl.ckd"), recursive=True)
+    if not songdesc_paths:
+        return {}
+
+    with open(songdesc_paths[0], "r", encoding="utf-8") as f:
+        sd_data = json.loads(f.read().strip('\x00\r\n '))
+        sd_struct = sd_data["COMPONENTS"][0]
+
+    problems = {}
+    for field in ('Title', 'Artist', 'Credits', 'DancerName'):
+        val = sd_struct.get(field)
+        if val and _has_non_ascii(str(val)):
+            problems[field] = str(val)
+    return problems
+
+
+def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override=None, metadata_overrides=None):
     map_lower = map_name.lower()
     
     # Find musictrack.tpl.ckd
@@ -168,6 +201,12 @@ def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override
 
     # Calculate audio preview fade time (usually 2.0s if it exists)
     audio_prev_fade = 2.0 if float(mt_struct.get('previewEntry', 0)) > 0 else 0.0
+
+    # Apply metadata overrides (for non-ASCII replacement)
+    if metadata_overrides:
+        for field, replacement in metadata_overrides.items():
+            if field in sd_struct or field in ('Title', 'Artist', 'Credits', 'DancerName'):
+                sd_struct[field] = replacement
 
     # Sanitize metadata strings for Lua output
     dancer_name = str(sd_struct.get('DancerName', 'Unknown Dancer'))
