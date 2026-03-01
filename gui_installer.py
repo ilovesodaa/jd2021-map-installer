@@ -110,7 +110,7 @@ class MapInstallerGUI:
         warning_lbl = tk.Label(
             cfg, 
             text="⚠ Asset/NoHUD links expire after ~30 minutes! Fetch fresh links if download fails.",
-            fg="#ffcc00", # Warning yellow/orange
+            fg="#856404", # Darker warning gold
             font=("Consolas", 9, "bold")
         )
         warning_lbl.grid(row=0, column=0, columnspan=3, pady=(0, 6), sticky="w")
