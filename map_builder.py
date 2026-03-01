@@ -222,6 +222,10 @@ def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override
 						}},'''
     tags_lua = tags_lua.rstrip(",")
 
+    # Cap JDVersion and OriginalJDVersion to 2021 to prevent GameManagerConfig crashes on JD2022+ maps
+    jd_version_safe = min(int(sd_struct.get('JDVersion', 2021)), 2021)
+    orig_jd_version_safe = min(int(sd_struct.get('OriginalJDVersion', jd_version_safe)), 2021)
+
     # 1. SongDesc.tpl
     with open(os.path.join(target_dir, "SongDesc.tpl"), "w", encoding="utf-8") as f:
         f.write(f'''includeReference("EngineData/Helpers/SongDatabase.ilu")
@@ -249,8 +253,8 @@ params =
 				JD_SongDescTemplate =
 				{{
 					MapName = "{map_name}",
-					JDVersion = {sd_struct.get('JDVersion', 2021)},
-					OriginalJDVersion = {sd_struct.get('OriginalJDVersion', 2021)},
+					JDVersion = {jd_version_safe},
+					OriginalJDVersion = {orig_jd_version_safe},
 					Artist = {lua_long_string(sd_struct.get('Artist', 'Unknown Artist'))},
 					DancerName = "{dancer_name}",
 					Title = {lua_long_string(sd_struct.get('Title', map_name))},

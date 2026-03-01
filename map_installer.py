@@ -1716,7 +1716,9 @@ def main():
                 if oa: a_offset = float(oa)
 
                 # Regenerate config if video_override changed
-                map_builder.generate_text_files(state.map_name, state.ipk_extracted, state.target_dir, v_override)
+                map_builder.generate_text_files(
+                    state.map_name, state.ipk_extracted, state.target_dir, v_override,
+                    metadata_overrides=getattr(state, 'metadata_overrides', None))
                 # Re-convert audio
                 convert_audio(state.audio_path, state.map_name, state.target_dir, a_offset)
                 generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset, v_override)
