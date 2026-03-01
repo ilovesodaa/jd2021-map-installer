@@ -82,6 +82,7 @@ class MapInstallerGUI:
         # Tkinter variables for sync refinement
         self.v_override_var = tk.DoubleVar(value=0.0)
         self.a_offset_var = tk.DoubleVar(value=0.0)
+        self.v_override_enabled_var = tk.BooleanVar(value=False)
 
         self._build_ui()
         self._redirect_stdout()
@@ -213,14 +214,23 @@ class MapInstallerGUI:
 
         deltas = [1, 0.1, 0.01, 0.001]
 
+        # Keep track of Video Override row widgets to toggle them
+        self._vo_row_widgets = []
         for row_idx, (label, var) in enumerate([
             ("VIDEO_OVERRIDE", self.v_override_var),
             ("AUDIO_OFFSET", self.a_offset_var),
         ]):
             row = ttk.Frame(self.sync_frame)
             row.pack(fill="x", pady=2)
-            ttk.Label(row, text=label, width=18, anchor="e",
-                      font=("Consolas", 9, "bold")).pack(side="left")
+            
+            if row_idx == 0:
+                cb = ttk.Checkbutton(
+                    row, text=label, variable=self.v_override_enabled_var,
+                    command=self._on_v_override_toggle, width=18)
+                cb.pack(side="left")
+            else:
+                ttk.Label(row, text=label, width=18, anchor="e",
+                          font=("Consolas", 9, "bold")).pack(side="left")
 
             # Decrement buttons (largest delta first)
             for d in deltas:
@@ -228,6 +238,8 @@ class MapInstallerGUI:
                     row, text=f"-{d}", width=6,
                     command=lambda v=var, dd=d: self._on_increment(v, -dd))
                 btn.pack(side="left", padx=1)
+                if row_idx == 0:
+                    self._vo_row_widgets.append(btn)
 
             # Value display
             val_entry = ttk.Entry(row, width=14, justify="center",
@@ -237,6 +249,7 @@ class MapInstallerGUI:
             val_entry.configure(state="readonly")
             if row_idx == 0:
                 self._vo_display = val_entry
+                self._vo_row_widgets.append(val_entry)
             else:
                 self._ao_display = val_entry
 
@@ -246,6 +259,8 @@ class MapInstallerGUI:
                     row, text=f"+{d}", width=6,
                     command=lambda v=var, dd=d: self._on_increment(v, dd))
                 btn.pack(side="left", padx=1)
+                if row_idx == 0:
+                    self._vo_row_widgets.append(btn)
 
         # Action buttons
         actions = ttk.Frame(self.sync_frame)
@@ -272,6 +287,35 @@ class MapInstallerGUI:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _on_v_override_toggle(self):
+        enabled = self.v_override_enabled_var.get()
+        if enabled:
+            messagebox.showwarning(
+                "Video Override",
+                "Audio offsets are mostly enough.\n\n"
+                "Be sure to test it out first before enabling video override."
+            )
+            state = "normal"
+            ro_state = "readonly"
+        else:
+            state = "disabled"
+            ro_state = "disabled"
+            
+        for w in self._vo_row_widgets:
+            if w == self._vo_display:
+                w.configure(state=ro_state)
+            else:
+                w.configure(state=state)
+        
+        # Also toggle the Sync Beatgrid button based on if VO is enabled
+        try:
+            if enabled:
+                self.sync_beatgrid_btn.configure(state="normal")
+            else:
+                self.sync_beatgrid_btn.configure(state="disabled")
+        except AttributeError:
+            pass
 
     def _browse(self, entry, browse_type, autofill_entry=None):
         if browse_type == "html":
@@ -311,6 +355,15 @@ class MapInstallerGUI:
         """Enable or disable all widgets inside the sync refinement frame."""
         for child in self.sync_frame.winfo_children():
             self._set_widget_state_recursive(child, state)
+            
+        # Re-apply video override specific state if sync frame is enabled
+        if state == "normal" and not self.v_override_enabled_var.get():
+            for w in self._vo_row_widgets:
+                w.configure(state="disabled")
+            try:
+                self.sync_beatgrid_btn.configure(state="disabled")
+            except AttributeError:
+                pass
 
     def _set_widget_state_recursive(self, widget, state):
         try:
@@ -323,10 +376,12 @@ class MapInstallerGUI:
     def _refresh_value_displays(self):
         for display, var in [(self._vo_display, self.v_override_var),
                              (self._ao_display, self.a_offset_var)]:
+            # Restore state temporarily to modify text
+            old_state = display.cget("state")
             display.configure(state="normal")
             display.delete(0, tk.END)
             display.insert(0, f"{var.get():.5f}")
-            display.configure(state="readonly")
+            display.configure(state="readonly" if old_state != "disabled" else "disabled")
 
     def _update_step_status(self, index, status):
         glyphs = {"pending": "  ", "running": ">>", "done": "OK", "error": "!!"}
