@@ -494,6 +494,8 @@ class MapInstallerGUI:
             quality=self.quality_var.get(),
             original_map_name=original_map_name
         )
+        # GUI mode: don't call input() in pipeline steps
+        self.pipeline_state._interactive = False
 
         # Load saved config if available (applies saved sync values)
         saved = map_installer.load_map_config(
@@ -547,8 +549,95 @@ class MapInstallerGUI:
                 self.root.after(0, lambda: self.preflight_btn.configure(state="normal"))
                 return
 
+            # After step 4 (IPK unpack), check for non-ASCII metadata and prompt
+            if i == 4 and hasattr(state, 'ipk_extracted') and state.ipk_extracted:
+                self._check_metadata_gui(state)
+
         print("=== Automation Complete! ===")
         self.root.after(0, self._on_pipeline_complete)
+
+    def _check_metadata_gui(self, state):
+        """Check for non-ASCII characters in song metadata and prompt via GUI dialogs."""
+        try:
+            problems = map_builder.check_metadata_encoding(state.ipk_extracted)
+        except Exception:
+            return
+
+        if not problems:
+            return
+
+        # For each problematic field, ask the user on the main thread
+        for field, original_val in problems.items():
+            if field in state.metadata_overrides:
+                continue  # Already overridden
+            non_ascii = [c for c in original_val if ord(c) > 127]
+            result_event = threading.Event()
+            result_holder = [None]
+
+            def _ask(f=field, v=original_val, na=non_ascii):
+                # Custom dialog to handle long strings with word wrap
+                dlg = tk.Toplevel(self.root)
+                dlg.title("Non-ASCII Characters in Metadata")
+                dlg.geometry("600x400")
+                dlg.minsize(400, 300)
+                dlg.transient(self.root)
+                dlg.grab_set()
+
+                # Center the dialog
+                dlg.update_idletasks()
+                x = self.root.winfo_x() + (self.root.winfo_width() - 600) // 2
+                y = self.root.winfo_y() + (self.root.winfo_height() - 400) // 2
+                dlg.geometry(f"+{x}+{y}")
+
+                content = ttk.Frame(dlg, padding=12)
+                content.pack(fill="both", expand=True)
+
+                msg = (f"The '{f}' field contains non-ASCII characters:\n\n"
+                       f"  Problem chars: {na}\n\n"
+                       f"These can cause game engine errors. Enter a safe replacement (ASCII only):")
+                lbl = ttk.Label(content, text=msg, wraplength=550)
+                lbl.pack(fill="x", pady=(0, 8))
+
+                # Display the current (long) value in a read-only text widget
+                ttk.Label(content, text="Current Value:", font=("Segoe UI", 9, "bold")).pack(anchor="w")
+                curr_txt = tk.Text(content, height=4, wrap="word", font=("Consolas", 9), bg="#f0f0f0")
+                curr_txt.pack(fill="x", pady=(2, 10))
+                curr_txt.insert("1.0", v)
+                curr_txt.configure(state="disabled")
+
+                # Input for replacement
+                ttk.Label(content, text="Replacement:", font=("Segoe UI", 9, "bold")).pack(anchor="w")
+                rep_txt = tk.Text(content, height=4, wrap="word", font=("Consolas", 9))
+                rep_txt.pack(fill="both", expand=True, pady=(2, 10))
+                
+                # Pre-fill with auto-stripped value
+                safe = ''.join(c for c in v if ord(c) < 128)
+                rep_txt.insert("1.0", safe)
+
+                # Buttons
+                btn_frame = ttk.Frame(content)
+                btn_frame.pack(fill="x")
+                
+                def _on_ok():
+                    result_holder[0] = rep_txt.get("1.0", "end-1c").strip()
+                    dlg.destroy()
+
+                def _on_cancel():
+                    result_holder[0] = safe # Auto-strip on cancel
+                    dlg.destroy()
+
+                ttk.Button(btn_frame, text="Apply Replacement", command=_on_ok).pack(side="right", padx=(4, 0))
+                ttk.Button(btn_frame, text="Auto-Strip (Cancel)", command=_on_cancel).pack(side="right")
+
+                dlg.protocol("WM_DELETE_WINDOW", _on_cancel)
+                self.root.wait_window(dlg)
+                result_event.set()
+
+            self.root.after(0, _ask)
+            result_event.wait()  # Block pipeline thread until user responds
+
+            state.metadata_overrides[field] = result_holder[0]
+            print(f"    {field}: '{original_val}' → '{result_holder[0]}'")
 
     def _on_pipeline_complete(self):
         state = self.pipeline_state

@@ -11,6 +11,7 @@ import re
 import datetime
 import time
 import json
+import platform
 
 # Directory containing this script - always the project root regardless of
 # where the user's game data lives.
@@ -129,6 +130,12 @@ class PipelineState:
         # Sync parameters (may be overridden during refinement)
         self.v_override = video_override
         self.a_offset = audio_offset
+
+        # Metadata overrides for non-ASCII replacement in Title/Artist/Credits
+        self.metadata_overrides = {}
+
+        # Interactive mode: True for CLI, False for GUI/batch (controls input() calls)
+        self._interactive = True
 
 
 def clean_path(path):
@@ -271,6 +278,7 @@ def resolve_game_paths(search_root, use_cache=True):
             return cached
 
     search_root = os.path.normpath(search_root)
+    checked_paths = []  # Track every path we try for diagnostics
 
     def _found(jd21_dir, sku):
         paths = {'jd21_dir': jd21_dir, 'sku_scene': sku}
@@ -280,11 +288,13 @@ def resolve_game_paths(search_root, use_cache=True):
     # Case 1: search_root/jd21/data/World/SkuScenes/…
     jd21_sub = os.path.join(search_root, "jd21")
     sku = os.path.join(jd21_sub, "data", "World", "SkuScenes", "SkuScene_Maps_PC_All.isc")
+    checked_paths.append(sku)
     if os.path.isfile(sku):
         return _found(jd21_sub, sku)
 
     # Case 2: search_root IS the jd21 folder
     sku = os.path.join(search_root, "data", "World", "SkuScenes", "SkuScene_Maps_PC_All.isc")
+    checked_paths.append(sku)
     if os.path.isfile(sku):
         return _found(search_root, sku)
 
@@ -292,11 +302,13 @@ def resolve_game_paths(search_root, use_cache=True):
     if search_root != SCRIPT_DIR:
         jd21_next = os.path.join(SCRIPT_DIR, "jd21")
         sku = os.path.join(jd21_next, "data", "World", "SkuScenes", "SkuScene_Maps_PC_All.isc")
+        checked_paths.append(sku)
         if os.path.isfile(sku):
             return _found(jd21_next, sku)
 
     # Case 4: recursive scan
     print(f"    Scanning {search_root} for JD2021 game data (this may take a moment)...")
+    checked_paths.append(f"(recursive scan under {search_root})")
     sku_found = _scan_for_sku_scene(search_root)
     if sku_found:
         # sku is at  jd21_dir/data/World/SkuScenes/SkuScene_Maps_PC_All.isc
@@ -304,6 +316,15 @@ def resolve_game_paths(search_root, use_cache=True):
             os.path.join(os.path.dirname(sku_found), '..', '..', '..'))
         return _found(jd21_dir, sku_found)
 
+    # Resolution failed — print diagnostic output
+    print("    ❌ Could not locate JD2021 game data. Paths checked:")
+    for p in checked_paths:
+        print(f"       {p}")
+    print("\n    Suggestions:")
+    print("      - Install JD2021 to a short path (e.g. D:\\jd2021)")
+    print("      - Avoid paths with spaces, accents, or special characters")
+    print("      - Avoid Program Files or other protected directories")
+    print("      - Make sure the jd21/ folder contains data/World/SkuScenes/")
     return None
 
 
@@ -379,6 +400,13 @@ def preflight_check(jd_dir, asset_html, nohud_html, auto_install=False,
                       (False, True) tuple to signal that ffmpeg is missing.
     """
     print("--- Pre-flight Checks ---")
+
+    # Environment diagnostics
+    print(f"    Python:   {sys.version.split()[0]}")
+    print(f"    OS:       {platform.system()} {platform.release()} ({platform.machine()})")
+    print(f"    Encoding: {sys.getfilesystemencoding()}")
+    print(f"    CWD:      {os.getcwd()}")
+
     failures = 0
     ffmpeg_missing = False
 
@@ -418,8 +446,42 @@ def preflight_check(jd_dir, asset_html, nohud_html, auto_install=False,
     # Critical: JD2021 game data — scan from the provided directory
     game_paths = resolve_game_paths(jd_dir)
     if game_paths:
-        ok(f"JD2021 game data ({game_paths['jd21_dir']})")
+        jd21_dir = game_paths['jd21_dir']
+        ok(f"JD2021 game data ({jd21_dir})")
         ok("SkuScene registry file")
+
+        # Path safety checks
+        if ' ' in jd21_dir:
+            warn("Game path contains spaces — this may cause issues with some tools")
+        try:
+            jd21_dir.encode('ascii')
+        except UnicodeEncodeError:
+            warn("Game path contains non-ASCII characters — this may cause issues")
+        if 'Program Files' in jd21_dir:
+            warn("Game is in Program Files — may need admin privileges")
+
+        # Write permission test
+        test_file = os.path.join(jd21_dir, "data", ".write_test")
+        try:
+            os.makedirs(os.path.dirname(test_file), exist_ok=True)
+            with open(test_file, 'w') as f:
+                f.write("test")
+            os.remove(test_file)
+            ok("Write permission to game directory")
+        except PermissionError:
+            fail("Cannot write to game directory — check permissions or run as admin")
+        except OSError as e:
+            fail(f"Cannot write to game directory — {e}")
+
+        # Disk space check
+        try:
+            free = shutil.disk_usage(jd21_dir).free
+            if free < 500 * 1024 * 1024:  # 500 MB
+                warn(f"Low disk space: {free // (1024*1024)} MB free")
+            else:
+                ok(f"Disk space: {free // (1024*1024)} MB free")
+        except OSError:
+            warn("Could not check disk space")
     else:
         fail(f"JD2021 game data not found under '{jd_dir}' — try a parent folder or click Clear Cache and re-scan")
         fail("SkuScene_Maps_PC_All.isc not found (game data missing)")
@@ -1120,8 +1182,39 @@ def step_06_generate_configs(state):
     """Generate UbiArt config files (scenes, templates, tracks, manifests)."""
     print("[6] Generating UbiArt config files (scenes, templates, tracks, manifests)...")
     map_builder.setup_dirs(state.target_dir)
+
+    # Check for non-ASCII characters in metadata (Title, Artist, Credits, etc.)
+    if not hasattr(state, 'metadata_overrides') or state.metadata_overrides is None:
+        state.metadata_overrides = {}
+    problems = map_builder.check_metadata_encoding(state.ipk_extracted)
+    if problems:
+        non_ascii_fields = {k: v for k, v in problems.items() if k not in state.metadata_overrides}
+        if non_ascii_fields:
+            print(f"\n    ⚠ Non-ASCII characters detected in song metadata:")
+            for field, val in non_ascii_fields.items():
+                non_ascii = [c for c in val if ord(c) > 127]
+                print(f"      {field}: '{val}'")
+                print(f"        Non-ASCII chars: {non_ascii}")
+            if getattr(state, '_interactive', True):
+                print(f"\n    These characters may cause game engine errors.")
+                for field, val in non_ascii_fields.items():
+                    replacement = input(f"    Replace {field}? Enter new value (or Enter to auto-strip): ").strip()
+                    if replacement:
+                        state.metadata_overrides[field] = replacement
+                    else:
+                        safe = ''.join(c for c in val if ord(c) < 128)
+                        state.metadata_overrides[field] = safe
+                        print(f"      Auto-stripped to: '{safe}'")
+            else:
+                # Non-interactive: auto-strip non-ASCII characters
+                for field, val in non_ascii_fields.items():
+                    safe = ''.join(c for c in val if ord(c) < 128)
+                    state.metadata_overrides[field] = safe
+                    print(f"      Auto-stripped {field} to: '{safe}'")
+
     video_start_time = map_builder.generate_text_files(
-        state.map_name, state.ipk_extracted, state.target_dir, state.v_override)
+        state.map_name, state.ipk_extracted, state.target_dir, state.v_override,
+        metadata_overrides=state.metadata_overrides or None)
 
     if video_start_time is None:
         raise RuntimeError("Could not fetch video start time.")
