@@ -884,7 +884,8 @@ class MapInstallerGUI:
                       f"AUDIO_OFFSET={a_offset:.5f}")
                 map_builder.generate_text_files(
                     state.map_name, state.ipk_extracted,
-                    state.target_dir, v_override)
+                    state.target_dir, v_override,
+                    metadata_overrides=getattr(state, 'metadata_overrides', None))
                 state.v_override = v_override
 
                 map_installer.convert_audio(
