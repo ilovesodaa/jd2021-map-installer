@@ -915,27 +915,37 @@ class MapInstallerGUI:
         self.root.after(0, lambda: self.btn_playpause.configure(text="▶"))
 
     def _get_media_duration(self, video_path, audio_path):
-        """Estimate total preview duration."""
+        """Estimate playable preview duration.
+
+        preview_position=0 corresponds to the start of whichever file has the
+        shorter pre-roll (so the user sees the intro).  Duration is the time
+        from that reference to whichever stream ends first.
+        """
         try:
-            # We assume ffprobe is available.
-            cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", video_path]
+            cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                   "-of", "default=nw=1:nk=1", video_path]
             v_dur = float(subprocess.check_output(cmd, text=True).strip())
-            cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", audio_path]
+            cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                   "-of", "default=nw=1:nk=1", audio_path]
             a_dur = float(subprocess.check_output(cmd, text=True).strip())
-            
+
             v_override = self.v_override_var.get()
             a_offset = self.a_offset_var.get()
-            net_offset = v_override - a_offset
-            
-            # Rough layout duration taking padding into account
-            if net_offset > 0:
-                v_dur += net_offset
-            elif net_offset < 0:
-                a_dur += abs(net_offset)
-            
-            return max(v_dur, a_dur)
+            abs_v = abs(v_override) if v_override else 0.0
+            abs_a = abs(a_offset)   if a_offset   else 0.0
+            offset_diff = abs_a - abs_v
+
+            # Each file's playable length from the shared reference point
+            if offset_diff >= 0:
+                # Video starts from t=0 → full video duration is playable
+                v_playable = v_dur
+                a_playable = a_dur - offset_diff
+            else:
+                v_playable = v_dur - abs(offset_diff)
+                a_playable = a_dur
+            return max(v_playable, a_playable)
         except Exception:
-            return 120.0 # fallback
+            return 120.0  # fallback
 
     def _launch_preview(self, start_time=0.0):
         state = self.pipeline_state
@@ -966,40 +976,35 @@ class MapInstallerGUI:
                 if w < 10 or h < 10:
                     w, h = 480, 270
 
-                net_offset = v_override - a_offset
-                delay_ms = int(abs(net_offset) * 1000)
+                # Sync both streams using direct seeks (no filters).
+                # v_override and a_offset are negative: abs() gives each file's
+                # pre-roll length.  The file with the SHORTER pre-roll starts
+                # from t=0 (so the user sees the video intro / hears the AMB),
+                # and the file with the LONGER pre-roll seeks forward by the
+                # difference so both land at the same game-time reference.
+                abs_v = abs(v_override) if v_override else 0.0
+                abs_a = abs(a_offset)   if a_offset   else 0.0
+                offset_diff = abs_a - abs_v  # positive when audio has more pre-roll
 
-                # Build video filter chain
-                vf_parts = []
-                if net_offset > 0:
-                    if start_time < net_offset:
-                        vf_parts.append(f"tpad=start_duration={net_offset - start_time}:color=black")
-                vf_parts.append(
-                    f"scale={w}:{h}:force_original_aspect_ratio=decrease")
-                vf_parts.append(
-                    f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black")
-                vf_chain = ",".join(vf_parts)
+                if offset_diff >= 0:
+                    # Audio has more pre-roll: video starts from t=0 (shows intro)
+                    vid_seek = max(0.0, start_time)
+                    aud_seek = max(0.0, start_time + offset_diff)
+                else:
+                    # Video has more pre-roll: audio starts from t=0 (plays AMB)
+                    vid_seek = max(0.0, start_time + abs(offset_diff))
+                    aud_seek = max(0.0, start_time)
 
-                # Build audio filter (delay audio if video starts first or trim audio if it starts first)
-                af = None
-                if net_offset > 0:
-                    if start_time < net_offset:
-                        rem_delay = delay_ms - int(start_time * 1000)
-                        af = f"adelay=delays={rem_delay}:all=1"
-                elif net_offset < 0:
-                    trim_s = abs(net_offset)
-                    af = f"atrim=start={trim_s},asetpts=PTS-STARTPTS"
-                    
+                # Video filter: display scaling only (no sync padding)
+                vf_chain = (
+                    f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+                    f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black"
+                )
+
                 # ffmpeg: decode video -> raw RGB24 frames to pipe
-                ffmpeg_cmd = [ "ffmpeg", "-loglevel", "error" ]
-                
-                # Apply seek to video if necessary
-                vid_seek = start_time
-                if net_offset > 0:
-                    vid_seek = max(0.0, start_time - net_offset)
+                ffmpeg_cmd = ["ffmpeg", "-loglevel", "error"]
                 if vid_seek > 0:
-                    ffmpeg_cmd += ["-ss", str(vid_seek)]
-                    
+                    ffmpeg_cmd += ["-ss", f"{vid_seek:.6f}"]
                 ffmpeg_cmd += [
                     "-i", state.video_path,
                     "-vf", vf_chain,
@@ -1011,20 +1016,12 @@ class MapInstallerGUI:
 
                 # ffplay: audio-only playback (no display)
                 ffplay_cmd = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"]
-                
-                # Apply seek to audio
-                aud_seek = start_time
-                if net_offset < 0:
-                    aud_seek = max(0.0, start_time - abs(net_offset))
                 if aud_seek > 0:
-                    ffplay_cmd += ["-ss", str(aud_seek)]
-                    
-                if af:
-                    ffplay_cmd += ["-af", af]
+                    ffplay_cmd += ["-ss", f"{aud_seek:.6f}"]
                 ffplay_cmd += ["-i", state.audio_path]
 
                 print(f"    Launching embedded preview "
-                      f"(net delay: {net_offset:.3f}s)...")
+                      f"(vid_seek={vid_seek:.3f}s, aud_seek={aud_seek:.3f}s)...")
 
                 _cflags = (subprocess.CREATE_NO_WINDOW
                            if sys.platform == "win32" else 0)
@@ -1259,7 +1256,11 @@ class MapInstallerGUI:
                     state.target_dir, a_offset)
                 map_installer.generate_intro_amb(
                     state.audio_path, state.map_name,
-                    state.target_dir, a_offset, v_override)
+                    state.target_dir, a_offset, v_override,
+                    marker_preroll_ms=getattr(state, 'marker_preroll_ms', None))
+                map_installer.extract_amb_audio(
+                    state.audio_path, state.map_name,
+                    state.target_dir, state)
                 state.a_offset = a_offset
 
                 # Save sync config for future re-installs
@@ -1267,7 +1268,8 @@ class MapInstallerGUI:
                     state.map_name,
                     v_override, a_offset,
                     quality=getattr(state, 'quality', 'ULTRA'),
-                    codename=state.codename)
+                    codename=state.codename,
+                    marker_preroll_ms=getattr(state, 'marker_preroll_ms', None))
 
                 # Clear game cache so the engine picks up the new audio files
                 if state.cache_dir and os.path.exists(state.cache_dir):
