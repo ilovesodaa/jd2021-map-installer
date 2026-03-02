@@ -110,8 +110,8 @@ class MapInstallerGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("JD2021 Map Installer")
-        self.root.geometry("1060x830")
-        self.root.minsize(900, 750)
+        self.root.geometry("850x818")
+        self.root.minsize(850, 818)
 
         # State
         self.pipeline_state = None
