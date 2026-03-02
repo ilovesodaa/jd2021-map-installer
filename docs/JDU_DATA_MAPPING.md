@@ -119,7 +119,9 @@ Maps that include ambient sound templates in their IPK (`audio/amb/*.tpl.ckd`) a
 | `.ilu` (descriptor) | Lua sound list data + `appendTable(component.SoundComponent_Template.soundList, DESCRIPTOR)` call |
 | `.tpl` (template) | Actor_Template wrapper with `includeReference` to the SoundComponent and the `.ilu` file |
 
-These are placed in `Audio/AMB/` and injected as SoundComponent actors into the audio ISC. The WAV files they reference are created as silent placeholders, since JDU-hosted AMB audio is not downloadable.
+These are placed in `Audio/AMB/` and injected as SoundComponent actors into the audio ISC. The WAV files they reference are initially created as silent placeholders, since JDU-hosted AMB audio is not directly downloadable.
+
+For SoundSetClip AMBs with `StartTime <= 0` referenced in the mainsequence tape, `extract_amb_audio` overwrites these placeholders with real audio extracted from the OGG pre-roll. AMBs with `StartTime > 0` (mid-song background sounds) remain as silent placeholders.
 
 ### Synthetic Intro AMB (Pre-Roll Coverage)
 
@@ -127,7 +129,7 @@ Regardless of whether the map has AMB data in its IPK, the pipeline generates a 
 
 The intro AMB:
 - Sources audio from the same OGG as the main track (making any overlap inaudible)
-- Duration: `abs(videoStartTime) + 1.355s`
+- Duration: marker-based (primary) or `abs(videoStartTime) + 1.355s` (fallback) — see AUDIO_TIMING.md Section 5
 - 200ms linear fade-out at the end
 - Automatically regenerated when audio timing is adjusted in the sync loop
 

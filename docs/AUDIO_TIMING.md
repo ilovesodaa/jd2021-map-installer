@@ -68,41 +68,83 @@ When the AMB ends, the WAV is already carrying the audio seamlessly.
 
 ---
 
-## 4. Timing Formula
+## 4. Two Sync Variables
 
-The AMB is generated with these parameters, driven entirely by `abs(videoStartTime)`:
+The pipeline tracks two independent timing values:
 
+| Variable | Source | Meaning |
+|---|---|---|
+| `v_override` | `videoStartTime` from `musictrack.tpl.ckd` | How far before beat 0 the video file starts. Always negative (e.g., `-2.145`). |
+| `a_offset` | Marker-based calculation (preferred) or equals `v_override` (fallback) | How far before beat 0 the OGG file starts. Always negative. |
+
+These were previously assumed to be equal — they usually are, but marker-based timing can produce a different (more accurate) `a_offset` value.
+
+The marker-based formula for `a_offset`:
 ```
-amb_duration = abs(videoStartTime) + 1.355
-fade_start   = abs(videoStartTime) + 1.155
-fade_duration = 0.200
-```
-
-- **`abs(vst) + 1.355s`**: The AMB extends 1.355 seconds past the nominal WAV start point. This covers engine WAV scheduling jitter (the WAV does not start at exactly `t=abs(vst)` — the engine needs time to buffer the main audio file before playback begins).
-- **`fade_start` at `+1.155s`**: A 200ms linear fade-out begins 1.155s into the overlap window, well after the WAV has started on any reasonable hardware.
-- **200ms linear fade**: Prevents a hard-cut volume snap when the AMB ends.
-
-For Albatraoz (`videoStartTime = -2.145000`):
-```
-amb_duration = 2.145 + 1.355 = 3.500s
-fade_start   = 2.145 + 1.155 = 3.300s
+idx              = abs(startBeat)
+marker_preroll_ms = markers[idx] / 48.0 + 85.0   # 85ms = OGG codec decode latency calibration
+a_offset          = -(marker_preroll_ms / 1000.0)
 ```
 
-### On Jitter and the 1.355s Tail
+`markers[idx]` is the sample position (at 48kHz) of the first beat. Dividing by 48 converts to milliseconds. The 85ms constant compensates for OGG decode latency that would otherwise cause a perceived early start.
 
-The 1.355s tail is not arbitrary — it was empirically derived. During testing, a 100ms tail (AMB total `2.245s`) still produced an audible gap, meaning the WAV started more than 100ms after the nominal `t=2.145s`. The diagnostic confirmed that a 3.5s AMB with no fade played seamlessly (no audible gap, no audible doubling). The tail covers both the buffer-loading delay for the ~30MB main WAV and any OS audio pipeline latency.
-
-If a map behaves differently on significantly different hardware, the tail constant can be increased further. Shortening it below ~1.0s risks reintroducing a gap.
+When `a_offset` equals `v_override`, the two streams are perfectly symmetric and no extra adjustment is needed. When they differ, the intro AMB must bridge the gap (see Section 4 below).
 
 ---
 
-## 5. AMB File Requirements
+## 5. Timing Formula
+
+The intro AMB is generated in two steps:
+
+**Step 1: Determine the total intro window length and any audio delay.**
+```
+intro_dur   = abs(v_override)      # Total silence window = video pre-roll length
+audio_delay = max(0, intro_dur - abs(a_offset))
+              # If v_override has more pre-roll than a_offset, prepend silence
+              # so the audio content starts later and aligns with the OGG start
+```
+
+**Step 2: Determine the audio content duration and fade point.**
+
+*Primary path — marker data available:*
+```
+audio_content_dur = marker_preroll_ms / 1000.0
+fade_start        = audio_delay + audio_content_dur - 0.200
+amb_duration      = audio_delay + audio_content_dur
+```
+
+*Fallback path — no marker data (or marker_preroll_ms is None):*
+```
+audio_content_dur = abs(a_offset) + 1.355
+fade_start        = audio_delay + abs(a_offset) + 1.155
+amb_duration      = audio_delay + audio_content_dur
+```
+
+The 1.355s tail in the fallback covers engine WAV scheduling jitter (the WAV does not start at exactly `t=abs(vst)` — the engine needs time to buffer the main audio file before playback begins). It was empirically derived: a 100ms tail still produced an audible gap; a 3.5s AMB with no fade played seamlessly. The tail covers both buffer-loading delay for the ~30MB main WAV and OS audio pipeline latency.
+
+For Albatraoz example assuming `v_override = -2.145`, `marker_preroll_ms = 2060ms`:
+```
+intro_dur          = 2.145s
+a_offset           = -(2060/1000) = -2.060s
+audio_delay        = max(0, 2.145 - 2.060) = 0.085s   # silence prepend
+audio_content_dur  = 2.060s
+amb_duration       = 0.085 + 2.060 = 2.145s
+fade_start         = 0.085 + 2.060 - 0.200 = 1.945s
+```
+
+**200ms linear fade-out** is always applied at `fade_start` to prevent a hard-cut volume snap when the AMB ends.
+
+If a map behaves differently on significantly different hardware, the 1.355s fallback tail constant can be increased. Shortening it below ~1.0s risks reintroducing a gap.
+
+---
+
+## 6. AMB File Requirements
 
 Each intro AMB consists of three files in `Audio/AMB/`:
 
 | File | Contents |
 |---|---|
-| `amb_{mapname}_intro.wav` | PCM 48kHz stereo, `abs(vst)+1.355s`, 200ms fade-out |
+| `amb_{mapname}_intro.wav` | PCM 48kHz stereo, duration = `audio_delay + audio_content_dur` (see Section 5), 200ms fade-out |
 | `amb_{mapname}_intro.ilu` | Sound descriptor: `category="amb"`, `playMode=1`, `loop=0` |
 | `amb_{mapname}_intro.tpl` | Actor template: `includeReference` to SoundComponent and the `.ilu` |
 
@@ -112,11 +154,11 @@ The `.ilu` `volume = 0` field is a **dB offset** (0 = unity gain), not a mute fl
 
 ---
 
-## 6. Pipeline Integration
+## 7. Pipeline Integration
 
-`generate_intro_amb` in `map_installer.py` handles both cases:
+`generate_intro_amb` and `extract_amb_audio` in `map_installer.py` handle all AMB cases:
 
-**Case 1 — Map has existing AMB from IPK** (`*_intro.tpl.ckd` found in extracted archive):
+**Case 1 — Map has existing intro AMB from IPK** (`*_intro.tpl.ckd` found in extracted archive):
 - IPK processing generates the `.tpl`/`.ilu` and creates a silent placeholder WAV
 - `generate_intro_amb` finds the `*_intro.wav` placeholder and overwrites it with real content
 - No new files created; no ISC changes needed
@@ -129,12 +171,17 @@ The `.ilu` `volume = 0` field is a **dB offset** (0 = unity gain), not a mute fl
 - Function returns immediately for generation
 - Any previously generated `*_intro.wav` is silenced (replaced with 0.1s silence) to prevent double-audio on re-runs
 
-The function is called after every `convert_audio` invocation, including all interactive sync loop options, so the intro AMB automatically stays consistent if timing is adjusted.
+**Case 4 — SoundSetClip AMBs from mainsequence tape**:
+- Some maps reference additional AMB clips in their mainsequence tape (clips with `StartTime <= 0`)
+- `extract_amb_audio` scans these clips and overwrites their placeholder WAVs with real audio from the OGG pre-roll, as long as the placeholder is smaller than 50KB (which silent stubs always are)
+- This applies marker-based preroll duration (with 200ms fade) when available, otherwise falls back to `abs(a_offset) + 1.355s`
+
+The functions are called after every `convert_audio` invocation, including all interactive sync loop options, so all AMB files automatically stay consistent if timing is adjusted.
 
 ---
 
-## 7. Limitations
+## 8. Limitations
 
-- The 1.355s tail is system-derived. On hardware with exceptionally high WAV scheduling latency (>1s), the gap may still be audible. In practice this has not been observed.
+- The 1.355s fallback tail is system-derived. On hardware with exceptionally high WAV scheduling latency (>1s), the gap may still be audible. The marker-based primary path does not have this problem since its timing is derived from the actual audio data, not a heuristic.
 - Maps where the original JDU AMB intro references a separate audio asset (not the main OGG) will have that asset replaced by a clip from the main OGG. This is acceptable since JDU-hosted AMB WAV files are not downloadable by this pipeline.
-- Background (non-intro) AMB sounds from JDU remain as silent placeholders for the same reason.
+- Background AMB sounds (SoundSetClips with `StartTime > 0`) remain as silent placeholders since they require mid-song audio not present in the pre-roll. Only SoundSetClips with `StartTime <= 0` are populated with real audio (see Case 4).

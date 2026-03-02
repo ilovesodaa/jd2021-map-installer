@@ -49,7 +49,7 @@ A complete JD2021 map requires the following structure under `World/MAPS/[MapNam
 │   ├── [MapName].stape          # Sequence tape (BPM/signature data per section)
 │   ├── ConfigMusic.sfi          # Audio format declaration (XML)
 │   └── AMB/
-│       ├── amb_[mapname]_intro.wav  # Intro AMB audio (abs(vst)+1.355s, 200ms fade)
+│       ├── amb_[mapname]_intro.wav  # Intro AMB audio (marker-based duration; see AUDIO_TIMING.md Section 5)
 │       ├── amb_[mapname]_intro.ilu  # Sound descriptor
 │       └── amb_[mapname]_intro.tpl  # Sound actor template
 │
@@ -122,23 +122,27 @@ Lua tables containing timed events (Clips) defined in **ticks** (24 ticks per be
 Open the JDU `musictrack.tpl.ckd` with a text editor. Even with the `.ckd` extension, it is often plaintext JSON. Extract `markers`, `videoStartTime`, and `startBeat`.
 
 ### 4.2 Convert Audio
-Use FFmpeg to convert your OGG to WAV at 48kHz. You must also trim to `abs(videoStartTime)` seconds so the WAV begins at the right position when the engine delays it:
+Use FFmpeg to convert your OGG to WAV at 48kHz. You must also trim to `abs(a_offset)` seconds so the WAV begins at the right position when the engine delays it. `a_offset` is derived from the musictrack marker data (see AUDIO_TIMING.md Section 4); when marker data is unavailable it equals `abs(videoStartTime)`.
 ```bash
-ffmpeg -i input.ogg -ss 2.145 -ar 48000 output.wav
+# Example: a_offset = -2.060 (marker-based) or -2.145 (equals videoStartTime as fallback)
+ffmpeg -i input.ogg -ss 2.060 -ar 48000 output.wav
 ```
 If the sample rate isn't exactly 48,000Hz, the `.trk` markers will drift, causing massive desync.
 
 ### 4.3 Generate Intro AMB
-Because `videoStartTime < 0` causes the WAV to be delayed, the gap must be covered by an AMB sound actor. The AMB sources audio from the same OGG (making any overlap inaudible) and is extended past the nominal handoff point to cover engine scheduling jitter:
+Because `videoStartTime < 0` causes the WAV to be delayed, the gap must be covered by an AMB sound actor. The AMB sources audio from the same OGG (making any overlap inaudible) and fades out before or at the handoff point.
+
+The automated pipeline calculates duration from marker data (primary) or falls back to `abs(videoStartTime) + 1.355s` (heuristic to cover engine scheduling jitter). For manual porting, use the heuristic fallback:
 
 ```bash
+# Heuristic formula: abs(videoStartTime) + 1.355s
 # For videoStartTime = -2.145:
-# amb_duration = 2.145 + 1.355 = 3.500
-# fade_start   = 2.145 + 1.155 = 3.300
+#   amb_duration = 2.145 + 1.355 = 3.500s
+#   fade_start   = 2.145 + 1.155 = 3.300s
 ffmpeg -t 3.500 -i input.ogg -af "afade=t=out:st=3.300:d=0.2" -ar 48000 amb_mapname_intro.wav
 ```
 
-See **[AUDIO_TIMING.md](AUDIO_TIMING.md)** for the full explanation of why this formula works.
+See **[AUDIO_TIMING.md](AUDIO_TIMING.md)** for the full explanation including the marker-based primary formula.
 
 For maps where `videoStartTime = 0`, no intro AMB is needed.
 
@@ -195,7 +199,7 @@ The `videoStartTime` is typically negative (e.g., `-2.145`). This value controls
 Because the WAV is delayed by `abs(videoStartTime)`, every ported map will have silence during the pre-roll period unless an intro AMB is provided. See **[AUDIO_TIMING.md](AUDIO_TIMING.md)**.
 
 ### Why the WAV Must Be Trimmed
-The first sample of the WAV corresponds to marker 0 = beat `startBeat`. If `startBeat = -5` and the original OGG starts 2.145 seconds before the song's beat -5 content, then the OGG must be trimmed by 2.145 seconds before being used as the WAV, so that sample 0 of the WAV actually corresponds to beat -5 of the music.
+The first sample of the WAV corresponds to marker 0 = beat `startBeat`. If `startBeat = -5` and the OGG starts 2.060 seconds before the song's beat -5 content (per marker calculation), then the OGG must be trimmed by `abs(a_offset)` seconds before being used as the WAV, so that sample 0 of the WAV actually corresponds to beat -5 of the music.
 
 ---
 
@@ -217,7 +221,7 @@ The first sample of the WAV corresponds to marker 0 = beat `startBeat`. If `star
 | **Silence at map start** | No intro AMB for pre-roll period | Generate `amb_{mapname}_intro.wav` from OGG and add AMB actor to audio ISC |
 | **Crash at Coach Select** | Missing Cinematics chain | Create `_cine.isc` → `_MainSequence.tpl` structure |
 | **Progressive Desync** | Wrong audio sample rate | Re-convert audio with `-ar 48000` |
-| **Audio too late / too early** | Incorrect audio trim offset | Match `-ss` seek value and WAV delay to `abs(videoStartTime)` |
+| **Audio too late / too early** | Incorrect audio trim offset | Match `-ss` seek value to `abs(a_offset)` (marker-derived, or `abs(videoStartTime)` as fallback) |
 | **Pictos / karaoke appear too early** | `videoStartTime` set to 0 on a pre-roll map | Restore original negative `videoStartTime`; use intro AMB for audio coverage |
 | **Black Video** | Incorrect DASH MPD | Ensure namespace is `urn:mpeg:DASH:schema:MPD:2011` |
 | **Missing Title** | SkuScene Registration | Verify the map entry in `SkuScene_Maps_PC_All.isc` |
