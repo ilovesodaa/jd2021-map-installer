@@ -291,7 +291,8 @@ def main():
             # Save config
             map_installer.save_map_config(
                 state.map_name, state.v_override, state.a_offset,
-                quality=state.quality, codename=state.codename)
+                quality=state.quality, codename=state.codename,
+                marker_preroll_ms=getattr(state, 'marker_preroll_ms', None))
 
             elapsed = time.time() - start_time
             process_results[name] = ("OK", f"{elapsed:.1f}s")

@@ -88,6 +88,30 @@ def check_metadata_encoding(ipk_dir):
     return problems
 
 
+def extract_musictrack_metadata(ipk_dir):
+    """Extract musictrack structure fields needed for marker-based calculations.
+
+    Returns:
+        dict with keys: markers (list[int]), start_beat (int), video_start_time (float)
+        Returns None if musictrack CKD cannot be found or parsed.
+    """
+    ckd_paths = glob.glob(os.path.join(ipk_dir, "**", "*musictrack.tpl.ckd"), recursive=True)
+    if not ckd_paths:
+        return None
+    try:
+        with open(ckd_paths[0], "r", encoding="utf-8") as f:
+            mt_data = json.loads(f.read().strip('\x00\r\n '))
+        mt_struct = mt_data["COMPONENTS"][0]["trackData"]["structure"]
+        return {
+            "markers": mt_struct["markers"],
+            "start_beat": mt_struct["startBeat"],
+            "video_start_time": mt_struct["videoStartTime"],
+        }
+    except (KeyError, IndexError, json.JSONDecodeError) as e:
+        print(f"    Warning: Could not extract musictrack metadata: {e}")
+        return None
+
+
 def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override=None, metadata_overrides=None):
     map_lower = map_name.lower()
     

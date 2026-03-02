@@ -127,6 +127,13 @@ class PipelineState:
         self.video_path = None
         self.video_start_time = None
 
+        # Musictrack marker data (populated in step 06)
+        self.musictrack_start_beat = None   # int, typically negative
+        self.marker_preroll_ms = None       # float: markers[abs(startBeat)] / 48 + offset
+
+        # SoundSetClip data from mainsequence tape (populated in step 08)
+        self.amb_sound_clips = []           # list of dicts from mainsequence SoundSetClips
+
         # Sync parameters (may be overridden during refinement)
         self.v_override = video_override
         self.a_offset = audio_offset
@@ -195,7 +202,8 @@ def load_map_config(map_name):
     return None
 
 
-def save_map_config(map_name, v_override, a_offset, quality="ULTRA", codename=None):
+def save_map_config(map_name, v_override, a_offset, quality="ULTRA", codename=None,
+                    marker_preroll_ms=None):
     """Save a sync config JSON for a map."""
     config_path = os.path.join(_config_dir(), f"{map_name}.json")
     data = {
@@ -204,6 +212,7 @@ def save_map_config(map_name, v_override, a_offset, quality="ULTRA", codename=No
         "a_offset": a_offset,
         "quality": quality,
         "codename": codename or map_name,
+        "marker_preroll_ms": marker_preroll_ms,
         "installed_at": datetime.datetime.now().isoformat(),
     }
     with open(config_path, 'w', encoding='utf-8') as f:
@@ -547,6 +556,30 @@ def preflight_check(jd_dir, asset_html, nohud_html, auto_install=False,
         return False
     return True
 
+# ---------------------------------------------------------------------------
+# Marker-based pre-roll calculation (from UBIART-AMB-CUTTER approach)
+# ---------------------------------------------------------------------------
+
+# Calibration constant (ms) from UBIART-AMB-CUTTER: compensates for codec
+# decode latency between the OGG seek position and actual audio output.
+MARKER_OFFSET_MS = 85.0
+
+
+def compute_marker_preroll(markers, start_beat, offset_ms=MARKER_OFFSET_MS):
+    """Compute the precise OGG pre-roll duration from musictrack beat markers.
+
+    The musictrack's ``markers`` array maps beat indices to tick positions.
+    Dividing by 48 converts ticks to milliseconds.  ``start_beat`` (typically
+    negative) indicates how many beats before beat-0 the audio file begins.
+
+    Returns:
+        Pre-roll duration in milliseconds, or None if data is insufficient.
+    """
+    idx = abs(start_beat)
+    if not markers or idx >= len(markers) or idx == 0:
+        return None
+    return markers[idx] / 48.0 + offset_ms
+
 def convert_audio(audio_path, map_name, target_dir, a_offset=0.0):
     wav_out = os.path.join(target_dir, f"Audio/{map_name}.wav")
     ogg_out = os.path.join(target_dir, f"Audio/{map_name}.ogg")
@@ -573,7 +606,8 @@ def convert_audio(audio_path, map_name, target_dir, a_offset=0.0):
                         "-i", audio_path, "-af", af_filter,
                         "-ar", "48000", wav_out], check=True)
 
-def generate_intro_amb(ogg_path, map_name, target_dir, a_offset, v_override=None):
+def generate_intro_amb(ogg_path, map_name, target_dir, a_offset, v_override=None,
+                       marker_preroll_ms=None):
     """Generate an intro AMB WAV to cover pre-roll silence caused by negative videoStartTime.
 
     Strategy: AMB plays from t=0, covering the silence window before the main WAV starts.
@@ -581,6 +615,9 @@ def generate_intro_amb(ogg_path, map_name, target_dir, a_offset, v_override=None
     When abs(v_override) > abs(a_offset), the OGG has no audio for the initial gap, so the
     AMB WAV is prepended with that many seconds of silence via adelay.
     A 200ms fade-out at the end eliminates the hard-cut volume snap.
+
+    When marker_preroll_ms is provided (from musictrack beat markers), it replaces
+    the hard-coded +1.355s heuristic with a precise, data-driven audio content duration.
     """
     map_lower = map_name.lower()
     amb_dir = os.path.join(target_dir, "Audio", "AMB")
@@ -605,9 +642,17 @@ def generate_intro_amb(ogg_path, map_name, target_dir, a_offset, v_override=None
     audio_delay  = max(0.0, intro_dur - abs(a_offset))   # seconds of silence to prepend
 
     # AMB audio content length (from OGG t=0); total WAV = audio_delay + audio_content_dur
-    audio_content_dur = abs(a_offset) + 1.355
-    amb_duration      = audio_delay + audio_content_dur
-    fade_start        = audio_delay + abs(a_offset) + 1.155  # = intro_dur + 1.155
+    if marker_preroll_ms is not None:
+        # Data-driven: precise pre-roll length from musictrack beat markers
+        audio_content_dur = marker_preroll_ms / 1000.0
+        fade_start = audio_delay + audio_content_dur - 0.2  # 200ms fade before end
+        print(f"    Using marker-based AMB duration: {audio_content_dur:.3f}s "
+              f"(was {abs(a_offset) + 1.355:.3f}s with heuristic)")
+    else:
+        # Fallback: original heuristic for maps without marker data
+        audio_content_dur = abs(a_offset) + 1.355
+        fade_start = audio_delay + abs(a_offset) + 1.155
+    amb_duration = audio_delay + audio_content_dur
 
     # Locate intro AMB files left by IPK processing (step 09).
     # The TPL name is the actor name used in the ISC; the WAV name may differ.
@@ -741,6 +786,56 @@ includeReference("world/maps/{map_name}/audio/amb/{intro_name}.ilu")'''
         check=True
     )
     print(f"    Generated intro AMB: {os.path.basename(intro_wav)} ({amb_duration:.3f}s, fade from {fade_start:.3f}s)")
+
+
+def extract_amb_audio(ogg_path, map_name, target_dir, state):
+    """Extract real audio for AMB clips from the OGG, replacing silent placeholders.
+
+    Uses SoundSetClip data from the mainsequence tape and marker-based timing
+    to cut the correct segments from the original OGG file.
+
+    Only processes intro AMBs (StartTime <= 0) because their audio content
+    comes from the OGG pre-roll.
+    """
+    if not getattr(state, 'amb_sound_clips', None) or not ogg_path:
+        return
+
+    amb_dir = os.path.join(target_dir, "Audio", "AMB")
+    if not os.path.isdir(amb_dir):
+        return
+
+    # Calculate pre-roll boundary
+    marker_preroll_ms = getattr(state, 'marker_preroll_ms', None)
+    if marker_preroll_ms is not None:
+        preroll_s = marker_preroll_ms / 1000.0
+    elif getattr(state, 'a_offset', None) is not None and state.a_offset < 0:
+        preroll_s = abs(state.a_offset) + 1.355
+    else:
+        return
+
+    if preroll_s <= 0:
+        return
+
+    intro_clips = [c for c in state.amb_sound_clips if c["start_time"] <= 0]
+    for clip in intro_clips:
+        wav_path = os.path.join(amb_dir, f"{clip['name']}.wav")
+        # Only overwrite silent placeholders.  Step 09 creates 0.1s mono WAV stubs
+        # which are ~9.6KB (48kHz × 2 bytes × 4800 samples + header).  Any real
+        # pre-roll audio at 48kHz for 1+ seconds will be well above 50KB.
+        if os.path.exists(wav_path) and os.path.getsize(wav_path) < 50000:
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-y", "-loglevel", "error",
+                     "-i", ogg_path,
+                     "-t", f"{preroll_s:.3f}",
+                     "-af", f"afade=t=out:st={max(0, preroll_s - 0.2):.3f}:d=0.2",
+                     "-ar", "48000", wav_path],
+                    check=True)
+                print(f"    Extracted real AMB audio: {clip['name']}.wav "
+                      f"({preroll_s:.3f}s from OGG)")
+            except subprocess.CalledProcessError as e:
+                print(f"    Warning: Failed to extract AMB audio for "
+                      f"{clip['name']}: {e}")
 
 
 def show_ffplay_preview(video_path, audio_path, v_override, a_offset):
@@ -1223,6 +1318,21 @@ def step_06_generate_configs(state):
     state.video_start_time = video_start_time
     print(f"    Video Start Time is: {video_start_time}")
 
+    # Extract musictrack marker data for marker-based pre-roll calculations
+    mt_meta = map_builder.extract_musictrack_metadata(state.ipk_extracted)
+    if mt_meta:
+        state.musictrack_start_beat = mt_meta["start_beat"]
+        state.marker_preroll_ms = compute_marker_preroll(
+            mt_meta["markers"], mt_meta["start_beat"])
+        if state.marker_preroll_ms is not None:
+            print(f"    Marker pre-roll: {state.marker_preroll_ms:.1f}ms "
+                  f"(startBeat={state.musictrack_start_beat})")
+        else:
+            print(f"    Marker pre-roll: N/A (startBeat={mt_meta['start_beat']})")
+    else:
+        print(f"    Warning: Could not extract musictrack metadata; "
+              f"using fallbacks for AMB duration")
+
 
 def step_07_convert_tapes(state):
     """Convert choreography and karaoke tapes to Lua."""
@@ -1251,6 +1361,21 @@ def step_08_convert_cinematics(state):
                 output_name = f"{state.map_name}_MainSequence.tape"
             dst_path = os.path.join(state.target_dir, f"Cinematics/{output_name}")
             tape_data = ubiart_lua.load_ckd_json(tape_file)
+            # Extract SoundSetClip metadata from mainsequence for AMB audio extraction
+            if "mainsequence" in tape_basename.lower():
+                for raw_clip in tape_data.get("Clips", []):
+                    if raw_clip.get("__class") == "SoundSetClip":
+                        clip_name = raw_clip["SoundSetPath"].split("/")[-1].split(".")[0]
+                        state.amb_sound_clips.append({
+                            "name": clip_name,
+                            "start_time": raw_clip["StartTime"],
+                            "duration": raw_clip["Duration"],
+                            "path": raw_clip["SoundSetPath"],
+                        })
+                if state.amb_sound_clips:
+                    intro_clips = [c for c in state.amb_sound_clips if c["start_time"] <= 0]
+                    print(f"    Found {len(state.amb_sound_clips)} SoundSetClip(s) "
+                          f"({len(intro_clips)} intro)")
             lua_str = ubiart_lua.process_tape(tape_data, tape_type="cinematics")
             with open(dst_path, 'w', encoding='utf-8') as f:
                 f.write(lua_str)
@@ -1454,12 +1579,24 @@ def step_12_convert_audio(state):
     if state.v_override is None:
         state.v_override = state.video_start_time
     if state.a_offset is None:
-        state.a_offset = state.v_override
+        # Use marker-based pre-roll as default a_offset when available.
+        # This is significantly more accurate than v_override for maps where
+        # videoStartTime differs from the audio pre-roll (e.g. BadHabits:
+        # v_override=-11.666 but actual audio pre-roll is ~2.86s).
+        if state.marker_preroll_ms is not None:
+            state.a_offset = -(state.marker_preroll_ms / 1000.0)
+            print(f"    Using marker-based default a_offset: {state.a_offset:.3f}s "
+                  f"(vs v_override: {state.v_override}s)")
+        else:
+            state.a_offset = state.v_override
 
     if state.audio_path:
         print(f"[12] Converting audio to 48kHz WAV...")
         convert_audio(state.audio_path, state.map_name, state.target_dir, state.a_offset)
-        generate_intro_amb(state.audio_path, state.map_name, state.target_dir, state.a_offset, state.v_override)
+        generate_intro_amb(state.audio_path, state.map_name, state.target_dir,
+                           state.a_offset, state.v_override,
+                           marker_preroll_ms=state.marker_preroll_ms)
+        extract_amb_audio(state.audio_path, state.map_name, state.target_dir, state)
 
 
 def step_13_copy_video(state):
@@ -1628,6 +1765,8 @@ def main():
             state.v_override = saved.get('v_override')
         if state.a_offset is None:
             state.a_offset = saved.get('a_offset')
+        if state.marker_preroll_ms is None:
+            state.marker_preroll_ms = saved.get('marker_preroll_ms')
 
     # Start logging to file — everything from here on is captured to both terminal and log
     _log_file = setup_log_file(state.map_name)
@@ -1682,12 +1821,15 @@ def main():
 
         if choice == '0':
             save_map_config(state.map_name, v_override, a_offset,
-                            quality=state.quality, codename=state.codename)
+                            quality=state.quality, codename=state.codename,
+                            marker_preroll_ms=state.marker_preroll_ms)
             sys.exit(0)
         elif choice == '1':
             a_offset = v_override
             convert_audio(state.audio_path, state.map_name, state.target_dir, a_offset)
-            generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset, v_override)
+            generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset, v_override,
+                               marker_preroll_ms=state.marker_preroll_ms)
+            extract_amb_audio(state.audio_path, state.map_name, state.target_dir, state)
             _safe_rmtree(state.cache_dir)
             print("    Cleared game cache.")
             show_ffplay_preview(state.video_path, state.audio_path, v_override, a_offset)
@@ -1705,7 +1847,9 @@ def main():
             print(f"    Padding audio by: {diff:.3f}s")
             a_offset = diff
             convert_audio(state.audio_path, state.map_name, state.target_dir, a_offset)
-            generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset, v_override)
+            generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset, v_override,
+                               marker_preroll_ms=state.marker_preroll_ms)
+            extract_amb_audio(state.audio_path, state.map_name, state.target_dir, state)
             _safe_rmtree(state.cache_dir)
             print("    Cleared game cache.")
             show_ffplay_preview(state.video_path, state.audio_path, v_override, a_offset)
@@ -1722,7 +1866,9 @@ def main():
                     metadata_overrides=getattr(state, 'metadata_overrides', None))
                 # Re-convert audio
                 convert_audio(state.audio_path, state.map_name, state.target_dir, a_offset)
-                generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset, v_override)
+                generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset, v_override,
+                                   marker_preroll_ms=state.marker_preroll_ms)
+                extract_amb_audio(state.audio_path, state.map_name, state.target_dir, state)
                 _safe_rmtree(state.cache_dir)
                 print("    Cleared game cache.")
                 show_ffplay_preview(state.video_path, state.audio_path, v_override, a_offset)

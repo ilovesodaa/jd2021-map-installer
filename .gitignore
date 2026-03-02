@@ -29,8 +29,7 @@ jd2021pc tools.zip
 MapDownloads/
 
 # Legacy external tool directories (now integrated into project)
-XTX-Extractor/
-ubiart-archive-tools/
+3rdPartyTools/
 
 tmpclaude*
 JD2021MapInstaller.zip

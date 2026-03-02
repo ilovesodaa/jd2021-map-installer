@@ -1,8 +1,9 @@
 {
   "map_name": "OMG",
   "v_override": -9.484,
-  "a_offset": -7.984,
-  "quality": "ULTRA",
+  "a_offset": -7.979979166666667,
+  "quality": "ULTRA_HD",
   "codename": "OMG",
-  "installed_at": "2026-03-01T03:12:46.601066"
+  "marker_preroll_ms": 7979.979166666667,
+  "installed_at": "2026-03-03T02:59:25.529228"
 }

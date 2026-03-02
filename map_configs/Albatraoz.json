@@ -1,8 +1,9 @@
 {
   "map_name": "Albatraoz",
   "v_override": -2.145,
-  "a_offset": -2.15,
+  "a_offset": -2.429,
   "quality": "ULTRA_HD",
   "codename": "Albatraoz",
-  "installed_at": "2026-03-03T00:39:21.547252"
+  "marker_preroll_ms": 2429.0,
+  "installed_at": "2026-03-03T01:48:52.560141"
 }
