@@ -681,8 +681,8 @@ class MapInstallerGUI:
             replacement = simpledialog.askstring(
                 "Non-ASCII Characters Detected",
                 f"Map name '{map_name}' contains non-standard characters: {non_ascii}\n"
-                f"These can cause file path and game engine issues.\n\n"
-                f"Enter a safe replacement name:",
+                f"Some of these (e.g. Chinese characters) may cause file path issues.\n\n"
+                f"Enter a replacement name, or click Cancel to keep the original as-is:",
                 initialvalue=map_name,
                 parent=self.root
             )
@@ -808,8 +808,9 @@ class MapInstallerGUI:
                 content.pack(fill="both", expand=True)
 
                 msg = (f"The '{f}' field contains non-ASCII characters:\n\n"
-                       f"  Problem chars: {na}\n\n"
-                       f"These can cause game engine errors. Enter a safe replacement (ASCII only):")
+                       f"  Characters: {na}\n\n"
+                       f"Some characters (e.g. Chinese) may cause game engine errors, "
+                       f"while others (e.g. ©) work fine. Replace, auto-strip, or ignore to keep the original:")
                 lbl = ttk.Label(content, text=msg, wraplength=550)
                 lbl.pack(fill="x", pady=(0, 8))
 
@@ -824,7 +825,7 @@ class MapInstallerGUI:
                 ttk.Label(content, text="Replacement:", font=("Segoe UI", 9, "bold")).pack(anchor="w")
                 rep_txt = tk.Text(content, height=4, wrap="word", font=("Consolas", 9))
                 rep_txt.pack(fill="both", expand=True, pady=(2, 10))
-                
+
                 # Pre-fill with auto-stripped value
                 safe = ''.join(c for c in v if ord(c) < 128)
                 rep_txt.insert("1.0", safe)
@@ -832,19 +833,24 @@ class MapInstallerGUI:
                 # Buttons
                 btn_frame = ttk.Frame(content)
                 btn_frame.pack(fill="x")
-                
+
                 def _on_ok():
                     result_holder[0] = rep_txt.get("1.0", "end-1c").strip()
                     dlg.destroy()
 
-                def _on_cancel():
-                    result_holder[0] = safe # Auto-strip on cancel
+                def _on_auto_strip():
+                    result_holder[0] = safe
+                    dlg.destroy()
+
+                def _on_ignore():
+                    result_holder[0] = v  # Keep original unchanged
                     dlg.destroy()
 
                 ttk.Button(btn_frame, text="Apply Replacement", command=_on_ok).pack(side="right", padx=(4, 0))
-                ttk.Button(btn_frame, text="Auto-Strip (Cancel)", command=_on_cancel).pack(side="right")
+                ttk.Button(btn_frame, text="Auto-Strip", command=_on_auto_strip).pack(side="right", padx=(4, 0))
+                ttk.Button(btn_frame, text="Ignore", command=_on_ignore).pack(side="right")
 
-                dlg.protocol("WM_DELETE_WINDOW", _on_cancel)
+                dlg.protocol("WM_DELETE_WINDOW", _on_ignore)
                 self.root.wait_window(dlg)
                 result_event.set()
 
