@@ -78,6 +78,7 @@ class MapInstallerGUI:
         self._preview_playing = False
         self._preview_auto_resume = False
         self._preview_resizing_timer = None
+        self._preview_debounce_timer = None
         self._preview_duration = 0.0
         self._original_stdout = sys.stdout
         self._original_stderr = sys.stderr
@@ -1059,16 +1060,27 @@ class MapInstallerGUI:
     # Sync refinement callbacks
     # ------------------------------------------------------------------
 
+    def _debounce_resume_preview(self):
+        if self._preview_debounce_timer:
+            self.root.after_cancel(self._preview_debounce_timer)
+        self._preview_debounce_timer = self.root.after(400, self._apply_debounced_preview)
+        
+    def _apply_debounced_preview(self):
+        self._preview_debounce_timer = None
+        # Only relaunch if it was previously playing or if this is the first preview attempt
+        if self._preview_playing or self.preview_ffmpeg is not None:
+            self._launch_preview(self._preview_position)
+
     def _on_increment(self, var, delta):
         new_val = round(var.get() + delta, 5)
         var.set(new_val)
         self._refresh_value_displays()
-        self._launch_preview()
+        self._debounce_resume_preview()
 
     def _on_sync_beatgrid(self):
         self.a_offset_var.set(self.v_override_var.get())
         self._refresh_value_displays()
-        self._launch_preview()
+        self._debounce_resume_preview()
 
     def _on_pad_audio(self):
         state = self.pipeline_state
@@ -1093,7 +1105,7 @@ class MapInstallerGUI:
 
                 self.root.after(0, lambda: self.a_offset_var.set(diff))
                 self.root.after(0, self._refresh_value_displays)
-                self.root.after(0, self._launch_preview)
+                self.root.after(0, self._debounce_resume_preview)
             except Exception as e:
                 print(f"    ERROR computing durations: {e}")
 
