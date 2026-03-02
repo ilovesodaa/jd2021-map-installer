@@ -399,8 +399,9 @@ class MapInstallerGUI:
             actions, text="Apply & Finish", command=self._on_apply)
         self.apply_btn.pack(side="left")
 
-        # Start with sync refinement disabled
+        # Start with sync refinement and preview controls disabled
         self._set_sync_state("disabled")
+        self._set_preview_state("disabled")
 
     # ------------------------------------------------------------------
     # Helpers
@@ -499,6 +500,16 @@ class MapInstallerGUI:
     def _restore_stdout(self):
         sys.stdout = self._original_stdout
         sys.stderr = self._original_stderr
+
+    def _set_preview_state(self, state):
+        """Enable or disable the media control bar and preview action buttons."""
+        for child in self.media_ctrls.winfo_children():
+            self._set_widget_state_recursive(child, state)
+        for btn in (self.preview_btn, self.stop_preview_btn):
+            try:
+                btn.configure(state=state)
+            except tk.TclError:
+                pass
 
     def _set_sync_state(self, state):
         """Enable or disable all widgets inside the sync refinement frame."""
@@ -852,8 +863,9 @@ class MapInstallerGUI:
             state.a_offset if state.a_offset is not None else 0.0)
         self._refresh_value_displays()
 
-        # Enable sync refinement
+        # Enable sync refinement and preview controls
         self._set_sync_state("normal")
+        self._set_preview_state("normal")
         # Keep install disabled until user finishes sync refinement via Apply
         self.preflight_btn.configure(state="normal")
 
