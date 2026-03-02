@@ -1751,22 +1751,19 @@ def main():
         quality=args.quality,
     )
 
-    # Load saved sync config (explicit path takes priority, then auto-detect)
+    # Load sync config from explicit path if provided (overrides pipeline-calculated values)
     saved = None
     if args.sync_config and os.path.isfile(args.sync_config):
         with open(args.sync_config, 'r', encoding='utf-8') as f:
             saved = json.load(f)
         print(f"    Loaded sync config from {args.sync_config}")
-    else:
-        saved = load_map_config(state.map_name)
-
-    if saved:
-        if state.v_override is None:
-            state.v_override = saved.get('v_override')
-        if state.a_offset is None:
-            state.a_offset = saved.get('a_offset')
-        if state.marker_preroll_ms is None:
-            state.marker_preroll_ms = saved.get('marker_preroll_ms')
+        if saved:
+            if state.v_override is None:
+                state.v_override = saved.get('v_override')
+            if state.a_offset is None:
+                state.a_offset = saved.get('a_offset')
+            if state.marker_preroll_ms is None:
+                state.marker_preroll_ms = saved.get('marker_preroll_ms')
 
     # Start logging to file — everything from here on is captured to both terminal and log
     _log_file = setup_log_file(state.map_name)
@@ -1820,9 +1817,6 @@ def main():
         choice = input("Choice [0-4]: ").strip()
 
         if choice == '0':
-            save_map_config(state.map_name, v_override, a_offset,
-                            quality=state.quality, codename=state.codename,
-                            marker_preroll_ms=state.marker_preroll_ms)
             sys.exit(0)
         elif choice == '1':
             a_offset = v_override
