@@ -42,9 +42,9 @@ An automated pipeline for extracting, building, and installing JDU (Just Dance U
 ## Limitations
 
 - **JD2021 PC only** — maps installed by this pipeline target the PC development build and are not compatible with console versions.
-- **Background AMB sounds remain silent** — JDU ambient sounds other than the intro are kept as silent placeholders; their audio is hosted on JDU servers and cannot be downloaded through this pipeline.
+- **Some background AMB sounds remain silent** — AMB sounds that play mid-song (SoundSetClips with `StartTime > 0`) are kept as silent placeholders; their audio is hosted on JDU servers and cannot be downloaded. AMBs that play during the intro (SoundSetClips with `StartTime <= 0`) are automatically populated with real audio from the OGG pre-roll.
 - **JDHelper required** — asset HTML files must be exported from the JDHelper Discord bot. Links expire quickly after the bot responds.
-- **WAV scheduling jitter** — the intro AMB tail (1.355s past the nominal handoff) was empirically derived. On systems with unusually high audio pipeline latency the gap may still be audible, though this has not been observed in practice.
+- **WAV scheduling jitter (fallback maps only)** — when musictrack marker data is available, intro AMB duration is derived precisely from the audio data. When marker data is absent, a heuristic tail of 1.355s is used; on systems with unusually high audio pipeline latency this gap may still be audible, though this has not been observed in practice.
 - **No multi-audio-track support** — maps with more than one audio stream are not supported.
 
 ## Credits
@@ -55,6 +55,7 @@ This project utilizes several essential third-party tools from the Just Dance mo
 - **[XTX-Extractor](https://github.com/aboood40091/XTX-Extractor)**: For extracting textures from Switch-specific XTX containers.
 - **[ubiart-archive-tools](https://github.com/PartyService/ubiart-archive-tools)**: For unpacking and packing UbiArt `.ipk` archives.
 - **JDTools by BLDS**: Tape processing logic was analyzed and ported, bringing cinematic curve handling, MotionClip color conversion, ambient sound processing, and improved Lua serialization to this pipeline.
+- **UBIART-AMB-CUTTER by RN-JK**: AMB extraction algorithm (marker tick-to-millisecond formula and SoundSetClip splitting logic) used as a reference for implementing the automated AMB audio generation in this pipeline.
 - **Just Dance Helper**: For providing a way to get JDU assets and NOHUD videos from Discord. Built by [rama0dev](https://github.com/rama0dev).
 
 Special thanks to the authors and contributors of these tools for making Just Dance modding possible.
