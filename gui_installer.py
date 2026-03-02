@@ -19,6 +19,54 @@ import map_builder
 import map_downloader
 
 
+class ToolTip:
+    """Creates a hover tooltip for a given widget."""
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tipwindow = None
+        self.id = None
+        self.x = self.y = 0
+        self.widget.bind("<Enter>", self.enter)
+        self.widget.bind("<Leave>", self.leave)
+        self.widget.bind("<ButtonPress>", self.leave)
+
+    def enter(self, event=None):
+        self.schedule()
+
+    def leave(self, event=None):
+        self.unschedule()
+        self.hidetip()
+
+    def schedule(self):
+        self.unschedule()
+        self.id = self.widget.after(500, self.showtip)
+
+    def unschedule(self):
+        id = self.id
+        self.id = None
+        if id:
+            self.widget.after_cancel(id)
+
+    def showtip(self, event=None):
+        x, y, cx, cy = self.widget.bbox("insert") or (0,0,0,0)
+        x = x + self.widget.winfo_rootx() + 25
+        y = y + cy + self.widget.winfo_rooty() + 25
+        self.tipwindow = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(tw, text=self.text, justify='left',
+                      background="#ffffe0", relief='solid', borderwidth=1,
+                      font=("Consolas", "8", "normal"))
+        label.pack(ipadx=1)
+
+    def hidetip(self):
+        tw = self.tipwindow
+        self.tipwindow = None
+        if tw:
+            tw.destroy()
+
+
 class StdoutRedirector:
     """Bridges print() calls from worker threads to a tkinter Text widget via a queue.
     If log_file is set, also writes to it simultaneously."""
@@ -132,6 +180,16 @@ class MapInstallerGUI:
             entry = ttk.Entry(cfg, width=64)
             entry.grid(row=i+1, column=1, sticky="ew", pady=1)
             setattr(self, attr_name, entry)
+
+            # Tooltips for configuration entries
+            if attr_name == "map_name_entry":
+                ToolTip(entry, "Auto-filled from Asset HTML. Only edit if detection fails.")
+            elif attr_name == "asset_html_entry":
+                ToolTip(entry, "Click 'Browse' to select the downloaded map asset HTML file containing texture/audio links.")
+            elif attr_name == "nohud_html_entry":
+                ToolTip(entry, "Click 'Browse' to select the downloaded NoHUD HTML file containing the map video link.")
+            elif attr_name == "jd_dir_entry":
+                ToolTip(entry, "Path to the Just Dance 2021 installation folder.")
             if browse_type:
                 if attr_name == "asset_html_entry":
                     cmd = (lambda e=entry, bt=browse_type: self._browse(e, bt, self.map_name_entry))
@@ -159,12 +217,17 @@ class MapInstallerGUI:
         self.preflight_btn = ttk.Button(
             btn_row, text="Pre-flight Check", command=self._on_preflight)
         self.preflight_btn.pack(side="left", padx=(0, 12))
+        ToolTip(self.preflight_btn, "Validates file paths and necessary tools (ffmpeg, ffplay) before installing.")
+
         self.install_btn = ttk.Button(
             btn_row, text="Install Map", command=self._on_install, state="disabled")
         self.install_btn.pack(side="left")
-        ttk.Button(
-            btn_row, text="Clear Path Cache", command=self._on_clear_cache).pack(
-            side="left", padx=(12, 0))
+        ToolTip(self.install_btn, "Starts the download and installation pipeline.")
+
+        self.clear_cache_btn = ttk.Button(
+            btn_row, text="Clear Path Cache", command=self._on_clear_cache)
+        self.clear_cache_btn.pack(side="left", padx=(12, 0))
+        ToolTip(self.clear_cache_btn, "Deletes the saved Just Dance 2021 game data paths. The next Pre-flight Check or Install will re-scan your system for the game files.")
 
         # ===================== MIDDLE: PROGRESS + PREVIEW =====================
         middle = ttk.Frame(container)
@@ -211,6 +274,7 @@ class MapInstallerGUI:
             command=self._on_seek_drag)
         self.seek_slider.pack(side="left", fill="x", expand=True)
         self.seek_slider.bind("<ButtonRelease-1>", self._on_seek_drop)
+        ToolTip(self.seek_slider, "Scrub to a specific timestamp")
         
         self.dur_lbl = ttk.Label(self.media_ctrls, text="0:00", font=("Consolas", 9), width=5)
         self.dur_lbl.pack(side="left", padx=(4, 6))
@@ -221,10 +285,15 @@ class MapInstallerGUI:
 
         self.btn_rewind = ttk.Button(btn_frame, text="-5s", width=4, command=lambda: self._seek_relative(-5))
         self.btn_rewind.pack(side="left", padx=(0, 2))
+        ToolTip(self.btn_rewind, "Skip backward 5 seconds")
+
         self.btn_playpause = ttk.Button(btn_frame, text="⏸", width=3, command=self._toggle_playback)
         self.btn_playpause.pack(side="left", padx=2)
+        ToolTip(self.btn_playpause, "Play/Pause preview")
+
         self.btn_forward = ttk.Button(btn_frame, text="+5s", width=4, command=lambda: self._seek_relative(5))
         self.btn_forward.pack(side="left", padx=(2, 0))
+        ToolTip(self.btn_forward, "Skip forward 5 seconds")
 
         # ===================== LOG OUTPUT =====================
         log_frame = ttk.LabelFrame(container, text="Log Output", padding=4)
@@ -248,6 +317,9 @@ class MapInstallerGUI:
             container, text="Sync Refinement", padding=6)
         self.sync_frame.pack(fill="x", pady=(0, 4))
 
+        tk.Label(self.sync_frame, text="Fine-tune audio/video timing. Hover over buttons for more details.",
+                 font=("Consolas", 8, "italic"), fg="#888888").pack(anchor="w", pady=(0, 4))
+
         deltas = [1, 0.1, 0.01, 0.001]
 
         # Keep track of Video Override row widgets to toggle them
@@ -264,9 +336,12 @@ class MapInstallerGUI:
                     row, text=label, variable=self.v_override_enabled_var,
                     command=self._on_v_override_toggle, width=18)
                 cb.pack(side="left")
+                ToolTip(cb, "Checking this forces the map to use a custom video start time. Use if you know what you are doing.")
             else:
-                ttk.Label(row, text=label, width=18, anchor="e",
-                          font=("Consolas", 9, "bold")).pack(side="left")
+                lbl = ttk.Label(row, text=label, width=18, anchor="e",
+                          font=("Consolas", 9, "bold"))
+                lbl.pack(side="left")
+                ToolTip(lbl, "Positive values pad the audio with silence at the start. Negative values trim the audio from the beginning.")
 
             # Decrement buttons (largest delta first)
             for d in deltas:
@@ -304,15 +379,22 @@ class MapInstallerGUI:
         self.sync_beatgrid_btn = ttk.Button(
             actions, text="Sync Beatgrid", command=self._on_sync_beatgrid)
         self.sync_beatgrid_btn.pack(side="left", padx=(0, 6))
+        ToolTip(self.sync_beatgrid_btn, "Copies the Video Override value to the Audio Offset (aligning them 1:1).")
+
         self.pad_audio_btn = ttk.Button(
             actions, text="Pad Audio", command=self._on_pad_audio)
         self.pad_audio_btn.pack(side="left", padx=(0, 6))
+        ToolTip(self.pad_audio_btn, "Calculates the difference in length between the video and audio, then auto-fills the Audio Offset to pad the audio with silence so they end at the same time.")
+
         self.preview_btn = ttk.Button(
             actions, text="Preview", command=self._on_preview)
         self.preview_btn.pack(side="left", padx=(0, 6))
+        ToolTip(self.preview_btn, "Starts the embedded video and audio preview to test the current synchronization offsets.")
+
         self.stop_preview_btn = ttk.Button(
             actions, text="Stop Preview", command=self._on_stop_preview)
         self.stop_preview_btn.pack(side="left", padx=(0, 6))
+        ToolTip(self.stop_preview_btn, "Stops the embedded video and audio preview.")
         self.apply_btn = ttk.Button(
             actions, text="Apply & Finish", command=self._on_apply)
         self.apply_btn.pack(side="left")
@@ -362,6 +444,37 @@ class MapInstallerGUI:
         if path:
             entry.delete(0, tk.END)
             entry.insert(0, path)
+            
+            # --- Auto-detect complementary HTML ---
+            if browse_type == "html":
+                try:
+                    dir_path = os.path.dirname(os.path.abspath(path))
+                    base_name = os.path.basename(path).lower()
+                    html_files = [f for f in os.listdir(dir_path) if f.lower().endswith(".html")]
+                    
+                    if entry == self.asset_html_entry:
+                        # User selected Asset HTML, find NoHUD HTML
+                        nohud_files = [f for f in html_files if "nohud" in f.lower() and f.lower() != base_name]
+                        if nohud_files:
+                            self.nohud_html_entry.delete(0, tk.END)
+                            self.nohud_html_entry.insert(0, os.path.join(dir_path, nohud_files[0]))
+                    
+                    elif entry == self.nohud_html_entry:
+                        # User selected NoHUD HTML, find Asset HTML
+                        asset_files = [f for f in html_files if "nohud" not in f.lower() and f.lower() != base_name]
+                        if asset_files:
+                            asset_path = os.path.join(dir_path, asset_files[0])
+                            self.asset_html_entry.delete(0, tk.END)
+                            self.asset_html_entry.insert(0, asset_path)
+                            
+                            # Auto-extract Map Name from the newly detected Asset HTML
+                            if getattr(self, "map_name_entry", None):
+                                autofill_entry = self.map_name_entry
+                                path = asset_path
+                except Exception as e:
+                    print(f"Error during complementary HTML auto-detect: {e}")
+            # ----------------------------------------
+            
             if autofill_entry is not None:
                 derived = None
                 try:
