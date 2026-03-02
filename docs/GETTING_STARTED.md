@@ -67,7 +67,9 @@ projectRoot/
 │   ├── AUDIO_TIMING.md
 │   ├── MANUAL_PORTING_GUIDE.md
 │   ├── JDU_DATA_MAPPING.md
-│   └── JDU_UNUSED_DATA_OPPORTUNITIES.md
+│   ├── JDU_UNUSED_DATA_OPPORTUNITIES.md
+│   ├── JD21_Configuration_Map.md
+│   └── MOBILE_SCORING_RESTORATION.md
 └── jd21/                    <- your JD2021 PC install from Step 2
 ```
 
@@ -166,20 +168,22 @@ Each map opens in its own terminal window for independent review.
 
 | Step | Description |
 |------|-------------|
-| **[1]** | Clean up previous build output |
-| **[2]** | Download assets (IPKs, ZIPs, WebMs, textures) from JDU servers |
-| **[3]** | Extract scene archives |
-| **[4]** | Unpack IPK archives |
-| **[5]** | Decode menu art textures (CKD → PNG/TGA) |
-| **[6]** | Generate UbiArt config files (scenes, templates, tracks, manifests) |
-| **[7]** | Convert choreography and karaoke tapes to Lua |
-| **[8]** | Convert cinematic tapes to Lua |
-| **[9]** | Process ambient sound templates from IPK |
-| **[10]** | Decode pictograms |
-| **[11]** | Extract move files and autodance data |
-| **[12]** | Convert audio to 48kHz WAV and generate intro AMB for pre-roll coverage |
-| **[13]** | Copy gameplay video |
-| **[14]** | Register the map in SkuScene |
+| **[1]** | Pre-install cleanup (remove previous map installation from game directory) |
+| **[2]** | Clean previous build output (target dir, cache, extracted dirs) |
+| **[3]** | Download assets (IPKs, ZIPs, WebMs, textures) from JDU servers |
+| **[4]** | Extract scene archives |
+| **[5]** | Unpack IPK archives |
+| **[6]** | Decode menu art textures (CKD → PNG/TGA) |
+| **[7]** | Validate MenuArt covers (format check and case matching) |
+| **[8]** | Generate UbiArt config files (scenes, templates, tracks, manifests) |
+| **[9]** | Convert choreography and karaoke tapes to Lua |
+| **[10]** | Convert cinematic tapes to Lua |
+| **[11]** | Process ambient sound templates from IPK |
+| **[12]** | Decode pictograms |
+| **[13]** | Extract move files and autodance data |
+| **[14]** | Convert audio to 48kHz WAV and generate intro AMB for pre-roll coverage |
+| **[15]** | Copy gameplay video |
+| **[16]** | Register the map in SkuScene |
 | **Interactive** | Audio/video sync fine-tuning with live FFplay preview (intro AMB regenerates on each adjustment) |
 
 ---
