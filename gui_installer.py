@@ -712,15 +712,6 @@ class MapInstallerGUI:
         # GUI mode: don't call input() in pipeline steps
         self.pipeline_state._interactive = False
 
-        # Load saved config if available (applies saved sync values)
-        saved = map_installer.load_map_config(
-            self.pipeline_state.map_name)
-        if saved:
-            if self.pipeline_state.v_override is None:
-                self.pipeline_state.v_override = saved.get('v_override')
-            if self.pipeline_state.a_offset is None:
-                self.pipeline_state.a_offset = saved.get('a_offset')
-
         # Close any previous log file and open a new one for this install run
         if self._log_file:
             try:
@@ -1280,14 +1271,6 @@ class MapInstallerGUI:
                     state.audio_path, state.map_name,
                     state.target_dir, state)
                 state.a_offset = a_offset
-
-                # Save sync config for future re-installs
-                map_installer.save_map_config(
-                    state.map_name,
-                    v_override, a_offset,
-                    quality=getattr(state, 'quality', 'ULTRA'),
-                    codename=state.codename,
-                    marker_preroll_ms=getattr(state, 'marker_preroll_ms', None))
 
                 # Clear game cache so the engine picks up the new audio files
                 if state.cache_dir and os.path.exists(state.cache_dir):

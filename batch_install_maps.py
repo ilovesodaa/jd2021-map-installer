@@ -116,11 +116,6 @@ def create_state(map_name, asset_html, nohud_html, jd_dir, quality="ultra_hd"):
         quality=effective_quality,
     )
 
-    saved = map_installer.load_map_config(state.map_name)
-    if saved:
-        state.v_override = saved.get('v_override', state.v_override)
-        state.a_offset = saved.get('a_offset', state.a_offset)
-
     return state
 
 
@@ -287,12 +282,6 @@ def main():
 
         try:
             run_steps(state, PROCESS_STEPS)
-
-            # Save config
-            map_installer.save_map_config(
-                state.map_name, state.v_override, state.a_offset,
-                quality=state.quality, codename=state.codename,
-                marker_preroll_ms=getattr(state, 'marker_preroll_ms', None))
 
             elapsed = time.time() - start_time
             process_results[name] = ("OK", f"{elapsed:.1f}s")
