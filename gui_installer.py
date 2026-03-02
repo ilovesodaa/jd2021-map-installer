@@ -792,10 +792,13 @@ class MapInstallerGUI:
                     f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black")
                 vf_chain = ",".join(vf_parts)
 
-                # Build audio filter (delay audio if video starts first)
+                # Build audio filter (delay audio if video starts first or trim audio if it starts first)
                 af = None
-                if net_offset < 0:
+                if net_offset > 0:
                     af = f"adelay=delays={delay_ms}:all=1"
+                elif net_offset < 0:
+                    trim_s = abs(net_offset)
+                    af = f"atrim=start={trim_s},asetpts=PTS-STARTPTS"
 
                 # ffmpeg: decode video -> raw RGB24 frames to pipe
                 ffmpeg_cmd = [

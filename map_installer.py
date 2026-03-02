@@ -825,10 +825,11 @@ def _build_preview_commands(video_path, audio_path, v_override, a_offset, window
         a_filt = "anull"
         v_filt = "null"
     elif net_offset < 0:
-        a_filt = f"adelay=delays={delay_ms}:all=1"
+        trim_s = abs(net_offset)
+        a_filt = f"atrim=start={trim_s},asetpts=PTS-STARTPTS"
         v_filt = "null"
     else:
-        a_filt = "anull"
+        a_filt = f"adelay=delays={delay_ms}:all=1"
         v_filt = f"setpts=PTS+({net_offset}/TB)"
 
     ffmpeg_cmd = [
