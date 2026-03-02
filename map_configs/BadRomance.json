@@ -1,8 +1,8 @@
 {
   "map_name": "BadRomance",
-  "v_override": 0,
-  "a_offset": 0,
-  "quality": "ULTRA",
+  "v_override": 0.0,
+  "a_offset": 0.0,
+  "quality": "ULTRA_HD",
   "codename": "BadRomance",
-  "installed_at": "2026-03-01T03:10:48.930111"
+  "installed_at": "2026-03-02T23:54:07.069589"
 }

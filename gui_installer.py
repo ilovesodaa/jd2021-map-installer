@@ -74,6 +74,11 @@ class MapInstallerGUI:
         self._frame_stop = None
         self._frame_thread = None
         self._current_photo = None
+        self._preview_position = 0.0
+        self._preview_playing = False
+        self._preview_auto_resume = False
+        self._preview_resizing_timer = None
+        self._preview_duration = 0.0
         self._original_stdout = sys.stdout
         self._original_stderr = sys.stderr
         self._preflight_passed = False
@@ -183,12 +188,42 @@ class MapInstallerGUI:
         self.preview_container = tk.Frame(prev_frame, bg="black", width=480, height=270)
         self.preview_container.pack(fill="both", expand=True)
         self.preview_container.pack_propagate(False)
+        self.preview_container.bind("<Configure>", self._on_preview_resize)
 
         # "No Preview" overlay label (centered on the black frame)
         self.preview_label = tk.Label(
             self.preview_container, text="No Preview",
             fg="#555555", bg="black", font=("Consolas", 14))
         self.preview_label.place(relx=0.5, rely=0.5, anchor="center")
+
+        # Media Controls (Seek bar + Buttons)
+        self.media_ctrls = ttk.Frame(prev_frame)
+        self.media_ctrls.pack(fill="x", pady=(4, 0))
+
+        # Time label, Seek bar, Duration label
+        self.seek_var = tk.DoubleVar(value=0.0)
+        self.time_lbl = ttk.Label(self.media_ctrls, text="0:00", font=("Consolas", 9), width=5, anchor="e")
+        self.time_lbl.pack(side="left", padx=(0, 4))
+        
+        self.seek_slider = ttk.Scale(
+            self.media_ctrls, from_=0, to=100, orient="horizontal", variable=self.seek_var,
+            command=self._on_seek_drag)
+        self.seek_slider.pack(side="left", fill="x", expand=True)
+        self.seek_slider.bind("<ButtonRelease-1>", self._on_seek_drop)
+        
+        self.dur_lbl = ttk.Label(self.media_ctrls, text="0:00", font=("Consolas", 9), width=5)
+        self.dur_lbl.pack(side="left", padx=(4, 6))
+
+        # Playback buttons
+        btn_frame = ttk.Frame(self.media_ctrls)
+        btn_frame.pack(side="left")
+
+        self.btn_rewind = ttk.Button(btn_frame, text="-5s", width=4, command=lambda: self._seek_relative(-5))
+        self.btn_rewind.pack(side="left", padx=(0, 2))
+        self.btn_playpause = ttk.Button(btn_frame, text="⏸", width=3, command=self._toggle_playback)
+        self.btn_playpause.pack(side="left", padx=2)
+        self.btn_forward = ttk.Button(btn_frame, text="+5s", width=4, command=lambda: self._seek_relative(5))
+        self.btn_forward.pack(side="left", padx=(2, 0))
 
         # ===================== LOG OUTPUT =====================
         log_frame = ttk.LabelFrame(container, text="Log Output", padding=4)
@@ -752,15 +787,43 @@ class MapInstallerGUI:
         self.preview_ffplay = None
         self._frame_stop = None
         self._frame_thread = None
-        self._current_photo = None
+        
+        # Don't reset photo here so we keep the last frame on screen if paused
+        if not hasattr(self, '_keep_preview_image') or not self._keep_preview_image:
+            self._current_photo = None
 
-        # Restore "No Preview" label
-        self.root.after(0, lambda: self.preview_label.configure(
-            image="", text="No Preview"))
-        self.root.after(0, lambda: self.preview_label.place(
-            relx=0.5, rely=0.5, anchor="center"))
+            # Restore "No Preview" label
+            self.root.after(0, lambda: self.preview_label.configure(
+                image="", text="No Preview"))
+            self.root.after(0, lambda: self.preview_label.place(
+                relx=0.5, rely=0.5, anchor="center"))
+            
+        self.root.after(0, lambda: self.btn_playpause.configure(text="▶"))
 
-    def _launch_preview(self):
+    def _get_media_duration(self, video_path, audio_path):
+        """Estimate total preview duration."""
+        try:
+            # We assume ffprobe is available.
+            cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", video_path]
+            v_dur = float(subprocess.check_output(cmd, text=True).strip())
+            cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", audio_path]
+            a_dur = float(subprocess.check_output(cmd, text=True).strip())
+            
+            v_override = self.v_override_var.get()
+            a_offset = self.a_offset_var.get()
+            net_offset = v_override - a_offset
+            
+            # Rough layout duration taking padding into account
+            if net_offset > 0:
+                v_dur += net_offset
+            elif net_offset < 0:
+                a_dur += abs(net_offset)
+            
+            return max(v_dur, a_dur)
+        except Exception:
+            return 120.0 # fallback
+
+    def _launch_preview(self, start_time=0.0):
         state = self.pipeline_state
         if not state or not state.video_path or not state.audio_path:
             return
@@ -770,7 +833,18 @@ class MapInstallerGUI:
 
         def _do():
             with self._preview_lock:
+                self._keep_preview_image = (start_time > 0.0)
                 self._kill_current_preview()
+                self._keep_preview_image = False
+                
+                if start_time == 0.0:
+                    self._preview_duration = self._get_media_duration(state.video_path, state.audio_path)
+                
+                self._preview_position = start_time
+                self._preview_playing = True
+
+                self.root.after(0, lambda: self.btn_playpause.configure(text="⏸"))
+                self.root.after(0, lambda: self.dur_lbl.configure(text=f"{int(self._preview_duration//60)}:{int(self._preview_duration%60):02d}"))
 
                 # Get container dimensions
                 w = self.preview_container.winfo_width()
@@ -784,8 +858,8 @@ class MapInstallerGUI:
                 # Build video filter chain
                 vf_parts = []
                 if net_offset > 0:
-                    vf_parts.append(
-                        f"tpad=start_duration={net_offset}:color=black")
+                    if start_time < net_offset:
+                        vf_parts.append(f"tpad=start_duration={net_offset - start_time}:color=black")
                 vf_parts.append(
                     f"scale={w}:{h}:force_original_aspect_ratio=decrease")
                 vf_parts.append(
@@ -795,14 +869,24 @@ class MapInstallerGUI:
                 # Build audio filter (delay audio if video starts first or trim audio if it starts first)
                 af = None
                 if net_offset > 0:
-                    af = f"adelay=delays={delay_ms}:all=1"
+                    if start_time < net_offset:
+                        rem_delay = delay_ms - int(start_time * 1000)
+                        af = f"adelay=delays={rem_delay}:all=1"
                 elif net_offset < 0:
                     trim_s = abs(net_offset)
                     af = f"atrim=start={trim_s},asetpts=PTS-STARTPTS"
-
+                    
                 # ffmpeg: decode video -> raw RGB24 frames to pipe
-                ffmpeg_cmd = [
-                    "ffmpeg", "-re", "-loglevel", "error",
+                ffmpeg_cmd = [ "ffmpeg", "-loglevel", "error" ]
+                
+                # Apply seek to video if necessary
+                vid_seek = start_time
+                if net_offset > 0:
+                    vid_seek = max(0.0, start_time - net_offset)
+                if vid_seek > 0:
+                    ffmpeg_cmd += ["-ss", str(vid_seek)]
+                    
+                ffmpeg_cmd += [
                     "-i", state.video_path,
                     "-vf", vf_chain,
                     "-r", "24",
@@ -812,8 +896,15 @@ class MapInstallerGUI:
                 ]
 
                 # ffplay: audio-only playback (no display)
-                ffplay_cmd = [
-                    "ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"]
+                ffplay_cmd = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"]
+                
+                # Apply seek to audio
+                aud_seek = start_time
+                if net_offset < 0:
+                    aud_seek = max(0.0, start_time - abs(net_offset))
+                if aud_seek > 0:
+                    ffplay_cmd += ["-ss", str(aud_seek)]
+                    
                 if af:
                     ffplay_cmd += ["-af", af]
                 ffplay_cmd += ["-i", state.audio_path]
@@ -829,15 +920,11 @@ class MapInstallerGUI:
                         ffmpeg_cmd,
                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                         creationflags=_cflags)
-                    self.preview_ffplay = subprocess.Popen(
-                        ffplay_cmd,
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                        creationflags=_cflags)
 
                     self._frame_stop = threading.Event()
                     self._frame_thread = threading.Thread(
                         target=self._read_video_frames,
-                        args=(self.preview_ffmpeg, w, h, self._frame_stop),
+                        args=(self.preview_ffmpeg, w, h, self._frame_stop, ffplay_cmd, _cflags),
                         daemon=True)
                     self._frame_thread.start()
                 except Exception as e:
@@ -845,9 +932,12 @@ class MapInstallerGUI:
 
         threading.Thread(target=_do, daemon=True).start()
 
-    def _read_video_frames(self, proc, width, height, stop_event):
+    def _read_video_frames(self, proc, width, height, stop_event, ffplay_cmd=None, cflags=0):
         """Read raw RGB24 frames from ffmpeg stdout and display them."""
+        import time
         frame_size = width * height * 3
+        frames_read = 0
+        start_wall = 0
         try:
             while not stop_event.is_set():
                 data = b""
@@ -856,11 +946,48 @@ class MapInstallerGUI:
                     if not chunk:
                         return
                     data += chunk
+                
+                # First frame ready! Launch ffplay.
+                if frames_read == 0 and ffplay_cmd:
+                    if not stop_event.is_set():
+                        with self._preview_lock:
+                            if not stop_event.is_set():
+                                try:
+                                    self.preview_ffplay = subprocess.Popen(
+                                        ffplay_cmd,
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                        creationflags=cflags)
+                                except Exception as e:
+                                    print(f"    ERROR: Could not launch ffplay: {e}")
+                    
+                    # Assume ~100ms for ffplay to actually start making sound
+                    start_wall = time.time() + 0.1
+
+                frames_read += 1
                 if not stop_event.is_set():
+                    self._preview_position += (1.0 / 24.0)
                     img = Image.frombytes("RGB", (width, height), data)
                     self.root.after(0, self._display_frame, img)
+                    
+                    if start_wall > 0:
+                        expected_elapsed = frames_read / 24.0
+                        now = time.time()
+                        if now < start_wall + expected_elapsed:
+                            time.sleep((start_wall + expected_elapsed) - now)
+
+                    # Update seek GUI natively roughly every 6 frames (250ms) to avoid lagging UI thread
+                    if frames_read % 6 == 0:
+                        pos = self._preview_position
+                        pct = (pos / max(self._preview_duration, 1.0)) * 100.0
+                        self.root.after(0, self._update_playback_ui, pos, pct)
+                        
         except Exception:
             pass
+
+    def _update_playback_ui(self, pos, pct):
+        self.time_lbl.configure(text=f"{int(pos//60)}:{int(pos%60):02d}")
+        if not self._preview_auto_resume: # Only update slider if we aren't dragging it
+            self.seek_var.set(pct)
 
     def _display_frame(self, pil_image):
         """Display a PIL image on the preview label (main thread only)."""
@@ -871,6 +998,62 @@ class MapInstallerGUI:
             self.preview_label.place(relx=0.5, rely=0.5, anchor="center")
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # Playback UI Callbacks
+    # ------------------------------------------------------------------
+    def _toggle_playback(self):
+        if self._preview_playing:
+            # Emulate pause by keeping image but killing streams
+            with self._preview_lock:
+                self._preview_playing = False
+                self._keep_preview_image = True
+                self._kill_current_preview()
+                self._keep_preview_image = False
+        else:
+            self._launch_preview(self._preview_position)
+            
+    def _seek_relative(self, delta):
+        new_pos = max(0.0, min(self._preview_position + delta, self._preview_duration))
+        self._preview_position = new_pos
+        if self._preview_playing:
+            self._launch_preview(new_pos)
+        else:
+            self._update_playback_ui(new_pos, (new_pos / max(self._preview_duration, 1.0)) * 100.0)
+
+    def _on_seek_drag(self, val):
+        self._preview_auto_resume = self._preview_playing
+        pct = float(val)
+        pos = (pct / 100.0) * self._preview_duration
+        self.time_lbl.configure(text=f"{int(pos//60)}:{int(pos%60):02d}")
+
+    def _on_seek_drop(self, event):
+        pct = self.seek_var.get()
+        self._preview_position = (pct / 100.0) * self._preview_duration
+        if self._preview_auto_resume:
+            self._launch_preview(self._preview_position)
+        self._preview_auto_resume = False
+
+    def _on_preview_resize(self, event):
+        # Only trigger if the preview is actually playing
+        if not self._preview_playing:
+            return
+            
+        # Ignore tiny changes or events from child widgets
+        if event.widget != self.preview_container:
+            return
+
+        # Cancel any pending resize timer
+        if self._preview_resizing_timer:
+            self.root.after_cancel(self._preview_resizing_timer)
+
+        # Wait 300ms for user to stop dragging before restarting the pipeline
+        self._preview_resizing_timer = self.root.after(300, self._apply_resize)
+
+    def _apply_resize(self):
+        self._preview_resizing_timer = None
+        if self._preview_playing:
+            self._launch_preview(self._preview_position)
 
     # ------------------------------------------------------------------
     # Sync refinement callbacks
