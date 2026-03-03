@@ -19,6 +19,7 @@ from PIL import Image, ImageTk
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from log_config import get_logger, setup_gui_logging
+from helpers import TOOLTIP_DELAY_MS, PREVIEW_FPS, PREVIEW_POLL_FRAMES
 import map_installer
 import map_builder
 import map_downloader
@@ -47,7 +48,7 @@ class ToolTip:
 
     def schedule(self):
         self.unschedule()
-        self.id = self.widget.after(500, self.showtip)
+        self.id = self.widget.after(TOOLTIP_DELAY_MS, self.showtip)
 
     def unschedule(self):
         id = self.id
@@ -1083,7 +1084,7 @@ class MapInstallerGUI:
                 ffmpeg_cmd += [
                     "-i", state.video_path,
                     "-vf", vf_chain,
-                    "-r", "24",
+                    "-r", str(PREVIEW_FPS),
                     "-pix_fmt", "rgb24",
                     "-f", "rawvideo",
                     "-"
@@ -1160,18 +1161,18 @@ class MapInstallerGUI:
 
                 frames_read += 1
                 if not stop_event.is_set():
-                    self._preview_position += (1.0 / 24.0)
+                    self._preview_position += (1.0 / PREVIEW_FPS)
                     img = Image.frombytes("RGB", (width, height), data)
                     self.root.after(0, self._display_frame, img)
                     
                     if start_wall > 0:
-                        expected_elapsed = frames_read / 24.0
+                        expected_elapsed = frames_read / float(PREVIEW_FPS)
                         now = time.time()
                         if now < start_wall + expected_elapsed:
                             time.sleep((start_wall + expected_elapsed) - now)
 
                     # Update seek GUI natively roughly every 6 frames (250ms) to avoid lagging UI thread
-                    if frames_read % 6 == 0:
+                    if frames_read % PREVIEW_POLL_FRAMES == 0:
                         pos = self._preview_position
                         pct = (pos / max(self._preview_duration, 1.0)) * 100.0
                         self.root.after(0, self._update_playback_ui, pos, pct)
@@ -1335,22 +1336,7 @@ class MapInstallerGUI:
                     metadata_overrides=getattr(state, 'metadata_overrides', None))
                 state.v_override = v_override
 
-                map_installer.convert_audio(
-                    state.audio_path, state.map_name,
-                    state.target_dir, a_offset)
-                map_installer.generate_intro_amb(
-                    state.audio_path, state.map_name,
-                    state.target_dir, a_offset, v_override,
-                    marker_preroll_ms=getattr(state, 'marker_preroll_ms', None))
-                map_installer.extract_amb_audio(
-                    state.audio_path, state.map_name,
-                    state.target_dir, state)
-                state.a_offset = a_offset
-
-                # Clear game cache so the engine picks up the new audio files
-                if state.cache_dir and os.path.exists(state.cache_dir):
-                    map_installer._safe_rmtree(state.cache_dir)
-                    print(f"    Cleared game cache for {state.map_name}.")
+                map_installer.reprocess_audio(state, a_offset, v_override)
 
                 print("    Sync changes applied and config saved.")
                 self.root.after(0, lambda: messagebox.showinfo(

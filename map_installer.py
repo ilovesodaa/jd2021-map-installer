@@ -28,6 +28,7 @@ import map_downloader
 import map_builder
 import ubiart_lua
 import ipk_unpack
+import json_to_lua
 
 
 # ---------------------------------------------------------------------------
@@ -498,9 +499,10 @@ def preflight_check(jd_dir, asset_html, nohud_html, auto_install=False,
     else:
         fail("ckd_decode.py not found in project root")
 
-    if os.path.isfile(os.path.join(SCRIPT_DIR, "json_to_lua.py")):
-        ok("json_to_lua.py")
-    else:
+    try:
+        from json_to_lua import convert_file as _lua_check
+        ok("json_to_lua (CKD-to-Lua converter)")
+    except ImportError:
         fail("json_to_lua.py not found in project root")
 
     try:
@@ -994,6 +996,31 @@ def _safe_rmtree(path):
             print("    Continuing anyway...")
 
 
+def reprocess_audio(state, a_offset, v_override=None):
+    """Reprocess audio files after offset adjustment.
+
+    Shared by both the CLI sync loop and the GUI apply action.
+    Converts audio, regenerates AMB intro, extracts AMB audio,
+    and clears the game cache.
+
+    Args:
+        state: PipelineState with audio_path, map_name, target_dir, cache_dir, etc.
+        a_offset: Audio offset in seconds (positive = pad, negative = trim).
+        v_override: Video start time override (used for AMB timing).
+    """
+    if v_override is None:
+        v_override = getattr(state, 'v_override', 0.0) or 0.0
+    convert_audio(state.audio_path, state.map_name, state.target_dir, a_offset)
+    generate_intro_amb(state.audio_path, state.map_name, state.target_dir,
+                       a_offset, v_override,
+                       marker_preroll_ms=getattr(state, 'marker_preroll_ms', None))
+    extract_amb_audio(state.audio_path, state.map_name, state.target_dir, state)
+    state.a_offset = a_offset
+    if state.cache_dir and os.path.exists(state.cache_dir):
+        _safe_rmtree(state.cache_dir)
+        print(f"    Cleared game cache for {state.map_name}.")
+
+
 def unregister_sku(jd21_dir, map_name):
     """Remove a map from SkuScene_Maps_PC_All.isc if present."""
     sku_isc = os.path.join(jd21_dir, "data", "World", "SkuScenes", "SkuScene_Maps_PC_All.isc")
@@ -1096,16 +1123,10 @@ def step_02_download(state):
 
     video_path = None
     # Search for video in quality preference order starting from user's choice
-    preferred_idx = map_downloader.QUALITY_ORDER.index(state.quality) if state.quality in map_downloader.QUALITY_ORDER else 0
-    search_order = map_downloader.QUALITY_ORDER[preferred_idx:] + map_downloader.QUALITY_ORDER[:preferred_idx]
-    for qual in search_order:
-        pattern = map_downloader.QUALITY_PATTERNS[qual]  # e.g. "_ULTRA.hd.webm"
-        vp = os.path.join(state.download_dir, f"{state.codename}{pattern}")
-        if os.path.exists(vp):
-            if qual != state.quality:
-                print(f"    Note: Requested {state.quality} quality not found, using {qual}")
-            video_path = vp
-            break
+    video_path, actual_quality = map_downloader.find_best_video_file(
+        state.download_dir, state.codename, state.quality)
+    if video_path and actual_quality != state.quality:
+        print(f"    Note: Requested {state.quality} quality not found, using {actual_quality}")
     if not video_path:
         webms = [f for f in glob.glob(os.path.join(state.download_dir, "*.webm")) if "MapPreview" not in f and "VideoPreview" not in f]
         if webms:
@@ -1534,8 +1555,7 @@ def step_11_extract_moves(state):
         dest_ad = os.path.join(state.target_dir, "Autodance")
         os.makedirs(dest_ad, exist_ok=True)
         dst_tpl = os.path.join(dest_ad, f"{state.map_name}_autodance.tpl")
-        subprocess.run([sys.executable, os.path.join(SCRIPT_DIR, "json_to_lua.py"), f, dst_tpl],
-                       check=True, capture_output=True)
+        json_to_lua.convert_file(f, dst_tpl)
 
     # Convert autodance data CKDs (adtape, adrecording, advideo)
     for ext in ["adtape", "adrecording", "advideo"]:
@@ -1544,8 +1564,7 @@ def step_11_extract_moves(state):
             dest_ad = os.path.join(state.target_dir, "Autodance")
             os.makedirs(dest_ad, exist_ok=True)
             dst_file = os.path.join(dest_ad, f"{state.map_name}.{ext}")
-            subprocess.run([sys.executable, os.path.join(SCRIPT_DIR, "json_to_lua.py"), f, dst_file],
-                           check=False, capture_output=True)
+            json_to_lua.convert_file(f, dst_file)
 
     # Copy any other Autodance media if they exist (ogg, etc.)
     autodance_media = glob.glob(os.path.join(state.ipk_extracted, "**/autodance/*.*"), recursive=True)
@@ -1560,8 +1579,7 @@ def step_11_extract_moves(state):
     stape_ckds = glob.glob(os.path.join(state.ipk_extracted, "**/*.stape.ckd"), recursive=True)
     if stape_ckds:
         dst_stape = os.path.join(state.target_dir, f"Audio/{state.map_name}.stape")
-        subprocess.run([sys.executable, os.path.join(SCRIPT_DIR, "json_to_lua.py"),
-                        stape_ckds[0], dst_stape], check=False, capture_output=True)
+        json_to_lua.convert_file(stape_ckds[0], dst_stape)
 
 
 def step_12_convert_audio(state):
@@ -1814,12 +1832,7 @@ def main():
             sys.exit(0)
         elif choice == '1':
             a_offset = v_override
-            convert_audio(state.audio_path, state.map_name, state.target_dir, a_offset)
-            generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset, v_override,
-                               marker_preroll_ms=state.marker_preroll_ms)
-            extract_amb_audio(state.audio_path, state.map_name, state.target_dir, state)
-            _safe_rmtree(state.cache_dir)
-            print("    Cleared game cache.")
+            reprocess_audio(state, a_offset, v_override)
             show_ffplay_preview(state.video_path, state.audio_path, v_override, a_offset)
         elif choice == '2':
             def get_dur(p):
@@ -1834,12 +1847,7 @@ def main():
             print(f"    Video: {v_dur:.2f}s, Audio: {a_dur:.2f}s")
             print(f"    Padding audio by: {diff:.3f}s")
             a_offset = diff
-            convert_audio(state.audio_path, state.map_name, state.target_dir, a_offset)
-            generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset, v_override,
-                               marker_preroll_ms=state.marker_preroll_ms)
-            extract_amb_audio(state.audio_path, state.map_name, state.target_dir, state)
-            _safe_rmtree(state.cache_dir)
-            print("    Cleared game cache.")
+            reprocess_audio(state, a_offset, v_override)
             show_ffplay_preview(state.video_path, state.audio_path, v_override, a_offset)
         elif choice == '3':
             try:
@@ -1852,13 +1860,7 @@ def main():
                 map_builder.generate_text_files(
                     state.map_name, state.ipk_extracted, state.target_dir, v_override,
                     metadata_overrides=getattr(state, 'metadata_overrides', None))
-                # Re-convert audio
-                convert_audio(state.audio_path, state.map_name, state.target_dir, a_offset)
-                generate_intro_amb(state.audio_path, state.map_name, state.target_dir, a_offset, v_override,
-                                   marker_preroll_ms=state.marker_preroll_ms)
-                extract_amb_audio(state.audio_path, state.map_name, state.target_dir, state)
-                _safe_rmtree(state.cache_dir)
-                print("    Cleared game cache.")
+                reprocess_audio(state, a_offset, v_override)
                 show_ffplay_preview(state.video_path, state.audio_path, v_override, a_offset)
             except ValueError:
                 print("Invalid number entered.")
