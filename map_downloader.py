@@ -87,6 +87,30 @@ QUALITY_PATTERNS = {
 }
 
 
+def find_best_video_file(download_dir, codename, preferred_quality="ULTRA_HD"):
+    """Find the best available video file on disk, falling back through quality tiers.
+
+    Args:
+        download_dir: Directory containing downloaded video files.
+        codename: Map codename used in the filename (e.g. "Starships").
+        preferred_quality: Starting quality tier (default ULTRA_HD).
+
+    Returns:
+        tuple: (file_path, actual_quality) or (None, None) if no video found.
+    """
+    quality = preferred_quality.upper()
+    if quality not in QUALITY_ORDER:
+        quality = "ULTRA_HD"
+    preferred_idx = QUALITY_ORDER.index(quality)
+    search_order = QUALITY_ORDER[preferred_idx:] + QUALITY_ORDER[:preferred_idx]
+    for q in search_order:
+        pattern = QUALITY_PATTERNS[q]
+        path = os.path.join(download_dir, f"{codename}{pattern}")
+        if os.path.exists(path):
+            return path, q
+    return None, None
+
+
 def download_files(urls, download_dir, quality="ULTRA_HD", interactive=True):
     os.makedirs(download_dir, exist_ok=True)
     downloaded = {}

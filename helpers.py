@@ -18,6 +18,11 @@ logger = get_logger("helpers")
 TICKS_PER_MS = 48           # UbiArt tick rate: markers[i] / 48 = milliseconds
 DISK_SPACE_MIN_MB = 500     # Minimum free space warning threshold
 DOWNLOAD_TIMEOUT_S = 60     # Network request timeout in seconds
+TOOLTIP_DELAY_MS = 500      # Hover delay before showing tooltips
+PREVIEW_FPS = 24            # Frames per second for embedded video preview
+PREVIEW_POLL_FRAMES = 6     # Update seek UI every N frames (~250ms at 24fps)
+AUDIO_PREVIEW_FADE_S = 2.0  # Default audio preview fade-out duration in seconds
+MAX_JD_VERSION = 2021       # Maximum JDVersion the engine supports
 
 
 # ---------------------------------------------------------------------------

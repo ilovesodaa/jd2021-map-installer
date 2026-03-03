@@ -6,7 +6,7 @@ import subprocess
 import glob
 import zipfile
 from log_config import get_logger
-from helpers import load_ckd_json
+from helpers import load_ckd_json, AUDIO_PREVIEW_FADE_S, MAX_JD_VERSION
 
 logger = get_logger("map_builder")
 
@@ -114,70 +114,15 @@ def extract_musictrack_metadata(ipk_dir):
         return None
 
 
-def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override=None, metadata_overrides=None):
-    map_lower = map_name.lower()
-    
-    # Find musictrack.tpl.ckd
-    ckd_json_paths = glob.glob(os.path.join(ipk_dir, "**", "*musictrack.tpl.ckd"), recursive=True)
-    if not ckd_json_paths:
-        logger.error("Error: Could not find musictrack.tpl.ckd")
-        return None
-    ckd_json_path = ckd_json_paths[0]
+# ---------------------------------------------------------------------------
+# generate_text_files helper functions
+# ---------------------------------------------------------------------------
 
-    # NEW: Find and parse songdesc.tpl.ckd for metadata
-    songdesc_paths = glob.glob(os.path.join(ipk_dir, "**", "*songdesc.tpl.ckd"), recursive=True)
-    sd_struct = {}
-    if songdesc_paths:
-        sd_data = load_ckd_json(songdesc_paths[0])
-        sd_struct = sd_data["COMPONENTS"][0]
-    else:
-        logger.warning("    songdesc.tpl.ckd not found; using default metadata")
-
-    default_colors = sd_struct.get("DefaultColors", {}) if sd_struct else {}
-
-    # Build DefaultColors: use CKD values/keys where available, fall back to hardcoded for missing.
-    # Match case-insensitively so CKD "songcolor_1a" maps to fallback "songColor_1A" without duplicating.
-    default_color_fallbacks = {
-        "lyrics": "0xFF1B34AA",
-        "theme": "0xFFFFFFFF",
-        "songColor_1A": "0x00D1D0D0",
-        "songColor_1B": "0xF50005D0",
-        "songColor_2A": "0x00D1D0D0",
-        "songColor_2B": "0xF50005D0",
-    }
-    # lowercase -> (actual_key_from_ckd, raw_value) for fast case-insensitive lookup
-    ckd_lower_map = {k.lower(): (k, v) for k, v in default_colors.items()}
-
-    # Each entry is (output_key, hex_value)
-    resolved_colors = []
-    for fb_key, fb_hex in default_color_fallbacks.items():
-        if fb_key.lower() in ckd_lower_map:
-            ckd_key, ckd_raw = ckd_lower_map[fb_key.lower()]
-            resolved_colors.append((ckd_key, color_array_to_hex(ckd_raw, default=fb_hex)))
-        else:
-            resolved_colors.append((fb_key, fb_hex))
-    # Append any extra CKD keys not covered by fallbacks
-    fb_lower_set = {k.lower() for k in default_color_fallbacks}
-    for ckd_key, ckd_raw in default_colors.items():
-        if ckd_key.lower() not in fb_lower_set:
-            resolved_colors.append((ckd_key, color_array_to_hex(ckd_raw)))
-
-    default_colors_lua = ""
-    for key, val in resolved_colors:
-        default_colors_lua += f'''
-						{{
-							KEY = "{key}",
-							VAL = "{val}"
-						}},'''
-    
-    mt_data = load_ckd_json(ckd_json_path)
-    mt_struct = mt_data["COMPONENTS"][0]["trackData"]["structure"]
-    
+def _write_musictrack_trk(target_dir, map_name, mt_struct, video_start_time):
+    """Write the .trk music track structure file."""
     markers = ", ".join(f"{{ VAL = {m} }}" for m in mt_struct["markers"])
     sigs = ", ".join(f"{{ MusicSignature = {{ beats = {s['beats']}, marker = {s['marker']} }} }}" for s in mt_struct["signatures"])
     sects = ", ".join(f"{{ MusicSection = {{ sectionType = {s['sectionType']}, marker = {s['marker']} }} }}" for s in mt_struct["sections"])
-
-    video_start_time = video_start_time_override if video_start_time_override is not None else mt_struct['videoStartTime']
 
     trk_content = (
         f"structure = {{ MusicTrackStructure = {{ markers = {{ {markers} }}, "
@@ -196,63 +141,13 @@ def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override
     )
     with open(os.path.join(target_dir, f"Audio/{map_name}.trk"), "w", encoding="utf-8") as f: f.write(trk_content)
 
-    # Determine Coach Number from downloaded images
-    coach_imgs = [f for f in os.listdir(os.path.join(target_dir, "MenuArt/textures")) if "_coach_" in f.lower() and f.endswith(".png")]
-    num_coach = len(coach_imgs) if coach_imgs else 1
-    
-    ckd_phone = sd_struct.get("PhoneImages", {})
-    if ckd_phone:
-        # Use CKD-provided paths (includes cover + all coaches)
-        phone_images_str = ""
-        for k, v in ckd_phone.items():
-            phone_images_str += f'''
-						{{
-							KEY = "{k}",
-							VAL = "{v}"
-						}},'''
-        phone_images_str = phone_images_str.rstrip(",")
-    else:
-        # Fallback: reconstruct from convention
-        phone_images_str = f'''
-						{{
-							KEY = "cover",
-							VAL = "world/maps/{map_lower}/menuart/textures/{map_lower}_cover_phone.jpg"
-						}}'''
-        for i in range(1, num_coach + 1):
-            phone_images_str += f''',
-						{{
-							KEY = "coach{i}",
-							VAL = "world/maps/{map_lower}/menuart/textures/{map_lower}_coach_{i}_phone.png"
-						}}'''
 
-    # Calculate audio preview fade time (usually 2.0s if it exists)
-    audio_prev_fade = 2.0 if float(mt_struct.get('previewEntry', 0)) > 0 else 0.0
-
-    # Apply metadata overrides (for non-ASCII replacement)
-    if metadata_overrides:
-        for field, replacement in metadata_overrides.items():
-            if field in sd_struct or field in ('Title', 'Artist', 'Credits', 'DancerName'):
-                sd_struct[field] = replacement
-
-    # Sanitize metadata strings for Lua output
-    dancer_name = str(sd_struct.get('DancerName', 'Unknown Dancer'))
-    dancer_name = dancer_name.replace('"', '\\"').replace('\n', ' ').replace('\r', '')
-
-    # Extract tags from CKD, fall back to ["Main"]
-    raw_tags = sd_struct.get("Tags", ["Main"]) or ["Main"]
-    tags_lua = ""
-    for t in raw_tags:
-        tags_lua += f'''
-						{{
-							VAL = "{t}"
-						}},'''
-    tags_lua = tags_lua.rstrip(",")
-
-    # Cap JDVersion and OriginalJDVersion to 2021 to prevent GameManagerConfig crashes on JD2022+ maps
-    jd_version_safe = min(int(sd_struct.get('JDVersion', 2021)), 2021)
-    orig_jd_version_safe = min(int(sd_struct.get('OriginalJDVersion', jd_version_safe)), 2021)
-
-    # 1. SongDesc.tpl
+def _write_songdesc(target_dir, map_name, sd_struct, num_coach,
+                    phone_images_str, default_colors_lua, tags_lua,
+                    dancer_name, jd_version_safe, orig_jd_version_safe,
+                    audio_prev_fade):
+    """Write SongDesc.tpl and SongDesc.act."""
+    # SongDesc.tpl
     with open(os.path.join(target_dir, "SongDesc.tpl"), "w", encoding="utf-8") as f:
         f.write(f'''includeReference("EngineData/Helpers/SongDatabase.ilu")
 params =
@@ -314,19 +209,19 @@ params =
 	}}
 }}''')
 
-    # 2. SongDesc.act
+    # SongDesc.act
     with open(os.path.join(target_dir, "SongDesc.act"), "w", encoding="utf-8") as f:
-        f.write(f'''params = 
+        f.write(f'''params =
 {{
-    NAME = "Actor", 
-    Actor = 
+    NAME = "Actor",
+    Actor =
     {{
-        LUA = "World/MAPS/{map_name}/songdesc.tpl", 
-        COMPONENTS = 
+        LUA = "World/MAPS/{map_name}/songdesc.tpl",
+        COMPONENTS =
         {{
             {{
-                NAME = "JD_SongDescComponent", 
-                JD_SongDescComponent = 
+                NAME = "JD_SongDescComponent",
+                JD_SongDescComponent =
                 {{
                 }}
             }}
@@ -334,7 +229,10 @@ params =
     }}
 }}''')
 
-    # 3. {map_name}_musictrack.tpl
+
+def _write_audio_isc(target_dir, map_name):
+    """Write musictrack.tpl, sequence.tpl, .stape, and audio.isc."""
+    # musictrack.tpl
     with open(os.path.join(target_dir, f"Audio/{map_name}_musictrack.tpl"), "w") as f:
         f.write(f'''includeReference("World/MAPS/{map_name}/audio/{map_name}.trk")
 params =
@@ -342,7 +240,7 @@ params =
 	NAME = "Actor_Template",
 	Actor_Template =
 	{{
-		COMPONENTS = 
+		COMPONENTS =
 		{{
 			{{
 				NAME = "MusicTrackComponent_Template",
@@ -363,18 +261,18 @@ params =
 	}}
 }}''')
 
-    # 4. {map_name}_sequence.tpl
+    # sequence.tpl
     with open(os.path.join(target_dir, f"Audio/{map_name}_sequence.tpl"), "w", encoding="utf-8") as f:
         f.write(f'''params =
 {{
 	NAME = "Actor_Template",
 	Actor_Template =
 	{{
-		COMPONENTS = 
+		COMPONENTS =
 		{{
 			{{
-				NAME = "TapeCase_Template", 
-                TapeCase_Template = 
+				NAME = "TapeCase_Template",
+                TapeCase_Template =
                 {{
                     TapesRack =
                     {{
@@ -400,19 +298,19 @@ params =
 	}}
 }}''')
 
-    # 5. {map_name}.stape
+    # .stape
     with open(os.path.join(target_dir, f"Audio/{map_name}.stape"), "w") as f:
         f.write(f'''params =
 {{
     NAME="Tape",
-    Tape = 
+    Tape =
     {{
 		TapeClock = 0,
         MapName = "{map_name}"
     }}
 }}''')
 
-    # 6. {map_name}_audio.isc
+    # audio.isc
     with open(os.path.join(target_dir, f"Audio/{map_name}_audio.isc"), "w") as f:
         f.write(f'''<?xml version="1.0" encoding="ISO-8859-1"?>
 <root>
@@ -437,7 +335,9 @@ params =
 	</Scene>
 </root>''')
 
-    # 7. Timeline TPLs and ACTs
+
+def _write_timeline_files(target_dir, map_name):
+    """Write Timeline TPLs, ACTs, and the tml.isc scene file."""
     for ty, tpl_name in [("Dance", "Motion"), ("Karaoke", "Karaoke")]:
         with open(os.path.join(target_dir, f"Timeline/{map_name}_TML_{ty}.tpl"), "w") as f:
             f.write(f'''params =
@@ -445,11 +345,11 @@ params =
 	NAME = "Actor_Template",
 	Actor_Template =
 	{{
-		COMPONENTS = 
+		COMPONENTS =
 		{{
 			{{
-				NAME = "TapeCase_Template", 
-                TapeCase_Template = 
+				NAME = "TapeCase_Template",
+                TapeCase_Template =
                 {{
                     TapesRack =
                     {{
@@ -476,17 +376,17 @@ params =
 }}''')
 
         with open(os.path.join(target_dir, f"Timeline/{map_name}_TML_{ty}.act"), "w") as f:
-            f.write(f'''params = 
+            f.write(f'''params =
 {{
-    NAME = "Actor", 
-    Actor = 
+    NAME = "Actor",
+    Actor =
     {{
-        LUA = "World/MAPS/{map_name}/timeline/{map_name}_TML_{ty}.tpl", 
-        COMPONENTS = 
+        LUA = "World/MAPS/{map_name}/timeline/{map_name}_TML_{ty}.tpl",
+        COMPONENTS =
         {{
             {{
-                NAME = "TapeCase_Component", 
-                TapeCase_Component = 
+                NAME = "TapeCase_Component",
+                TapeCase_Component =
                 {{
                 }}
             }}
@@ -494,7 +394,7 @@ params =
     }}
 }}''')
 
-    # 8. {map_name}_tml.isc
+    # tml.isc
     with open(os.path.join(target_dir, f"Timeline/{map_name}_tml.isc"), "w") as f:
         f.write(f'''<?xml version="1.0" encoding="ISO-8859-1"?>
 <root>
@@ -516,7 +416,9 @@ params =
     </Scene>
 </root>''')
 
-    # 9. VideosCoach
+
+def _write_videoscoach_files(target_dir, map_name):
+    """Write VideosCoach MPDs, video player ACTs, and video ISC files."""
     for mpd_name in [map_name, f"{map_name}_MapPreview"]:
         with open(os.path.join(target_dir, f"VideosCoach/{mpd_name}.mpd"), "w") as f:
             f.write(f'''<?xml version="1.0"?>
@@ -532,21 +434,21 @@ params =
 		</AdaptationSet>
 	</Period>
 </MPD>''')
-            
+
     with open(os.path.join(target_dir, f"VideosCoach/video_player_main.act"), "w") as f:
-        f.write(f'''params = 
+        f.write(f'''params =
 {{
-    NAME="Actor", 
-    Actor = 
+    NAME="Actor",
+    Actor =
     {{
-        LUA = "world/_common/videoscreen/video_player_main.tpl", 
-        COMPONENTS = 
+        LUA = "world/_common/videoscreen/video_player_main.tpl",
+        COMPONENTS =
         {{
             {{
-                NAME="PleoComponent", 
-                PleoComponent = 
+                NAME="PleoComponent",
+                PleoComponent =
                 {{
-                    Video = "World/MAPS/{map_name}/videoscoach/{map_name}.webm", 
+                    Video = "World/MAPS/{map_name}/videoscoach/{map_name}.webm",
                     dashMPD = "World/MAPS/{map_name}/videoscoach/{map_name}.mpd"
                 }}
             }}
@@ -555,20 +457,20 @@ params =
 }}''')
 
     with open(os.path.join(target_dir, f"VideosCoach/video_player_map_preview.act"), "w") as f:
-        f.write(f'''params = 
+        f.write(f'''params =
 {{
-    NAME="Actor", 
-    Actor = 
+    NAME="Actor",
+    Actor =
     {{
-        LUA = "world/_common/videoscreen/video_player_map_preview.tpl", 
-        COMPONENTS = 
+        LUA = "world/_common/videoscreen/video_player_map_preview.tpl",
+        COMPONENTS =
         {{
             {{
-                NAME="PleoComponent", 
-                PleoComponent = 
+                NAME="PleoComponent",
+                PleoComponent =
                 {{
-                    Video = "World/MAPS/{map_name}/videoscoach/{map_name}.webm", 
-                    dashMPD = "World/MAPS/{map_name}/videoscoach/{map_name}.mpd", 
+                    Video = "World/MAPS/{map_name}/videoscoach/{map_name}.webm",
+                    dashMPD = "World/MAPS/{map_name}/videoscoach/{map_name}.mpd",
                     channelID = "{map_name}"
                 }}
             }}
@@ -613,36 +515,39 @@ params =
     </Scene>
 </root>''')
 
-    # 10. MenuArt Actors
+
+def _write_menuart_files(target_dir, map_name, num_coach):
+    """Write MenuArt actor ACTs, menuart.isc, and the main scene ISC."""
+    # MenuArt Actors
     coach_arts = [f"coach_{i}" for i in range(1, num_coach + 1)] if num_coach > 0 else []
     arts = ['banner_bkg', 'cover_albumbkg', 'cover_albumcoach', 'cover_generic', 'cover_online', 'map_bkg'] + coach_arts
     for art in arts:
         with open(os.path.join(target_dir, f"MenuArt/Actors/{map_name}_{art}.act"), "w") as f:
-            f.write(f'''params = 
+            f.write(f'''params =
 {{
-    NAME="Actor", 
-    Actor = 
+    NAME="Actor",
+    Actor =
     {{
-        RELATIVEZ = 0, 
-        LUA = "enginedata/actortemplates/tpl_materialgraphiccomponent2d.tpl", 
-        COMPONENTS = 
+        RELATIVEZ = 0,
+        LUA = "enginedata/actortemplates/tpl_materialgraphiccomponent2d.tpl",
+        COMPONENTS =
         {{
             {{
-                NAME = "MaterialGraphicComponent", 
-                MaterialGraphicComponent = 
+                NAME = "MaterialGraphicComponent",
+                MaterialGraphicComponent =
                 {{
-                    disableLight = 0, 
-                    material = 
+                    disableLight = 0,
+                    material =
                     {{
-                        GFXMaterialSerializable = 
+                        GFXMaterialSerializable =
                         {{
-                            textureSet = 
+                            textureSet =
                             {{
-                                GFXMaterialTexturePathSet = 
+                                GFXMaterialTexturePathSet =
                                 {{
                                     diffuse = "World/MAPS/{map_name}/menuart/textures/{map_name}_{art}.tga"
                                 }}
-                            }}, 
+                            }},
                             shaderPath = "World/_COMMON/MatShader/MultiTexture_1Layer.msh"
                         }}
                     }}
@@ -652,7 +557,7 @@ params =
     }}
 }}''')
 
-    # 11. MenuArt ISC & Main Scene ISC
+    # MenuArt ISC
     with open(os.path.join(target_dir, f"MenuArt/{map_name}_menuart.isc"), "w") as f:
         f.write(f'''<?xml version="1.0" encoding="ISO-8859-1"?>
 <root>
@@ -709,7 +614,8 @@ params =
 		</ACTORS>
 	</Scene>
 </root>''')
-        
+
+    # Main Scene ISC
     with open(os.path.join(target_dir, f"{map_name}_MAIN_SCENE.isc"), "w") as f:
         f.write(f'''<?xml version="1.0" encoding="ISO-8859-1"?>
 <root>
@@ -764,19 +670,23 @@ params =
 	</Scene>
 </root>''')
 
-    # 11.5 Autodance Templates
-    # Guard: don't overwrite autodance files if the TPL already contains real
-    # converted data (>1KB).  Step 11 of the pipeline converts CKD autodance
-    # data into full TPLs (~50-65KB).  This function is called again during
-    # sync refinement ("Apply"), and without this guard it would replace the
-    # real data with an empty stub.
+
+def _write_autodance_stubs(target_dir, map_name):
+    """Write Autodance ISC, TPL, and ACT stub files.
+
+    Skips writing if the TPL already contains real converted data (>1KB)
+    from Step 11 of the pipeline, to avoid overwriting during sync
+    refinement re-runs.
+    """
     autodance_tpl_path = os.path.join(target_dir, f"Autodance/{map_name}_autodance.tpl")
     _skip_autodance = (os.path.exists(autodance_tpl_path)
                        and os.path.getsize(autodance_tpl_path) >= 1024)
 
-    if not _skip_autodance:
-        with open(os.path.join(target_dir, f"Autodance/{map_name}_autodance.isc"), "w") as f:
-            f.write(f'''<?xml version="1.0" encoding="ISO-8859-1"?>
+    if _skip_autodance:
+        return
+
+    with open(os.path.join(target_dir, f"Autodance/{map_name}_autodance.isc"), "w") as f:
+        f.write(f'''<?xml version="1.0" encoding="ISO-8859-1"?>
 <root>
 	<Scene ENGINE_VERSION="81615" GRIDUNIT="0.500000" DEPTH_SEPARATOR="0" NEAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000" FAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000">
 		<ACTORS NAME="Actor">
@@ -792,8 +702,8 @@ params =
 	</Scene>
 </root>''')
 
-        with open(autodance_tpl_path, "w") as f:
-            f.write(f'''params =
+    with open(autodance_tpl_path, "w") as f:
+        f.write(f'''params =
 {{
 	NAME = "Actor_Template",
 	Actor_Template =
@@ -820,8 +730,8 @@ params =
 	}}
 }}''')
 
-        with open(os.path.join(target_dir, f"Autodance/{map_name}_autodance.act"), "w") as f:
-            f.write(f'''params =
+    with open(os.path.join(target_dir, f"Autodance/{map_name}_autodance.act"), "w") as f:
+        f.write(f'''params =
 {{
 	NAME = "Actor",
 	Actor =
@@ -830,12 +740,15 @@ params =
 	}}
 }}''')
 
-    # 12. Cinematics tape, cine isc, tpl, act
+
+def _write_cinematics_stubs(target_dir, map_name):
+    """Write Cinematics tape/ISC/TPL/ACT stubs and ConfigMusic.sfi."""
+    # Cinematics tape
     with open(os.path.join(target_dir, f"Cinematics/{map_name}_MainSequence.tape"), "w") as f:
         f.write(f'''params =
 {{
     NAME = "Tape",
-    Tape = 
+    Tape =
     {{
         Clips = {{
         }},
@@ -847,6 +760,7 @@ params =
     }}
 }}''')
 
+    # Cinematics ISC
     with open(os.path.join(target_dir, f"Cinematics/{map_name}_cine.isc"), "w") as f:
         f.write(f'''<?xml version="1.0" encoding="ISO-8859-1"?>
 <root>
@@ -864,17 +778,18 @@ params =
 	</Scene>
 </root>''')
 
+    # Cinematics TPL
     with open(os.path.join(target_dir, f"Cinematics/{map_name}_mainsequence.tpl"), "w") as f:
-        f.write(f'''params = 
+        f.write(f'''params =
 {{
-    NAME = "Actor_Template", 
-    Actor_Template = 
+    NAME = "Actor_Template",
+    Actor_Template =
     {{
-        COMPONENTS = 
+        COMPONENTS =
         {{
             {{
-                NAME = "MasterTape_Template", 
-                MasterTape_Template = 
+                NAME = "MasterTape_Template",
+                MasterTape_Template =
                 {{
                     TapePath = "World/MAPS/{map_name}/Cinematics/{map_name}_MainSequence.tape"
                 }}
@@ -883,14 +798,15 @@ params =
     }}
 }}''')
 
+    # Cinematics ACT
     with open(os.path.join(target_dir, f"Cinematics/{map_name}_mainsequence.act"), "w") as f:
-        f.write(f'''params = 
+        f.write(f'''params =
 {{
-    NAME = "Actor", 
-    Actor = 
+    NAME = "Actor",
+    Actor =
     {{
-        LUA = "World/MAPS/{map_name}/cinematics/{map_name}_mainsequence.tpl", 
-        COMPONENTS = 
+        LUA = "World/MAPS/{map_name}/cinematics/{map_name}_mainsequence.tpl",
+        COMPONENTS =
         {{
             {{
                 NAME = "MasterTape"
@@ -899,7 +815,7 @@ params =
     }}
 }}''')
 
-    # 13. Audio ConfigMusic.sfi (sound format config per platform)
+    # ConfigMusic.sfi (sound format config per platform)
     with open(os.path.join(target_dir, f"Audio/ConfigMusic.sfi"), "w") as f:
         f.write('''<root>
   <SoundConfiguration TargetName="PC" Format="PCM" IsStreamed="1" IsMusic="1"/>
@@ -914,6 +830,145 @@ params =
   <SoundConfiguration TargetName="PROSPERO" Format="PCM" IsStreamed="1" IsMusic="1"/>
   <SoundConfiguration TargetName="SCARLETT" Format="PCM" IsStreamed="1" IsMusic="1"/>
 </root>''')
+
+
+# ---------------------------------------------------------------------------
+# Main orchestrator
+# ---------------------------------------------------------------------------
+
+def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override=None, metadata_overrides=None):
+    """Generate all UbiArt config/scene files for a map installation.
+
+    Parses CKD metadata, then delegates file generation to helper functions.
+    """
+    map_lower = map_name.lower()
+
+    # Find musictrack.tpl.ckd
+    ckd_json_paths = glob.glob(os.path.join(ipk_dir, "**", "*musictrack.tpl.ckd"), recursive=True)
+    if not ckd_json_paths:
+        logger.error("Error: Could not find musictrack.tpl.ckd")
+        return None
+    ckd_json_path = ckd_json_paths[0]
+
+    # Find and parse songdesc.tpl.ckd for metadata
+    songdesc_paths = glob.glob(os.path.join(ipk_dir, "**", "*songdesc.tpl.ckd"), recursive=True)
+    sd_struct = {}
+    if songdesc_paths:
+        sd_data = load_ckd_json(songdesc_paths[0])
+        sd_struct = sd_data["COMPONENTS"][0]
+    else:
+        logger.warning("    songdesc.tpl.ckd not found; using default metadata")
+
+    default_colors = sd_struct.get("DefaultColors", {}) if sd_struct else {}
+
+    # Build DefaultColors: use CKD values/keys where available, fall back to hardcoded for missing.
+    # Match case-insensitively so CKD "songcolor_1a" maps to fallback "songColor_1A" without duplicating.
+    default_color_fallbacks = {
+        "lyrics": "0xFF1B34AA",
+        "theme": "0xFFFFFFFF",
+        "songColor_1A": "0x00D1D0D0",
+        "songColor_1B": "0xF50005D0",
+        "songColor_2A": "0x00D1D0D0",
+        "songColor_2B": "0xF50005D0",
+    }
+    # lowercase -> (actual_key_from_ckd, raw_value) for fast case-insensitive lookup
+    ckd_lower_map = {k.lower(): (k, v) for k, v in default_colors.items()}
+
+    # Each entry is (output_key, hex_value)
+    resolved_colors = []
+    for fb_key, fb_hex in default_color_fallbacks.items():
+        if fb_key.lower() in ckd_lower_map:
+            ckd_key, ckd_raw = ckd_lower_map[fb_key.lower()]
+            resolved_colors.append((ckd_key, color_array_to_hex(ckd_raw, default=fb_hex)))
+        else:
+            resolved_colors.append((fb_key, fb_hex))
+    # Append any extra CKD keys not covered by fallbacks
+    fb_lower_set = {k.lower() for k in default_color_fallbacks}
+    for ckd_key, ckd_raw in default_colors.items():
+        if ckd_key.lower() not in fb_lower_set:
+            resolved_colors.append((ckd_key, color_array_to_hex(ckd_raw)))
+
+    default_colors_lua = ""
+    for key, val in resolved_colors:
+        default_colors_lua += f'''
+						{{
+							KEY = "{key}",
+							VAL = "{val}"
+						}},'''
+
+    mt_data = load_ckd_json(ckd_json_path)
+    mt_struct = mt_data["COMPONENTS"][0]["trackData"]["structure"]
+
+    video_start_time = video_start_time_override if video_start_time_override is not None else mt_struct['videoStartTime']
+
+    # Determine Coach Number from downloaded images
+    coach_imgs = [f for f in os.listdir(os.path.join(target_dir, "MenuArt/textures")) if "_coach_" in f.lower() and f.endswith(".png")]
+    num_coach = len(coach_imgs) if coach_imgs else 1
+
+    ckd_phone = sd_struct.get("PhoneImages", {})
+    if ckd_phone:
+        # Use CKD-provided paths (includes cover + all coaches)
+        phone_images_str = ""
+        for k, v in ckd_phone.items():
+            phone_images_str += f'''
+						{{
+							KEY = "{k}",
+							VAL = "{v}"
+						}},'''
+        phone_images_str = phone_images_str.rstrip(",")
+    else:
+        # Fallback: reconstruct from convention
+        phone_images_str = f'''
+						{{
+							KEY = "cover",
+							VAL = "world/maps/{map_lower}/menuart/textures/{map_lower}_cover_phone.jpg"
+						}}'''
+        for i in range(1, num_coach + 1):
+            phone_images_str += f''',
+						{{
+							KEY = "coach{i}",
+							VAL = "world/maps/{map_lower}/menuart/textures/{map_lower}_coach_{i}_phone.png"
+						}}'''
+
+    # Calculate audio preview fade time (usually 2.0s if it exists)
+    audio_prev_fade = AUDIO_PREVIEW_FADE_S if float(mt_struct.get('previewEntry', 0)) > 0 else 0.0
+
+    # Apply metadata overrides (for non-ASCII replacement)
+    if metadata_overrides:
+        for field, replacement in metadata_overrides.items():
+            if field in sd_struct or field in ('Title', 'Artist', 'Credits', 'DancerName'):
+                sd_struct[field] = replacement
+
+    # Sanitize metadata strings for Lua output
+    dancer_name = str(sd_struct.get('DancerName', 'Unknown Dancer'))
+    dancer_name = dancer_name.replace('"', '\\"').replace('\n', ' ').replace('\r', '')
+
+    # Extract tags from CKD, fall back to ["Main"]
+    raw_tags = sd_struct.get("Tags", ["Main"]) or ["Main"]
+    tags_lua = ""
+    for t in raw_tags:
+        tags_lua += f'''
+						{{
+							VAL = "{t}"
+						}},'''
+    tags_lua = tags_lua.rstrip(",")
+
+    # Cap JDVersion and OriginalJDVersion to 2021 to prevent GameManagerConfig crashes on JD2022+ maps
+    jd_version_safe = min(int(sd_struct.get('JDVersion', MAX_JD_VERSION)), MAX_JD_VERSION)
+    orig_jd_version_safe = min(int(sd_struct.get('OriginalJDVersion', jd_version_safe)), MAX_JD_VERSION)
+
+    # --- Generate all files via helpers ---
+    _write_musictrack_trk(target_dir, map_name, mt_struct, video_start_time)
+    _write_songdesc(target_dir, map_name, sd_struct, num_coach,
+                    phone_images_str, default_colors_lua, tags_lua,
+                    dancer_name, jd_version_safe, orig_jd_version_safe,
+                    audio_prev_fade)
+    _write_audio_isc(target_dir, map_name)
+    _write_timeline_files(target_dir, map_name)
+    _write_videoscoach_files(target_dir, map_name)
+    _write_menuart_files(target_dir, map_name, num_coach)
+    _write_autodance_stubs(target_dir, map_name)
+    _write_cinematics_stubs(target_dir, map_name)
 
     return video_start_time
 
