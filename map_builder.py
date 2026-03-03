@@ -293,7 +293,7 @@ params =
 					Tags =
 					{{{tags_lua}
 					}},
-					Status = {sd_struct.get('Status', 3)},
+					Status = {3 if int(sd_struct.get('Status', 3)) == 12 else sd_struct.get('Status', 3)},
 					LocaleID = {sd_struct.get('LocaleID', 4294967295)},
 					MojoValue = {sd_struct.get('MojoValue', 0)},
 					CountInProgression = 0,
