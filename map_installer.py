@@ -6,12 +6,16 @@ import wave
 import zipfile
 import argparse
 import sys
-import fnmatch
+import signal
 import re
 import datetime
 import time
 import json
 import platform
+from log_config import get_logger, setup_cli_logging
+from helpers import DISK_SPACE_MIN_MB
+
+logger = get_logger("map_installer")
 
 # Directory containing this script - always the project root regardless of
 # where the user's game data lives.
@@ -26,33 +30,20 @@ import ubiart_lua
 import ipk_unpack
 
 
-class TeeOutput:
-    """Writes to both the original stream and a log file simultaneously."""
+# ---------------------------------------------------------------------------
+# Graceful Ctrl+C handling
+# ---------------------------------------------------------------------------
 
-    def __init__(self, original, log_file):
-        self.original = original
-        self.log_file = log_file
-
-    def write(self, text):
-        try:
-            self.original.write(text)
-        except UnicodeEncodeError:
-            self.original.write(text.encode('ascii', errors='replace').decode('ascii'))
-        self.log_file.write(text)
-        self.log_file.flush()
-
-    def flush(self):
-        self.original.flush()
-        self.log_file.flush()
+_interrupted = False
 
 
-def setup_log_file(map_name):
-    """Create a timestamped log file in the project logs/ dir."""
-    logs_dir = os.path.join(SCRIPT_DIR, "logs")
-    os.makedirs(logs_dir, exist_ok=True)
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_path = os.path.join(logs_dir, f"install_{map_name}_{timestamp}.log")
-    return open(log_path, "w", encoding="utf-8", buffering=1)
+def _signal_handler(signum, frame):
+    global _interrupted
+    _interrupted = True
+    logger.warning("\nInterrupt received. Will stop after current step completes.")
+
+
+signal.signal(signal.SIGINT, _signal_handler)
 
 
 def sanitize_map_name(map_name, interactive=True):
@@ -64,19 +55,19 @@ def sanitize_map_name(map_name, interactive=True):
         pass
 
     non_ascii = [c for c in map_name if ord(c) > 127]
-    print(f"\n    ⚠ Map name '{map_name}' contains non-standard characters: {non_ascii}")
-    print(f"    These characters can cause file path and game engine issues.")
+    logger.warning("\n    [!] Map name '%s' contains non-standard characters: %s", map_name, non_ascii)
+    logger.warning("    These characters can cause file path and game engine issues.")
 
     if interactive:
         replacement = input(f"    Enter a replacement name (or press Enter to keep '{map_name}'): ").strip()
         if replacement:
-            print(f"    Using replacement name: {replacement}")
+            logger.info("    Using replacement name: %s", replacement)
             return replacement
 
     # Non-interactive fallback: strip non-ASCII chars
     safe_name = ''.join(c for c in map_name if ord(c) < 128)
     if safe_name and safe_name != map_name:
-        print(f"    Auto-stripped to: {safe_name}")
+        logger.info("    Auto-stripped to: %s", safe_name)
         return safe_name
 
     return map_name
@@ -197,8 +188,8 @@ def load_map_config(map_name):
             print(f"    Found previous config for {map_name}, using saved sync values")
             print(f"      v_override={data.get('v_override')}, a_offset={data.get('a_offset')}, quality={data.get('quality')}")
             return data
-        except Exception as e:
-            print(f"    Warning: Could not load config for {map_name}: {e}")
+        except (json.JSONDecodeError, OSError, KeyError) as e:
+            logger.warning("    Warning: Could not load config for %s: %s", map_name, e)
     return None
 
 
@@ -234,7 +225,7 @@ def load_paths_cache():
             # Validate: SkuScene must still exist on disk
             if os.path.isfile(data.get('sku_scene', '')):
                 return data
-        except Exception:
+        except (json.JSONDecodeError, OSError, KeyError):
             pass
     return None
 
@@ -244,7 +235,7 @@ def save_paths_cache(paths):
     try:
         with open(PATHS_CACHE_FILE, 'w', encoding='utf-8') as f:
             json.dump(paths, f, indent=2)
-    except Exception:
+    except OSError:
         pass
 
 
@@ -326,7 +317,7 @@ def resolve_game_paths(search_root, use_cache=True):
         return _found(jd21_dir, sku_found)
 
     # Resolution failed — print diagnostic output
-    print("    ❌ Could not locate JD2021 game data. Paths checked:")
+    print("    [X] Could not locate JD2021 game data. Paths checked:")
     for p in checked_paths:
         print(f"       {p}")
     print("\n    Suggestions:")
@@ -485,7 +476,7 @@ def preflight_check(jd_dir, asset_html, nohud_html, auto_install=False,
         # Disk space check
         try:
             free = shutil.disk_usage(jd21_dir).free
-            if free < 500 * 1024 * 1024:  # 500 MB
+            if free < DISK_SPACE_MIN_MB * 1024 * 1024:
                 warn(f"Low disk space: {free // (1024*1024)} MB free")
             else:
                 ok(f"Disk space: {free // (1024*1024)} MB free")
@@ -1169,8 +1160,8 @@ def step_04_unpack_ipk(state):
         print(f"    Unpacking {os.path.basename(ipk)}...")
         try:
             ipk_unpack.extract(ipk, state.ipk_extracted)
-        except Exception as e:
-            print(f"    Warning: IPK extraction issue: {e}")
+        except (AssertionError, OSError, struct.error) as e:
+            logger.warning("    Warning: IPK extraction issue: %s", e)
 
 
 def step_05_decode_menuart(state):
@@ -1179,7 +1170,7 @@ def step_05_decode_menuart(state):
     for file in os.listdir(state.download_dir):
         src = os.path.join(state.download_dir, file)
         dst = None
-        if fnmatch.fnmatch(file, "*.tga.ckd") or file.endswith(".jpg") or file.endswith(".png"):
+        if file.endswith(".tga.ckd") or file.endswith(".jpg") or file.endswith(".png"):
             if "Phone" in file or "1024" in file or state.codename.lower() in file.lower() or state.map_name.lower() in file.lower():
                 new_name = re.sub(re.escape(state.codename), state.map_name, file, flags=re.IGNORECASE) if state.codename.lower() in file.lower() else file
                 dst = os.path.join(state.target_dir, f"MenuArt/textures/{new_name}")
@@ -1286,7 +1277,7 @@ def step_06_generate_configs(state):
     if problems:
         non_ascii_fields = {k: v for k, v in problems.items() if k not in state.metadata_overrides}
         if non_ascii_fields:
-            print(f"\n    ⚠ Non-ASCII characters detected in song metadata:")
+            print(f"\n    [!] Non-ASCII characters detected in song metadata:")
             for field, val in non_ascii_fields.items():
                 non_ascii = [c for c in val if ord(c) > 127]
                 print(f"      {field}: '{val}'")
@@ -1711,7 +1702,7 @@ def main():
     print("==================================================")
     print("           JD2021 Custom Map Installer            ")
     print("==================================================")
-    print("⚠ IMPORTANT: 'Asset' and 'NoHUD' HTML links expire")
+    print("[!] IMPORTANT: 'Asset' and 'NoHUD' HTML links expire")
     print("  after roughly 30 minutes! If your download fails,")
     print("  fetch fresh links from the server.")
     print("==================================================\n")
@@ -1766,15 +1757,15 @@ def main():
                 state.marker_preroll_ms = saved.get('marker_preroll_ms')
 
     # Start logging to file — everything from here on is captured to both terminal and log
-    _log_file = setup_log_file(state.map_name)
-    sys.stdout = TeeOutput(sys.stdout, _log_file)
+    _log_path = setup_cli_logging(state.map_name)
 
     print(f"--- Environment ---")
     print(f"Game Dir:    {state.jd21_dir}")
     print(f"Search Root: {state.jd_dir}")
     print(f"Map Name:    {state.map_name}")
     print(f"Asset HTML:  {state.asset_html}")
-    print(f"Log file:    {_log_file.name}")
+    if _log_path:
+        print(f"Log file:    {_log_path}")
     print(f"-------------------")
 
     if not preflight_check(state.jd_dir, state.asset_html, state.nohud_html):
@@ -1784,6 +1775,9 @@ def main():
 
     # Run all pipeline steps
     for step_name, step_fn in PIPELINE_STEPS:
+        if _interrupted:
+            logger.warning("Interrupted before '%s'. Exiting.", step_name)
+            sys.exit(130)
         try:
             step_fn(state)
         except RuntimeError as e:

@@ -68,6 +68,14 @@ For comparison, maps that work immediately use `Status = 3` (Available).
 
 **Complexity:** Medium. The infrastructure is ~95% in place. Main work is the merge logic change and NX SKU registration.
 
+Claude questions for other members:
+1. What controller setup are people using? Are they using actual Nintendo Switch Joy-Cons connected to PC via Bluetooth, or a different controller that emulates joycon input? This matters because the game's NX input handlers (input_menu_nx_joycon_left.isg, etc.) expect specific input mappings.
+2. Do they want NX gestures (motion-based moves) or just the NX controller button mapping? The codebase has NX .gesture files in the extracted data, but the merge logic currently only copies DURANGO/SCARLETT gestures into PC/. If they want motion-based scoring via joycons, the NX gestures need to be used instead. If they just want controller compatibility, the existing PC gestures might work fine.
+3. Has anyone already gotten joycon scoring working manually with JD2021 on PC? If so, what files did they modify and what was the folder structure? Specifically:
+- Did they need to register maps in SkuScene_Maps_NX_All.isc?
+- Did they need to replace PC/ gesture/move files with NX/ versions?
+- Did they need to modify any game config to enable NX input mode?
+4. Should NX mode be the default, or opt-in? The TODO suggests a checkbox/CLI flag. Is this something most users would want enabled, or only a subset? This determines whether it should be a checkbox (opt-in) or a default behavior.
 ---
 
 ## 4. Delete Downloaded Files After Apply

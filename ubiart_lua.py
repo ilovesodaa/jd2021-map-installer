@@ -9,6 +9,10 @@ Ported and improved from jduncooker.py / uaf2lua.py (JDTools by BLDS).
 
 import json
 import os
+from log_config import get_logger
+from helpers import load_ckd_json  # noqa: F401 — re-exported for backwards compatibility
+
+logger = get_logger("ubiart_lua")
 
 
 # ---------------------------------------------------------------------------
@@ -90,10 +94,7 @@ def dict_to_lua(data, indent=0, from_list=False):
 # Helper functions
 # ---------------------------------------------------------------------------
 
-def load_ckd_json(file_path):
-    """Read a .ckd file, strip trailing null bytes, parse as JSON."""
-    with open(file_path, 'rb') as f:
-        return json.loads(f.read().rstrip(b'\x00'))
+# load_ckd_json is imported from helpers and re-exported above
 
 
 def argb_hex(color_list, default="0xffffffff"):

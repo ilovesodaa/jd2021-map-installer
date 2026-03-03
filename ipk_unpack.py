@@ -7,6 +7,9 @@ import struct
 from pathlib import Path
 import zlib
 import lzma
+from log_config import get_logger
+
+logger = get_logger("ipk_unpack")
 
 # Define endianness as big endian
 ENDIANNESS = '>'
@@ -82,7 +85,7 @@ def extract(target_file, output_dir=None):
             "Not a valid IPK file (bad magic bytes)"
 
         num_files = _unpack(ipk_header['num_files']['value'])
-        print(f"    IPK: Found {num_files} files...")
+        logger.info("    IPK: Found %d files...", num_files)
 
         file_chunks = []
         for _ in range(num_files):
@@ -117,6 +120,12 @@ def extract(target_file, output_dir=None):
                 file_path = output_path / file_chunks[k]['path_name']['value'].decode()
                 file_name = file_chunks[k]['file_name']['value'].decode()
 
+            # Path traversal protection: ensure extracted files stay within output dir
+            resolved = os.path.normpath(os.path.join(str(file_path), file_name))
+            if not resolved.startswith(str(output_path)):
+                logger.warning("    Skipping path-traversal entry: %s", resolved)
+                continue
+
             file.seek(offset + base_offset)
             file_path.mkdir(parents=True, exist_ok=True)
 
@@ -127,8 +136,9 @@ def extract(target_file, output_dir=None):
                 except zlib.error:
                     try:
                         decompressed = lzma.decompress(raw_data)
-                    except Exception:
+                    except lzma.LZMAError:
+                        logger.debug("    File %s is not compressed (zlib/lzma failed), using raw data", file_name)
                         decompressed = raw_data
                 ff.write(decompressed)
 
-    print(f"    IPK: Extracted {num_files} files to {output_path}")
+    logger.info("    IPK: Extracted %d files to %s", num_files, output_path)

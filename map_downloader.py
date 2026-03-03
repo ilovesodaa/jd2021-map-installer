@@ -9,7 +9,13 @@ import shutil
 import argparse
 import time
 from urllib.parse import urlparse, unquote
+from log_config import get_logger
+from helpers import DOWNLOAD_TIMEOUT_S
 
+logger = get_logger("map_downloader")
+
+# SSL certificate verification disabled for Ubisoft CDN compatibility.
+# Some systems fail to verify Ubisoft's CDN certificates; this is intentional.
 ssl._create_default_https_context = ssl._create_unverified_context
 
 _USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -20,11 +26,17 @@ _RETRY_BASE_DELAY = 2   # seconds; doubles each retry
 _INTER_REQUEST_DELAY = 0.5  # seconds between sequential downloads
 
 def extract_urls(html_file):
-    with open(html_file, "r", encoding="utf-8") as f:
-        html = f.read()
-    
+    if not os.path.isfile(html_file):
+        raise FileNotFoundError(f"HTML file not found: {html_file}")
+
+    try:
+        with open(html_file, "r", encoding="utf-8") as f:
+            html = f.read()
+    except UnicodeDecodeError as e:
+        raise ValueError(f"Cannot read HTML file (encoding error): {e}") from e
+
     urls = re.findall(r'href="(https?://[^"]+)"', html)
-    
+
     clean_urls = set()
     for url in urls:
         if "discordapp.net" in url: continue
@@ -81,6 +93,7 @@ def download_files(urls, download_dir, quality="ULTRA_HD", interactive=True):
 
     quality = quality.upper()
     if quality not in QUALITY_ORDER:
+        logger.warning("Unknown quality '%s', falling back to ULTRA_HD", quality)
         quality = "ULTRA_HD"
 
     main_scene_zip = None
@@ -113,13 +126,13 @@ def download_files(urls, download_dir, quality="ULTRA_HD", interactive=True):
         if plat in scene_zips_by_platform:
             main_scene_zip = scene_zips_by_platform[plat]
             if plat != "DURANGO" and "DURANGO" not in scene_zips_by_platform:
-                print(f"    Note: DURANGO mainscene not available, using {plat}")
+                logger.info("    Note: DURANGO mainscene not available, using %s", plat)
             break
     if not main_scene_zip and scene_zips_by_platform:
         # Fallback: pick any available platform
         fallback_plat = next(iter(scene_zips_by_platform))
         main_scene_zip = scene_zips_by_platform[fallback_plat]
-        print(f"    Note: Using {fallback_plat} mainscene (no preferred platform found)")
+        logger.info("    Note: Using %s mainscene (no preferred platform found)", fallback_plat)
 
     # Select video URL by quality preference (starting from requested, falling back)
     preferred_idx = QUALITY_ORDER.index(quality)
@@ -128,7 +141,7 @@ def download_files(urls, download_dir, quality="ULTRA_HD", interactive=True):
         if q in video_urls_by_quality:
             video_url = video_urls_by_quality[q]
             if q != quality:
-                print(f"    Requested quality {quality} not available, using {q}")
+                logger.info("    Requested quality %s not available, using %s", quality, q)
             break
 
     # Check if a video of a DIFFERENT quality already exists in download_dir
@@ -150,7 +163,7 @@ def download_files(urls, download_dir, quality="ULTRA_HD", interactive=True):
                         break
                 else:
                     # Non-interactive (batch/GUI): reuse existing video silently
-                    print(f"    Reusing existing video: {existing} (skipping {requested_fname})")
+                    logger.info("    Reusing existing video: %s (skipping %s)", existing, requested_fname)
                     video_url = None
                     break
 
@@ -168,26 +181,27 @@ def download_files(urls, download_dir, quality="ULTRA_HD", interactive=True):
         fname = get_filename_from_url(url)
         # Rename url hash files if missing the name
         if len(fname) == 32 and "." not in fname:
-            pass # Keep it, we'll decode later
+            pass  # Keep it, we'll decode later
 
         target = os.path.join(download_dir, fname)
         if not os.path.exists(target):
-            print(f"Downloading {fname}...")
+            logger.info("Downloading %s...", fname)
             req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
             for attempt in range(1, _MAX_RETRIES + 1):
                 try:
-                    with urllib.request.urlopen(req) as response:
+                    with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT_S) as response:
                         with open(target, "wb") as f:
                             f.write(response.read())
                     break  # success
                 except urllib.error.HTTPError as e:
                     if e.code == 429:
                         retry_after = int(e.headers.get("Retry-After", _RETRY_BASE_DELAY * attempt))
-                        print(f"    Rate limited (429). Waiting {retry_after}s before retry {attempt}/{_MAX_RETRIES}...")
+                        logger.warning("    Rate limited (429). Waiting %ds before retry %d/%d...",
+                                       retry_after, attempt, _MAX_RETRIES)
                         time.sleep(retry_after)
                         continue
                     if e.code in (403, 404):
-                        print(f"    HTTP {e.code} for {fname} -- links may have expired!")
+                        logger.error("    HTTP %d for %s -- links may have expired!", e.code, fname)
                         if fname.endswith('.webm') and interactive:
                             existing_webms = [f for f in os.listdir(download_dir)
                                               if f.endswith('.webm') and 'MapPreview' not in f and 'VideoPreview' not in f]
@@ -202,24 +216,34 @@ def download_files(urls, download_dir, quality="ULTRA_HD", interactive=True):
                         elif fname.endswith('.webm'):
                             raise RuntimeError(f"Links expired (HTTP {e.code}). Cannot download video.")
                         else:
-                            print(f"    Skipping {fname} (HTTP {e.code})")
+                            logger.warning("    Skipping %s (HTTP %d)", fname, e.code)
                         break  # non-retryable HTTP error
                     if attempt < _MAX_RETRIES:
                         delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
-                        print(f"    HTTP {e.code} — retrying in {delay}s ({attempt}/{_MAX_RETRIES})...")
+                        logger.warning("    HTTP %d -- retrying in %ds (%d/%d)...",
+                                       e.code, delay, attempt, _MAX_RETRIES)
                         time.sleep(delay)
                     else:
-                        print(f"Failed to download {fname}: HTTP {e.code}")
+                        logger.error("Failed to download %s: HTTP %d", fname, e.code)
+                except urllib.error.URLError as e:
+                    if attempt < _MAX_RETRIES:
+                        delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                        logger.warning("    Network error: %s -- retrying in %ds (%d/%d)...",
+                                       e, delay, attempt, _MAX_RETRIES)
+                        time.sleep(delay)
+                    else:
+                        logger.error("Failed to download %s: %s", fname, e)
                 except Exception as e:
                     if attempt < _MAX_RETRIES:
                         delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
-                        print(f"    Error: {e} — retrying in {delay}s ({attempt}/{_MAX_RETRIES})...")
+                        logger.warning("    Error: %s -- retrying in %ds (%d/%d)...",
+                                       e, delay, attempt, _MAX_RETRIES)
                         time.sleep(delay)
                     else:
-                        print(f"Failed to download {fname}: {e}")
+                        logger.error("Failed to download %s: %s", fname, e)
             time.sleep(_INTER_REQUEST_DELAY)
         else:
-            print(f"{fname} already exists, skipping download.")
+            logger.info("%s already exists, skipping download.", fname)
         downloaded[fname] = target
 
     return downloaded
@@ -229,14 +253,14 @@ def run(map_name, asset_html, nohud_html, jd_dir):
         jd_dir = os.path.dirname(os.path.abspath(__file__))
     map_dir = os.path.join(jd_dir, map_name)
     download_dir = os.path.join(map_dir, "downloads")
-    
+
     urls1 = extract_urls(asset_html) if os.path.exists(asset_html) else []
     urls2 = extract_urls(nohud_html) if os.path.exists(nohud_html) else []
     all_urls = urls1 + urls2
-    
-    print(f"Found {len(all_urls)} URLs.")
+
+    logger.info("Found %d URLs.", len(all_urls))
     downloaded = download_files(all_urls, download_dir)
-    print("Download complete.")
+    logger.info("Download complete.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

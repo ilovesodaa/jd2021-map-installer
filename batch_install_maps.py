@@ -17,9 +17,13 @@ import os
 import sys
 import time
 import traceback
+import urllib.error
 
+from log_config import get_logger, setup_cli_logging
 import map_installer
 import map_downloader
+
+logger = get_logger("batch_install")
 
 
 def collect_map_folders(root_dir):
@@ -122,6 +126,8 @@ def create_state(map_name, asset_html, nohud_html, jd_dir, quality="ultra_hd"):
 def run_steps(state, steps):
     """Run a list of pipeline steps on the given state. Raises on error."""
     for step_name, step_fn in steps:
+        if map_installer._interrupted:
+            raise RuntimeError(f"Interrupted before '{step_name}'")
         step_fn(state)
 
 
@@ -165,6 +171,9 @@ def main():
 
     jd_dir = args.jd21_path or script_dir
 
+    # Set up logging for the batch run
+    setup_cli_logging("batch")
+
     # Discover maps
     found = collect_map_folders(maps_root)
     if not found:
@@ -200,7 +209,7 @@ def main():
     # Summary before starting
     total = len(to_install)
     print(f"\n{'='*60}")
-    print(f" BATCH INSTALL — TWO-PHASE MODE")
+    print(f" BATCH INSTALL -- TWO-PHASE MODE")
     print(f" Maps directory: {maps_root}")
     print(f" Quality:        {args.quality.upper()}")
     print(f" To install:     {total} map(s)")
@@ -226,6 +235,10 @@ def main():
     download_results = {}
 
     for i, (name, asset, nohud) in enumerate(to_install, 1):
+        if map_installer._interrupted:
+            logger.warning("Interrupted before downloading '%s'. Stopping.", name)
+            break
+
         print(f"\n--- [{i}/{total}] Downloading: {name} ---")
         start_time = time.time()
 
@@ -233,21 +246,13 @@ def main():
             state = create_state(name, asset, nohud, jd_dir,
                                  quality=args.quality)
 
-            _log_file = map_installer.setup_log_file(state.map_name)
-            old_stdout = sys.stdout
-            sys.stdout = map_installer.TeeOutput(sys.stdout, _log_file)
+            run_steps(state, DOWNLOAD_STEPS)
+            elapsed = time.time() - start_time
+            download_results[name] = ("OK", f"{elapsed:.1f}s")
+            states.append((name, state))
+            print(f"  Download complete ({elapsed:.1f}s)")
 
-            try:
-                run_steps(state, DOWNLOAD_STEPS)
-                elapsed = time.time() - start_time
-                download_results[name] = ("OK", f"{elapsed:.1f}s")
-                states.append((name, state, _log_file))
-                print(f"  Download complete ({elapsed:.1f}s)")
-            finally:
-                sys.stdout = old_stdout
-                # Keep log file open — we'll append during Phase 2
-
-        except Exception as e:
+        except (RuntimeError, OSError, urllib.error.URLError) as e:
             download_results[name] = ("FAILED", str(e))
             print(f"  Download FAILED: {e}")
             traceback.print_exc()
@@ -268,17 +273,18 @@ def main():
     # =========================================================
     print(f"\n{'='*60}")
     print(f" PHASE 2: PROCESSING ALL MAPS ({len(states)} maps)")
-    print(f" All local — no network needed")
+    print(f" All local -- no network needed")
     print(f"{'='*60}")
 
     process_results = {}
 
-    for i, (name, state, _log_file) in enumerate(states, 1):
+    for i, (name, state) in enumerate(states, 1):
+        if map_installer._interrupted:
+            logger.warning("Interrupted before processing '%s'. Stopping.", name)
+            break
+
         print(f"\n--- [{i}/{len(states)}] Processing: {name} ---")
         start_time = time.time()
-
-        old_stdout = sys.stdout
-        sys.stdout = map_installer.TeeOutput(sys.stdout, _log_file)
 
         try:
             run_steps(state, PROCESS_STEPS)
@@ -287,15 +293,11 @@ def main():
             process_results[name] = ("OK", f"{elapsed:.1f}s")
             print(f"  Processing complete ({elapsed:.1f}s)")
 
-        except Exception as e:
+        except (RuntimeError, OSError, urllib.error.URLError) as e:
             elapsed = time.time() - start_time
             process_results[name] = ("FAILED", str(e))
             print(f"  Processing FAILED: {e}")
             traceback.print_exc()
-
-        finally:
-            sys.stdout = old_stdout
-            _log_file.close()
 
     # =========================================================
     #  FINAL SUMMARY
@@ -310,19 +312,19 @@ def main():
     for name, asset, nohud in to_install:
         dl_status, dl_detail = download_results.get(name, ("SKIPPED", ""))
         if dl_status != "OK":
-            icon = "✗"
+            icon = "[X]"
             status = "DL FAIL"
             detail = dl_detail
             fail_count += 1
         else:
             pr_status, pr_detail = process_results.get(name, ("SKIPPED", ""))
             if pr_status == "OK":
-                icon = "✓"
+                icon = "[OK]"
                 status = "OK"
                 detail = pr_detail
                 ok_count += 1
             else:
-                icon = "✗"
+                icon = "[X]"
                 status = "FAILED"
                 detail = pr_detail
                 fail_count += 1
@@ -330,7 +332,7 @@ def main():
 
     if skipped:
         for name, reason in skipped:
-            print(f"  - {name:30s} {'SKIPPED':10s} {reason}")
+            print(f"  [-] {name:30s} {'SKIPPED':10s} {reason}")
 
     print(f"\n  Total: {ok_count} succeeded, {fail_count} failed, "
           f"{len(skipped)} skipped")
