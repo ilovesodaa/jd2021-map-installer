@@ -7,9 +7,17 @@ import json
 import zipfile
 import shutil
 import argparse
+import time
 from urllib.parse import urlparse, unquote
 
 ssl._create_default_https_context = ssl._create_unverified_context
+
+_USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+               "AppleWebKit/537.36 (KHTML, like Gecko) "
+               "Chrome/131.0.0.0 Safari/537.36")
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 2   # seconds; doubles each retry
+_INTER_REQUEST_DELAY = 0.5  # seconds between sequential downloads
 
 def extract_urls(html_file):
     with open(html_file, "r", encoding="utf-8") as f:
@@ -165,33 +173,51 @@ def download_files(urls, download_dir, quality="ULTRA_HD", interactive=True):
         target = os.path.join(download_dir, fname)
         if not os.path.exists(target):
             print(f"Downloading {fname}...")
-            req = urllib.request.Request(url)
-            try:
-                with urllib.request.urlopen(req) as response:
-                    with open(target, "wb") as f:
-                        f.write(response.read())
-            except urllib.error.HTTPError as e:
-                if e.code in (403, 404):
-                    print(f"    HTTP {e.code} for {fname} -- links may have expired!")
-                    if fname.endswith('.webm') and interactive:
-                        existing_webms = [f for f in os.listdir(download_dir)
-                                          if f.endswith('.webm') and 'MapPreview' not in f and 'VideoPreview' not in f]
-                        if existing_webms:
-                            print(f"    Existing video found: {existing_webms[0]}")
-                            print(f"    [R]euse existing  /  [S]top and get new links")
-                            choice = input("    Choice [R/S]: ").strip().upper()
-                            if choice != 'R':
-                                raise RuntimeError(f"Links expired (HTTP {e.code}). Obtain new HTML and retry.")
+            req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+            for attempt in range(1, _MAX_RETRIES + 1):
+                try:
+                    with urllib.request.urlopen(req) as response:
+                        with open(target, "wb") as f:
+                            f.write(response.read())
+                    break  # success
+                except urllib.error.HTTPError as e:
+                    if e.code == 429:
+                        retry_after = int(e.headers.get("Retry-After", _RETRY_BASE_DELAY * attempt))
+                        print(f"    Rate limited (429). Waiting {retry_after}s before retry {attempt}/{_MAX_RETRIES}...")
+                        time.sleep(retry_after)
+                        continue
+                    if e.code in (403, 404):
+                        print(f"    HTTP {e.code} for {fname} -- links may have expired!")
+                        if fname.endswith('.webm') and interactive:
+                            existing_webms = [f for f in os.listdir(download_dir)
+                                              if f.endswith('.webm') and 'MapPreview' not in f and 'VideoPreview' not in f]
+                            if existing_webms:
+                                print(f"    Existing video found: {existing_webms[0]}")
+                                print(f"    [R]euse existing  /  [S]top and get new links")
+                                choice = input("    Choice [R/S]: ").strip().upper()
+                                if choice != 'R':
+                                    raise RuntimeError(f"Links expired (HTTP {e.code}). Obtain new HTML and retry.")
+                            else:
+                                raise RuntimeError(f"Links expired (HTTP {e.code}). No existing video to reuse. Obtain new HTML and retry.")
+                        elif fname.endswith('.webm'):
+                            raise RuntimeError(f"Links expired (HTTP {e.code}). Cannot download video.")
                         else:
-                            raise RuntimeError(f"Links expired (HTTP {e.code}). No existing video to reuse. Obtain new HTML and retry.")
-                    elif fname.endswith('.webm'):
-                        raise RuntimeError(f"Links expired (HTTP {e.code}). Cannot download video.")
+                            print(f"    Skipping {fname} (HTTP {e.code})")
+                        break  # non-retryable HTTP error
+                    if attempt < _MAX_RETRIES:
+                        delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                        print(f"    HTTP {e.code} — retrying in {delay}s ({attempt}/{_MAX_RETRIES})...")
+                        time.sleep(delay)
                     else:
-                        print(f"    Skipping {fname} (HTTP {e.code})")
-                else:
-                    print(f"Failed to download {fname}: HTTP {e.code}")
-            except Exception as e:
-                print(f"Failed to download {fname}: {e}")
+                        print(f"Failed to download {fname}: HTTP {e.code}")
+                except Exception as e:
+                    if attempt < _MAX_RETRIES:
+                        delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                        print(f"    Error: {e} — retrying in {delay}s ({attempt}/{_MAX_RETRIES})...")
+                        time.sleep(delay)
+                    else:
+                        print(f"Failed to download {fname}: {e}")
+            time.sleep(_INTER_REQUEST_DELAY)
         else:
             print(f"{fname} already exists, skipping download.")
         downloaded[fname] = target

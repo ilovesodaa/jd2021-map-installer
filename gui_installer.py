@@ -9,6 +9,8 @@ import queue
 import subprocess
 import sys
 import os
+import shutil
+import glob
 from PIL import Image, ImageTk
 
 # Ensure we can import sibling scripts regardless of cwd
@@ -110,8 +112,8 @@ class MapInstallerGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("JD2021 Map Installer")
-        self.root.geometry("850x818")
-        self.root.minsize(850, 818)
+        self.root.geometry("848x816")
+        self.root.minsize(848, 816)
 
         # State
         self.pipeline_state = None
@@ -1286,12 +1288,67 @@ class MapInstallerGUI:
                     f"Map '{state.map_name}' is ready to use."))
                 self.root.after(0,
                     lambda: self.install_btn.configure(state="normal"))
+                self.root.after(100, lambda: self._prompt_cleanup(state))
             except Exception as e:
                 print(f"    ERROR applying changes: {e}")
                 self.root.after(0, lambda: messagebox.showerror(
                     "Error", f"Failed to apply:\n{e}"))
 
         threading.Thread(target=_apply, daemon=True).start()
+
+    # ------------------------------------------------------------------
+    # Post-apply cleanup
+    # ------------------------------------------------------------------
+
+    def _prompt_cleanup(self, state):
+        """Ask user whether to delete downloaded source files after apply."""
+        dl_dir = getattr(state, 'download_dir', None)
+        if not dl_dir or not os.path.isdir(dl_dir):
+            return
+
+        answer = messagebox.askyesno(
+            "Clean Up Downloads",
+            f"Delete downloaded source files for '{state.map_name}' to save disk space?\n\n"
+            "This removes extracted scenes and decoded intermediates.\n"
+            "Audio (.ogg), video (.webm), and IPK data are kept in case\n"
+            "you need to reinstall or adjust the offset later.\n\n"
+            "This cannot be undone.")
+
+        if not answer:
+            return
+
+        removed = 0
+
+        # 1. Scene ZIPs
+        for f in glob.glob(os.path.join(dl_dir, "*_MAIN_SCENE_*.zip")):
+            try:
+                os.remove(f)
+                removed += 1
+            except OSError:
+                pass
+
+        # 2. Extracted scene directories
+        for d in glob.glob(os.path.join(dl_dir, "*_MAIN_SCENE_*")):
+            if os.path.isdir(d):
+                shutil.rmtree(d, ignore_errors=True)
+                removed += 1
+        extracted_dir = os.path.join(dl_dir, "main_scene_extracted")
+        if os.path.isdir(extracted_dir):
+            shutil.rmtree(extracted_dir, ignore_errors=True)
+            removed += 1
+
+        # 3. Decoded CKD intermediates (textures already converted to PNG/TGA)
+        for f in glob.glob(os.path.join(dl_dir, "*.ckd")):
+            try:
+                os.remove(f)
+                removed += 1
+            except OSError:
+                pass
+
+        if removed:
+            print(f"    Cleaned up {removed} downloaded file(s)/folder(s) for {state.map_name}.")
+        else:
+            print(f"    No intermediate files found to clean up.")
 
     # ------------------------------------------------------------------
     # Cleanup
