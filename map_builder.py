@@ -5,6 +5,10 @@ import argparse
 import subprocess
 import glob
 import zipfile
+from log_config import get_logger
+from helpers import load_ckd_json
+
+logger = get_logger("map_builder")
 
 def lua_long_string(text):
     """Wrap text in a Lua long string literal, handling edge cases.
@@ -76,9 +80,8 @@ def check_metadata_encoding(ipk_dir):
     if not songdesc_paths:
         return {}
 
-    with open(songdesc_paths[0], "r", encoding="utf-8") as f:
-        sd_data = json.loads(f.read().strip('\x00\r\n '))
-        sd_struct = sd_data["COMPONENTS"][0]
+    sd_data = load_ckd_json(songdesc_paths[0])
+    sd_struct = sd_data["COMPONENTS"][0]
 
     problems = {}
     for field in ('Title', 'Artist', 'Credits', 'DancerName'):
@@ -99,8 +102,7 @@ def extract_musictrack_metadata(ipk_dir):
     if not ckd_paths:
         return None
     try:
-        with open(ckd_paths[0], "r", encoding="utf-8") as f:
-            mt_data = json.loads(f.read().strip('\x00\r\n '))
+        mt_data = load_ckd_json(ckd_paths[0])
         mt_struct = mt_data["COMPONENTS"][0]["trackData"]["structure"]
         return {
             "markers": mt_struct["markers"],
@@ -108,7 +110,7 @@ def extract_musictrack_metadata(ipk_dir):
             "video_start_time": mt_struct["videoStartTime"],
         }
     except (KeyError, IndexError, json.JSONDecodeError) as e:
-        print(f"    Warning: Could not extract musictrack metadata: {e}")
+        logger.warning("    Warning: Could not extract musictrack metadata: %s", e)
         return None
 
 
@@ -118,17 +120,18 @@ def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override
     # Find musictrack.tpl.ckd
     ckd_json_paths = glob.glob(os.path.join(ipk_dir, "**", "*musictrack.tpl.ckd"), recursive=True)
     if not ckd_json_paths:
-        print("Error: Could not find musictrack.tpl.ckd")
+        logger.error("Error: Could not find musictrack.tpl.ckd")
         return None
     ckd_json_path = ckd_json_paths[0]
-    
+
     # NEW: Find and parse songdesc.tpl.ckd for metadata
     songdesc_paths = glob.glob(os.path.join(ipk_dir, "**", "*songdesc.tpl.ckd"), recursive=True)
     sd_struct = {}
     if songdesc_paths:
-        with open(songdesc_paths[0], "r", encoding="utf-8") as f:
-            sd_data = json.loads(f.read().strip('\x00\r\n '))
-            sd_struct = sd_data["COMPONENTS"][0]
+        sd_data = load_ckd_json(songdesc_paths[0])
+        sd_struct = sd_data["COMPONENTS"][0]
+    else:
+        logger.warning("    songdesc.tpl.ckd not found; using default metadata")
 
     default_colors = sd_struct.get("DefaultColors", {}) if sd_struct else {}
 
@@ -167,8 +170,7 @@ def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override
 							VAL = "{val}"
 						}},'''
     
-    with open(ckd_json_path, "r", encoding="utf-8") as f:
-        mt_data = json.loads(f.read().strip('\x00\r\n '))
+    mt_data = load_ckd_json(ckd_json_path)
     mt_struct = mt_data["COMPONENTS"][0]["trackData"]["structure"]
     
     markers = ", ".join(f"{{ VAL = {m} }}" for m in mt_struct["markers"])

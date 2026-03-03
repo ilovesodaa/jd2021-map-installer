@@ -1,5 +1,10 @@
 import json
 import sys
+import os
+from log_config import get_logger
+from helpers import load_ckd_json
+
+logger = get_logger("json_to_lua")
 
 def convert_value(val, indent_level):
     indent = "    " * indent_level
@@ -49,22 +54,39 @@ def convert_value(val, indent_level):
         return str(val)
 
 def convert_file(in_path, out_path):
-    with open(in_path, 'rb') as f:
-        raw = f.read().replace(b'\x00', b'').decode('utf-8')
-        try:
-            data = json.loads(raw)
-        except Exception as e:
-            print(f"Error parsing JSON in {in_path}: {e}")
-            return
-    
+    """Convert a CKD JSON file to UbiArt Lua format.
+
+    Args:
+        in_path: Path to the input JSON/CKD file.
+        out_path: Path to write the output Lua file.
+    """
+    if not os.path.isfile(in_path):
+        logger.error("Input file not found: %s", in_path)
+        return
+
+    try:
+        data = load_ckd_json(in_path)
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        logger.error("Error parsing JSON in %s: %s", in_path, e)
+        return
+
     lua_str = "params =\n" + convert_value(data, 0)
-    
-    with open(out_path, 'w', encoding='utf-8') as f:
-        f.write(lua_str)
-    print(f"Successfully converted {in_path} -> {out_path}")
+
+    # Validate output directory exists
+    out_dir = os.path.dirname(out_path)
+    if out_dir and not os.path.isdir(out_dir):
+        logger.error("Output directory does not exist: %s", out_dir)
+        return
+
+    try:
+        with open(out_path, 'w', encoding='utf-8') as f:
+            f.write(lua_str)
+        logger.info("Successfully converted %s -> %s", in_path, out_path)
+    except OSError as e:
+        logger.error("Failed to write output file %s: %s", out_path, e)
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         print("Usage: python json_to_lua.py <input.json> <output.lua>")
-    else:
-        convert_file(sys.argv[1], sys.argv[2])
+        sys.exit(1)
+    convert_file(sys.argv[1], sys.argv[2])

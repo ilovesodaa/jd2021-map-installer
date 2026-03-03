@@ -1,7 +1,7 @@
 """
-CKD Texture Decoder for Just Dance (NX/Switch CKD → TGA/PNG)
+CKD Texture Decoder for Just Dance (NX/Switch CKD -> TGA/PNG)
 
-Pipeline: .ckd → strip 44-byte UbiArt header → .xtx → deswizzle → .dds → Pillow → .tga/.png
+Pipeline: .ckd -> strip 44-byte UbiArt header -> .xtx -> deswizzle -> .dds -> Pillow -> .tga/.png
 
 Usage:
     python ckd_decode.py <input.ckd> [output.tga]
@@ -11,8 +11,10 @@ Usage:
 import os
 import sys
 import struct
-import tempfile
 import shutil
+from log_config import get_logger
+
+logger = get_logger("ckd_decode")
 
 CKD_HEADER_SIZE = 44  # UbiArt TEX header is always 44 bytes
 CKD_MAGIC = b'\x00\x00\x00\x09'
@@ -76,8 +78,9 @@ def dds_to_image(dds_data, output_path, quiet=False):
     try:
         from PIL import Image
     except ImportError:
-        print("ERROR: Pillow is not installed. Install it with: pip install Pillow")
-        sys.exit(1)
+        raise ImportError(
+            "Pillow is required for texture decoding. "
+            "Install it with: pip install Pillow") from None
 
     # Write DDS to temp file for Pillow
     temp_dds = output_path + '.tmp.dds'
@@ -88,24 +91,24 @@ def dds_to_image(dds_data, output_path, quiet=False):
         img = Image.open(temp_dds)
         img.save(output_path)
         if not quiet:
-            print(f"  Saved: {output_path} ({img.size[0]}x{img.size[1]})")
+            logger.info("  Saved: %s (%dx%d)", output_path, img.size[0], img.size[1])
     except Exception as e:
         # Pillow can't read all DDS formats; fall back to saving as DDS
         dds_fallback = output_path.rsplit('.', 1)[0] + '.dds'
         shutil.copy2(temp_dds, dds_fallback)
-        print(f"  Pillow can't decode this DDS format ({e})")
-        print(f"  Saved raw DDS instead: {dds_fallback}")
-        print(f"  You can convert it with: magick {dds_fallback} {output_path}")
+        logger.warning("  Pillow can't decode this DDS format (%s)", e)
+        logger.warning("  Saved raw DDS instead: %s", dds_fallback)
+        logger.info("  You can convert it with: magick %s %s", dds_fallback, output_path)
     finally:
         if os.path.exists(temp_dds):
             os.remove(temp_dds)
 
 
 def decode_ckd(ckd_path, output_path=None, quiet=False):
-    """Full pipeline: CKD → XTX → DDS → TGA/PNG"""
+    """Full pipeline: CKD -> XTX -> DDS -> TGA/PNG"""
     basename = os.path.basename(ckd_path)
     if not quiet:
-        print(f"\nDecoding: {basename}")
+        logger.info("\nDecoding: %s", basename)
 
     # Determine output path
     if output_path is None:
@@ -114,30 +117,30 @@ def decode_ckd(ckd_path, output_path=None, quiet=False):
     # Step 1: Strip CKD header
     raw_data, fmt = strip_ckd_header(ckd_path)
     if not quiet:
-        print(f"  CKD header stripped ({CKD_HEADER_SIZE} bytes), payload format: {fmt}")
+        logger.info("  CKD header stripped (%d bytes), payload format: %s", CKD_HEADER_SIZE, fmt)
 
     if fmt == 'dds':
         # PC CKD - already DDS, just convert to output format
         if not quiet:
-            print(f"  PC DDS format detected, converting directly...")
+            logger.info("  PC DDS format detected, converting directly...")
         dds_to_image(raw_data, output_path, quiet=quiet)
         return True
 
-    # Step 2: XTX → DDS (deswizzle)
+    # Step 2: XTX -> DDS (deswizzle)
     try:
         dds_data, info = xtx_to_dds(raw_data)
         if not quiet:
-            print(f"  Deswizzled: {info['width']}x{info['height']}, format: {info['format']}")
+            logger.info("  Deswizzled: %dx%d, format: %s", info['width'], info['height'], info['format'])
     except Exception as e:
-        print(f"  ERROR during XTX decode of {basename}: {e}")
+        logger.error("  ERROR during XTX decode of %s: %s", basename, e)
         # Save raw XTX so user can try manual conversion
         xtx_fallback = output_path.rsplit('.', 1)[0] + '.xtx'
         with open(xtx_fallback, 'wb') as f:
             f.write(raw_data)
-        print(f"  Saved raw XTX: {xtx_fallback}")
+        logger.info("  Saved raw XTX: %s", xtx_fallback)
         return False
 
-    # Step 3: DDS → TGA/PNG
+    # Step 3: DDS -> TGA/PNG
     dds_to_image(dds_data, output_path, quiet=quiet)
     return True
 
@@ -151,12 +154,12 @@ def batch_decode(input_folder, output_folder=None, quiet=False):
     ckd_files = [f for f in os.listdir(input_folder) if f.endswith('.ckd')]
 
     if not ckd_files:
-        print(f"No .ckd files found in {input_folder}")
+        logger.info("No .ckd files found in %s", input_folder)
         return
 
     if not quiet:
-        print(f"Found {len(ckd_files)} CKD files in {input_folder}")
-        print(f"Output folder: {output_folder}")
+        logger.info("Found %d CKD files in %s", len(ckd_files), input_folder)
+        logger.info("Output folder: %s", output_folder)
 
     success = 0
     for ckd_file in ckd_files:
@@ -167,15 +170,20 @@ def batch_decode(input_folder, output_folder=None, quiet=False):
             out_name += '.tga'
         out_path = os.path.join(output_folder, out_name)
 
-        if decode_ckd(ckd_path, out_path, quiet=quiet):
-            success += 1
+        try:
+            if decode_ckd(ckd_path, out_path, quiet=quiet):
+                success += 1
+            else:
+                logger.warning("  Decode returned False for %s", ckd_file)
+        except Exception as e:
+            logger.warning("  Failed to decode %s: %s", ckd_file, e)
 
     if quiet:
-        print(f"    Decoded {success}/{len(ckd_files)} textures.")
+        logger.info("    Decoded %d/%d textures.", success, len(ckd_files))
     else:
-        print(f"\n{'='*40}")
-        print(f"Done! {success}/{len(ckd_files)} files decoded successfully.")
-        print(f"Output: {output_folder}")
+        logger.info("\n%s", '='*40)
+        logger.info("Done! %d/%d files decoded successfully.", success, len(ckd_files))
+        logger.info("Output: %s", output_folder)
 
 
 if __name__ == '__main__':
