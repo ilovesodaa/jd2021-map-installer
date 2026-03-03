@@ -83,25 +83,11 @@ Common tag values seen across maps: `"Main"`, `"Extreme"`, `"Cool"`, `"Happy"`, 
 `"Classic"`, `"Pop"`, `"Rock"`, etc. These affect how songs appear in the game's filter/category
 menus.
 
-**What we generate:**
-Hardcoded to `["Main"]` regardless of actual song data:
-
-```lua
-Tags =
-{
-    {
-        VAL = "Main"
-    }
-},
-```
+**What we generate now:**
+Tags are extracted from the CKD and formatted as Lua VAL entries. If the CKD has no Tags, falls
+back to `["Main"]`.
 
 **Where in code:** `map_builder.py` `generate_text_files()` function (SongDesc generation block)
-
-**Effort:** Trivial -- extract `Tags` array from the CKD JSON and format as Lua VAL entries
-instead of hardcoding. A few lines of code in the SongDesc generation block.
-
-**Impact:** Songs would appear in the correct filter categories (e.g., an intense song tagged
-`"Extreme"` would show up under the Extreme filter instead of only under "Main").
 
 ---
 
@@ -194,15 +180,13 @@ These control post-processing effects applied during autodance playback (toon sh
 slime overlay, refraction, floor plane rendering).
 
 **Current behavior:**
-The autodance TPL is generated with empty `recording_structure` and `video_structure`. If the
-map's `.adrecording.ckd` and `.advideo.ckd` files are converted (added in recent fix), they may
-contain some of this data, but FX parameters embedded in the main autodance TPL are not
-extracted.
+The installer converts `autodance/*.tpl.ckd` via `json_to_lua.py` in `step_11_extract_moves`,
+which overwrites the empty fallback TPL with the full CKD data including all FX parameters. A
+guard in `generate_text_files()` prevents sync refinement ("Apply") from overwriting the converted
+TPL with the empty stub.
 
-**Where in code:** `map_builder.py` `generate_text_files()` function (autodance TPL generation)
-
-**Effort:** Complex -- the FX system has many interacting parameters and would need testing to
-verify engine behavior. Low priority since autodance is a secondary feature.
+**Where in code:** `map_builder.py` `generate_text_files()` function (autodance TPL generation),
+`map_installer.py` `step_11_extract_moves()` (CKD conversion)
 
 ---
 

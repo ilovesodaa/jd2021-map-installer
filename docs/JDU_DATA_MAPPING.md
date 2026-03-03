@@ -24,7 +24,7 @@ This document details how raw data from the Just Dance Unlimited (JDU) JSON payl
 | `Status` | `Status` | Song status flag, defaults to 3. |
 | `LocaleID` | `LocaleID` | Locale identifier, defaults to 4294967295 (all locales). |
 | `MojoValue` | `MojoValue` | Mojo reward value, defaults to 0. |
-| `CountInProgression` | `CountInProgression` | Progression counter, defaults to 1. |
+| `CountInProgression` | `CountInProgression` | Hardcoded to 0. |
 
 ---
 
@@ -72,7 +72,7 @@ The UbiArt engine (v280000) will crash if a tape contains raw primitive arrays. 
 
 ### Tick Conversion
 - **Resolution**: 24 ticks per beat.
-- **Clip Mapping**: `StartTime` and `Duration` must be converted from JDU milliseconds/frames into engine ticks for `.dtape` and `.ktape` playback.
+- **Clip Timing**: `StartTime` and `Duration` values in JDU CKD data are already in engine tick units. The pipeline passes them through as-is with no conversion needed.
 
 ### MotionClip Processing (handled by `ubiart_lua.py`)
 
@@ -168,7 +168,7 @@ The following JDU properties are safely ignored:
 - **`urls`**: Only used for initial acquisition.
 - **`skuConfigs`**: Licensing logic is bypassed.
 - **`platformSpecifics`**: Metadata for older consoles (WiiU/PS3) is discarded.
-- **`previewAudio`**: Orphaned; the engine plays the main audio file from the `previewEntry` beat marker.
+- **`previewAudio`**: The separate preview audio file is not used. Instead, the engine plays the main audio file starting from the `previewEntry` beat marker, with `AudioPreviewFadeTime` controlling the fade-out (set to 2.0s when `previewEntry > 0`, otherwise 0.0).
 
 ---
 

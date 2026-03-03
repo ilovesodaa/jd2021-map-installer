@@ -29,15 +29,34 @@ An automated pipeline for extracting, building, and installing JDU (Just Dance U
 * `ubiart_lua.py`: UbiArt-aware Lua converter for tapes and game data. Handles MotionClip color encoding, MotionPlatformSpecifics KEY/VAL conversion, cinematic curve processing with `vector2dNew()`, ActorIndices-to-ActorPaths resolution, `Tracks` array generation, and ambient sound template processing.
 * `json_to_lua.py`: Generic JSON-to-Lua converter used for non-tape files (autodance templates, stape data). For tape conversion, see `ubiart_lua.py`.
 * `ckd_decode.py`: Decodes compressed CKD textures (strips 44-byte UbiArt header, handles DDS and XTX/Nintendo Switch formats).
-* `batch_install_maps.py`: Batch installer that launches a separate terminal for each map folder in a given directory.
+* `batch_install_maps.py`: Two-phase batch installer. Downloads all maps first (while CDN links are fresh), then processes them locally. Supports `--skip-existing`, `--only`, and `--exclude` filters.
 
 ## Documentation
 
+### Setup and Usage
 - **[Getting Started](docs/GETTING_STARTED.md)** — Full setup walkthrough: dependencies, third-party tools, obtaining JD2021 PC, and running the installer.
-- **[Audio Timing & Pre-Roll Silence](docs/AUDIO_TIMING.md)** — Technical deep-dive into the `videoStartTime` synchronization model and the AMB intro solution.
-- **[JDU Data Mapping Specification](docs/JDU_DATA_MAPPING.md)** — Field-level mapping between JDU JSON payloads and JD2021 PC engine files.
-- **[Manual Porting Guide](docs/MANUAL_PORTING_GUIDE.md)** — How to manually port a map without using the scripts; also covers the full map directory structure and file format reference.
-- **[Unused Data Opportunities](docs/JDU_UNUSED_DATA_OPPORTUNITIES.md)** — Catalog of JDU data fields not currently used, with implementation status and priority rankings.
+- **[GUI Reference](docs/GUI_REFERENCE.md)** — GUI controls, sync refinement panel, embedded preview, and post-install cleanup.
+- **[CLI Reference](docs/CLI_REFERENCE.md)** — CLI arguments, interactive sync loop, batch mode, and preflight checks.
+- **[Video Quality](docs/VIDEO_QUALITY.md)** — Quality tiers, fallback behavior, and persistence.
+- **[Troubleshooting](docs/TROUBLESHOOTING.md)** — Common errors and solutions derived from code analysis.
+
+### Architecture and Internals
+- **[Architecture](docs/ARCHITECTURE.md)** — Internal component map, PipelineState, data flow, dual interface pattern, and design decisions.
+- **[Pipeline Reference](docs/PIPELINE_REFERENCE.md)** — Every pipeline step: inputs, outputs, failure modes, and skip conditions.
+- **[Audio Timing & Pre-Roll Silence](docs/AUDIO_TIMING.md)** — The `videoStartTime` synchronization model and the AMB intro solution.
+- **[Data Formats](docs/DATA_FORMATS.md)** — Binary and text file format reference (CKD, IPK, ISC, TRK, TPL, etc.).
+
+### Data References
+- **[JDU Data Mapping](docs/JDU_DATA_MAPPING.md)** — Field-level mapping between JDU JSON payloads and JD2021 PC engine files.
+- **[Map Config Format](docs/MAP_CONFIG_FORMAT.md)** — Per-map sync configuration JSON schema.
+- **[Game Config Reference](docs/GAME_CONFIG_REFERENCE.md)** — JD2021 PC game configuration files and modding-relevant settings.
+- **[Third-Party Tools](docs/THIRD_PARTY_TOOLS.md)** — External dependencies, bundled tools, and referenced projects.
+
+### Guides and Research
+- **[Manual Porting Guide](docs/MANUAL_PORTING_GUIDE.md)** — How to manually port a map without using the scripts; full map directory structure.
+- **[Unused Data Opportunities](docs/JDU_UNUSED_DATA_OPPORTUNITIES.md)** — Catalog of JDU data fields not currently used.
+- **[Known Gaps](docs/KNOWN_GAPS.md)** — Remaining limitations and potential improvements.
+- **[Mobile Scoring Restoration](docs/MOBILE_SCORING_RESTORATION.md)** — Binary patching research for phone controller scoring.
 
 ## Limitations
 

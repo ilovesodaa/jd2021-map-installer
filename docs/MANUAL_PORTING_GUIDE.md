@@ -208,8 +208,8 @@ The first sample of the WAV corresponds to marker 0 = beat `startBeat`. If `star
 1. **Deployment**: Copy your `[MapName]` folder to `jd21/data/World/MAPS/`.
 2. **Registration**:
    - Open `SkuScene_Maps_PC_All.isc`
-   - Add a `JD_SongDescTemplate` entry referencing your map's `SongDesc.tpl`
-   - Add a `CoverflowSong` entry for the song select carousel
+   - Add an Actor entry with a `JD_SongDescComponent` component, referencing your map's `songdesc.act` and `songdesc.tpl`
+   - Add two `CoverflowSong` entries (one for `cover_generic.act`, one for `cover_online.act`) for the song select carousel
 3. **Validation**: Launch the game; if the title is missing, check your `SongDesc` actor configuration.
 
 ---
@@ -233,7 +233,7 @@ The first sample of the WAV corresponds to marker 0 = beat `startBeat`. If `star
 
 ## Appendix: Batch Preparation
 
-If you plan to convert many maps, prepare a single parent directory where each child folder contains the two HTML exports (`assets.html` and `nohud.html`) captured from JDHelper. The `batch_install_maps.py` script will scan this directory and launch an installer for each valid map folder.
+If you plan to convert many maps, prepare a single parent directory where each child folder contains the two HTML exports (`assets.html` and `nohud.html`) captured from JDHelper. The `batch_install_maps.py` script will scan this directory and process each valid map folder using two-phase execution (download all first, then process all).
 
 ```
 my_maps/
