@@ -11,14 +11,19 @@ import sys
 import os
 import shutil
 import glob
+import logging
+import datetime
 from PIL import Image, ImageTk
 
 # Ensure we can import sibling scripts regardless of cwd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from log_config import get_logger, setup_gui_logging
 import map_installer
 import map_builder
 import map_downloader
+
+logger = get_logger("gui")
 
 
 class ToolTip:
@@ -69,28 +74,19 @@ class ToolTip:
             tw.destroy()
 
 
-class StdoutRedirector:
-    """Bridges print() calls from worker threads to a tkinter Text widget via a queue.
-    If log_file is set, also writes to it simultaneously."""
+class TextWidgetHandler(logging.Handler):
+    """Logging handler that routes log records to a tkinter Text widget via a queue."""
 
-    def __init__(self, text_widget, root, log_file=None):
+    def __init__(self, text_widget, root):
+        super().__init__()
         self.text_widget = text_widget
         self.root = root
-        self.log_file = log_file
         self._queue = queue.Queue()
         self._poll()
 
-    def write(self, text):
-        self._queue.put(text)
-        if self.log_file:
-            try:
-                self.log_file.write(text)
-                self.log_file.flush()
-            except Exception:
-                pass
-
-    def flush(self):
-        pass
+    def emit(self, record):
+        msg = self.format(record) + "\n"
+        self._queue.put(msg)
 
     def _poll(self):
         try:
@@ -105,6 +101,28 @@ class StdoutRedirector:
         self.root.after(50, self._poll)
 
 
+class StdoutToLogger:
+    """Thin file-like wrapper that captures stray print() calls and routes them
+    through the logging system so they appear in the GUI text widget."""
+
+    def __init__(self, logger_instance, level=logging.INFO):
+        self._logger = logger_instance
+        self._level = level
+        self._buffer = ""
+
+    def write(self, text):
+        self._buffer += text
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            if line.strip():
+                self._logger.log(self._level, line)
+
+    def flush(self):
+        if self._buffer.strip():
+            self._logger.log(self._level, self._buffer.strip())
+            self._buffer = ""
+
+
 class MapInstallerGUI:
 
     STEP_NAMES = [name for name, _ in map_installer.PIPELINE_STEPS]
@@ -112,8 +130,8 @@ class MapInstallerGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("JD2021 Map Installer")
-        self.root.geometry("848x816")
-        self.root.minsize(848, 816)
+        self.root.geometry("1000x900")
+        self.root.minsize(1000, 900)
 
         # State
         self.pipeline_state = None
@@ -133,7 +151,9 @@ class MapInstallerGUI:
         self._original_stdout = sys.stdout
         self._original_stderr = sys.stderr
         self._preflight_passed = False
-        self._log_file = None
+        self._file_handler = None
+        self._closing = False
+        self._pipeline_running = False
 
         # Tkinter variables for sync refinement
         self.v_override_var = tk.DoubleVar(value=0.0)
@@ -495,9 +515,17 @@ class MapInstallerGUI:
                 # else: leave editable so user can type manually
 
     def _redirect_stdout(self):
-        self._redirector = StdoutRedirector(self.log_text, self.root)
-        sys.stdout = self._redirector
-        sys.stderr = self._redirector
+        handler = TextWidgetHandler(self.log_text, self.root)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        setup_gui_logging(handler)
+
+        # Also set up a file handler for per-install log files
+        self._log_handler = handler
+
+        # Capture stray print() calls from pipeline code / third-party libs
+        self._stdout_logger = StdoutToLogger(logger, logging.INFO)
+        sys.stdout = self._stdout_logger
+        sys.stderr = self._stdout_logger
 
     def _restore_stdout(self):
         sys.stdout = self._original_stdout
@@ -574,7 +602,7 @@ class MapInstallerGUI:
                                  "Game Directory is required for pre-flight check.")
             return
 
-        self.preflight_btn.configure(state="disabled")
+        self.preflight_btn.configure(state="disabled", text="Checking...")
 
         def _run():
             result = map_installer.preflight_check(
@@ -624,14 +652,19 @@ class MapInstallerGUI:
             self._on_preflight_done(False)
 
     def _on_preflight_done(self, passed):
-        self.preflight_btn.configure(state="normal")
+        self.preflight_btn.configure(state="normal", text="Pre-flight Check")
         if passed:
             self.install_btn.configure(state="normal")
             messagebox.showinfo("Pre-flight", "All checks passed!")
         else:
             self.install_btn.configure(state="disabled")
             messagebox.showwarning(
-                "Pre-flight", "Some checks failed. See log for details.")
+                "Pre-flight",
+                "Some checks failed. See the log output for details.\n\n"
+                "Common fixes:\n"
+                "  - Install FFmpeg (or click Yes when prompted)\n"
+                "  - Verify the Game Directory path is correct\n"
+                "  - Ensure bundled tools are in the script directory")
 
     def _on_clear_cache(self):
         cleared = map_installer.clear_paths_cache()
@@ -648,6 +681,8 @@ class MapInstallerGUI:
     # ------------------------------------------------------------------
 
     def _on_install(self):
+        if self._pipeline_running:
+            return
         map_name = self.map_name_entry.get().strip()
         asset_html = self.asset_html_entry.get().strip()
         nohud_html = self.nohud_html_entry.get().strip()
@@ -656,7 +691,9 @@ class MapInstallerGUI:
         if not asset_html or not nohud_html:
             messagebox.showerror(
                 "Missing Input",
-                "Asset HTML and NOHUD HTML are required.")
+                "Both Asset HTML and NOHUD HTML files are required.\n\n"
+                "Use the 'Browse' buttons to select the downloaded HTML files\n"
+                "that contain the map's asset and video links.")
             return
 
         if not map_name:
@@ -696,6 +733,7 @@ class MapInstallerGUI:
                 self.map_name_entry.configure(state="readonly")
 
         # Disable controls during pipeline
+        self._pipeline_running = True
         self.install_btn.configure(state="disabled")
         self.preflight_btn.configure(state="disabled")
 
@@ -714,16 +752,27 @@ class MapInstallerGUI:
         # GUI mode: don't call input() in pipeline steps
         self.pipeline_state._interactive = False
 
-        # Close any previous log file and open a new one for this install run
-        if self._log_file:
-            try:
-                self._log_file.close()
-            except Exception:
-                pass
-        self._log_file = map_installer.setup_log_file(
-            self.pipeline_state.map_name)
-        self._redirector.log_file = self._log_file
-        print(f"Log file: {self._log_file.name}")
+        # Close any previous log file handler and open a new one for this install run
+        if self._file_handler:
+            root_logger = logging.getLogger("jd2021")
+            root_logger.removeHandler(self._file_handler)
+            self._file_handler.close()
+            self._file_handler = None
+
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        logs_dir = os.path.join(script_dir, "logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        log_path = os.path.join(
+            logs_dir, f"install_{self.pipeline_state.map_name}_{timestamp}.log")
+        fh = logging.FileHandler(log_path, encoding="utf-8")
+        fh.setLevel(logging.DEBUG)
+        fh.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)-5s] %(name)s: %(message)s",
+            datefmt="%H:%M:%S"))
+        logging.getLogger("jd2021").addHandler(fh)
+        self._file_handler = fh
+        logger.info("Log file: %s", log_path)
 
         self.pipeline_thread = threading.Thread(
             target=self._run_pipeline, daemon=True)
@@ -750,11 +799,14 @@ class MapInstallerGUI:
                 self.root.after(0, self._update_step_status, i, "done")
             except Exception as e:
                 self.root.after(0, self._update_step_status, i, "error")
-                print(f"ERROR at step {i+1}: {e}")
-                self.root.after(0, lambda err=str(e), idx=i: messagebox.showerror(
-                    "Pipeline Error", f"Step {idx+1} failed:\n{err}"))
-                self.root.after(0, lambda: self.install_btn.configure(state="normal"))
-                self.root.after(0, lambda: self.preflight_btn.configure(state="normal"))
+                step_name = self.STEP_NAMES[i]
+                print(f"ERROR at step {i+1} ({step_name}): {e}")
+                hint = ""
+                if i <= 1:
+                    hint = "\n\nIf download failed, your HTML links may have expired.\nGet fresh links and try again."
+                self.root.after(0, lambda err=str(e), idx=i, sn=step_name, h=hint: messagebox.showerror(
+                    "Pipeline Error", f"Step {idx+1} ({sn}) failed:\n{err}{h}"))
+                self.root.after(0, self._on_pipeline_error)
                 return
 
             # After step 4 (IPK unpack), check for non-ASCII metadata and prompt
@@ -848,12 +900,21 @@ class MapInstallerGUI:
                 result_event.set()
 
             self.root.after(0, _ask)
-            result_event.wait()  # Block pipeline thread until user responds
+            # Block pipeline thread until user responds, but check for window close
+            while not result_event.wait(timeout=0.5):
+                if self._closing:
+                    return
 
             state.metadata_overrides[field] = result_holder[0]
             print(f"    {field}: '{original_val}' → '{result_holder[0]}'")
 
+    def _on_pipeline_error(self):
+        self._pipeline_running = False
+        self.install_btn.configure(state="normal")
+        self.preflight_btn.configure(state="normal")
+
     def _on_pipeline_complete(self):
+        self._pipeline_running = False
         state = self.pipeline_state
         # Populate sync values from pipeline
         self.v_override_var.set(
@@ -962,6 +1023,9 @@ class MapInstallerGUI:
         state = self.pipeline_state
         if not state or not state.video_path or not state.audio_path:
             return
+        if getattr(self, '_preview_starting', False):
+            return
+        self._preview_starting = True
 
         v_override = self.v_override_var.get()
         a_offset = self.a_offset_var.get()
@@ -1051,6 +1115,8 @@ class MapInstallerGUI:
                     self._frame_thread.start()
                 except Exception as e:
                     print(f"    ERROR: Could not launch preview: {e}")
+                finally:
+                    self._preview_starting = False
 
         threading.Thread(target=_do, daemon=True).start()
 
@@ -1079,6 +1145,13 @@ class MapInstallerGUI:
                                         ffplay_cmd,
                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                         creationflags=cflags)
+                                except FileNotFoundError:
+                                    if not getattr(self, '_ffplay_warned', False):
+                                        self._ffplay_warned = True
+                                        self.root.after(0, lambda: messagebox.showinfo(
+                                            "ffplay Not Found",
+                                            "ffplay was not found. Video will play without audio.\n\n"
+                                            "Install FFmpeg to enable audio preview."))
                                 except Exception as e:
                                     print(f"    ERROR: Could not launch ffplay: {e}")
                     
@@ -1153,7 +1226,7 @@ class MapInstallerGUI:
         pct = self.seek_var.get()
         self._preview_position = (pct / 100.0) * self._preview_duration
         if self._preview_auto_resume:
-            self._launch_preview(self._preview_position)
+            self._debounce_resume_preview()
         self._preview_auto_resume = False
 
     def _on_preview_resize(self, event):
@@ -1324,26 +1397,32 @@ class MapInstallerGUI:
             try:
                 os.remove(f)
                 removed += 1
-            except OSError:
-                pass
+            except OSError as e:
+                logger.warning("Could not delete %s: %s", f, e)
 
         # 2. Extracted scene directories
         for d in glob.glob(os.path.join(dl_dir, "*_MAIN_SCENE_*")):
             if os.path.isdir(d):
-                shutil.rmtree(d, ignore_errors=True)
-                removed += 1
+                try:
+                    shutil.rmtree(d)
+                    removed += 1
+                except OSError as e:
+                    logger.warning("Could not remove directory %s: %s", d, e)
         extracted_dir = os.path.join(dl_dir, "main_scene_extracted")
         if os.path.isdir(extracted_dir):
-            shutil.rmtree(extracted_dir, ignore_errors=True)
-            removed += 1
+            try:
+                shutil.rmtree(extracted_dir)
+                removed += 1
+            except OSError as e:
+                logger.warning("Could not remove directory %s: %s", extracted_dir, e)
 
         # 3. Decoded CKD intermediates (textures already converted to PNG/TGA)
         for f in glob.glob(os.path.join(dl_dir, "*.ckd")):
             try:
                 os.remove(f)
                 removed += 1
-            except OSError:
-                pass
+            except OSError as e:
+                logger.warning("Could not delete %s: %s", f, e)
 
         if removed:
             print(f"    Cleaned up {removed} downloaded file(s)/folder(s) for {state.map_name}.")
@@ -1355,13 +1434,13 @@ class MapInstallerGUI:
     # ------------------------------------------------------------------
 
     def _on_close(self):
+        self._closing = True
         self._kill_current_preview()
         self._restore_stdout()
-        if self._log_file:
-            try:
-                self._log_file.close()
-            except Exception:
-                pass
+        if self._file_handler:
+            root_logger = logging.getLogger("jd2021")
+            root_logger.removeHandler(self._file_handler)
+            self._file_handler.close()
         self.root.destroy()
 
 
