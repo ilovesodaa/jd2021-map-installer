@@ -64,11 +64,21 @@ projectRoot/
 ├── README.md
 ├── docs/
 │   ├── GETTING_STARTED.md
+│   ├── ARCHITECTURE.md
+│   ├── PIPELINE_REFERENCE.md
+│   ├── GUI_REFERENCE.md
+│   ├── CLI_REFERENCE.md
 │   ├── AUDIO_TIMING.md
+│   ├── TROUBLESHOOTING.md
+│   ├── DATA_FORMATS.md
+│   ├── MAP_CONFIG_FORMAT.md
+│   ├── VIDEO_QUALITY.md
+│   ├── GAME_CONFIG_REFERENCE.md
+│   ├── THIRD_PARTY_TOOLS.md
+│   ├── KNOWN_GAPS.md
 │   ├── MANUAL_PORTING_GUIDE.md
 │   ├── JDU_DATA_MAPPING.md
 │   ├── JDU_UNUSED_DATA_OPPORTUNITIES.md
-│   ├── JD21_Configuration_Map.md
 │   └── MOBILE_SCORING_RESTORATION.md
 └── jd21/                    <- your JD2021 PC install from Step 2
 ```
@@ -89,12 +99,15 @@ Each map install requires **two HTML files** exported from the **JDHelper** Disc
 
    ![Selector Tool](img/selector_tool.png)
 
-6. Hover over the bot's response message in Discord, just above the main embed
+6. Hover over the bot's response message in Discord. The empty space at the right side is usually easier to work with.
 
    ![Hover Message](img/hover_message.png)
 
 7. In the DOM tree, find the `div` with an ID starting with `message-accessories-...`
 8. Right-click it → **Copy** → **Copy element**
+
+   ![Copy Element](img/copy_element.png)
+
 9. Paste into a text file and save as:
    - `assets.html` — for the JDU assets query
    - `nohud.html` — for the NOHUD video query
@@ -160,7 +173,7 @@ Then run:
 python batch_install_maps.py "C:\path\to\maps"
 ```
 
-Each map opens in its own terminal window for independent review.
+The batch installer uses two-phase execution: Phase 1 downloads all maps first (while CDN links are fresh), then Phase 2 processes them locally. Use `--skip-existing` to skip already-installed maps, or `--only MapA MapB` to install specific maps.
 
 ---
 
@@ -191,6 +204,12 @@ Each map opens in its own terminal window for independent review.
 ## Further Reading
 
 - **[README.md](../README.md)** — Project overview, feature list, and limitations
-- **[AUDIO_TIMING.md](AUDIO_TIMING.md)** — How `videoStartTime` causes pre-roll silence and how the AMB intro fix works
-- **[MANUAL_PORTING_GUIDE.md](MANUAL_PORTING_GUIDE.md)** — How to manually port a map without scripts; map directory structure reference
-- **[JDU_DATA_MAPPING.md](JDU_DATA_MAPPING.md)** — Technical property mapping between JDU and JD2021 PC
+- **[Architecture](ARCHITECTURE.md)** — Internal component map, data flow, and design decisions
+- **[Pipeline Reference](PIPELINE_REFERENCE.md)** — Detailed breakdown of each pipeline step
+- **[GUI Reference](GUI_REFERENCE.md)** — GUI controls and sync refinement panel
+- **[CLI Reference](CLI_REFERENCE.md)** — CLI arguments, batch mode, and preflight checks
+- **[Audio Timing](AUDIO_TIMING.md)** — How `videoStartTime` causes pre-roll silence and how the AMB intro fix works
+- **[Troubleshooting](TROUBLESHOOTING.md)** — Common errors and their solutions
+- **[Data Formats](DATA_FORMATS.md)** — Binary and text file format reference (CKD, IPK, ISC, etc.)
+- **[JDU Data Mapping](JDU_DATA_MAPPING.md)** — Field-level mapping between JDU JSON and JD2021 PC
+- **[Manual Porting Guide](MANUAL_PORTING_GUIDE.md)** — How to manually port a map without scripts
