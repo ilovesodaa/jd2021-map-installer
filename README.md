@@ -79,7 +79,7 @@ This project utilizes several essential third-party tools from the Just Dance mo
 - **[XTX-Extractor](https://github.com/aboood40091/XTX-Extractor)**: For extracting textures from Switch-specific XTX containers.
 - **[ubiart-archive-tools](https://github.com/PartyService/ubiart-archive-tools)**: For unpacking and packing UbiArt `.ipk` archives.
 - **JDTools by BLDS**: Tape processing logic was analyzed and ported, bringing cinematic curve handling, MotionClip color conversion, ambient sound processing, and improved Lua serialization to this pipeline.
-- **UBIART-AMB-CUTTER by RN-JK**: AMB extraction algorithm (marker tick-to-millisecond formula and SoundSetClip splitting logic) used as a reference for implementing the automated AMB audio generation in this pipeline.
+- **[UBIART-AMB-CUTTER](https://github.com/RN-JK/UBIART-AMB-CUTTER)**: AMB extraction algorithm (marker tick-to-millisecond formula and SoundSetClip splitting logic) used as a reference for implementing the automated AMB audio generation in this pipeline.
 - **Just Dance Helper**: For providing a way to get JDU assets and NOHUD videos from Discord. Built by [rama0dev](https://github.com/rama0dev).
 
 Special thanks to the authors and contributors of these tools for making Just Dance modding possible.
