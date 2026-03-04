@@ -232,30 +232,7 @@ After the pipeline completes, the CLI enters an interactive sync refinement loop
 
 ---
 
-## Step 07 — Convert Choreography/Karaoke Tapes
 
-**Function:** `step_07_convert_tapes(state)` (`map_installer.py:1349`)
-
-**Purpose:** Convert dance and karaoke tapes from CKD JSON to UbiArt Lua.
-
-**Actions:**
-1. For each tape type (`dance`, `karaoke`):
-   - Find `*_tml_{type}.?tape.ckd` in `ipk_extracted`
-   - Parse JSON via `load_ckd_json()`
-   - Process via `ubiart_lua.process_tape()`:
-     - Collect unique TrackIds from all clips
-     - Convert MotionClip Color arrays to `0xRRGGBBAA` hex strings
-     - Convert MotionPlatformSpecifics to KEY/VAL format
-     - Normalize degenerate TrackIds (all-unique → group by class)
-     - Build Tracks array
-     - Apply `remove_class()` and `remove_falsy()` transformations
-   - Write Lua output to `Timeline/{MapName}_TML_{Type}.{x}tape`
-
-**Inputs:** `state.ipk_extracted`, `state.target_dir`, `state.map_name`
-
-**Skip condition:** If no tape CKD files are found for a given type, that type is silently skipped.
-
----
 
 ## Step 08 — Convert Cinematic Tapes
 
@@ -479,3 +456,27 @@ This prevents link expiration when installing many maps, since JDHelper auth tok
 3. Calls `extract_amb_audio()` to update SoundSetClip placeholders
 4. Updates `state.a_offset`
 5. Clears the game cache directory
+## Step 07 — Convert Choreography/Karaoke Tapes
+
+**Function:** `step_07_convert_tapes(state)` (`map_installer.py:1349`)
+
+**Purpose:** Convert dance and karaoke tapes from CKD JSON to UbiArt Lua.
+
+**Actions:**
+1. For each tape type (`dance`, `karaoke`):
+   - Find `*_tml_{type}.?tape.ckd` in `ipk_extracted`
+   - Parse JSON via `load_ckd_json()`
+   - Process via `ubiart_lua.process_tape()`:
+     - Collect unique TrackIds from all clips
+     - Convert MotionClip Color arrays to `0xRRGGBBAA` hex strings
+     - Convert MotionPlatformSpecifics to KEY/VAL format
+     - Normalize degenerate TrackIds (all-unique → group by class)
+     - Build Tracks array
+     - Apply `remove_class()` and `remove_falsy()` transformations
+   - Write Lua output to `Timeline/{MapName}_TML_{Type}.{x}tape`
+
+**Inputs:** `state.ipk_extracted`, `state.target_dir`, `state.map_name`
+
+**Skip condition:** If no tape CKD files are found for a given type, that type is silently skipped.
+
+---
