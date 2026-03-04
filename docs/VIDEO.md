@@ -1,6 +1,6 @@
-# Video Quality Tiers
+# Video Reference
 
-This document describes the video quality selection system in the JD2021 Map Installer.
+This document covers the NOHUD video quality system in the JD2021 Map Installer: available tiers, selection/fallback behavior, and technical analysis of the source video files.
 
 ---
 
@@ -102,3 +102,66 @@ On reinstallation, saved configs are loaded automatically, including the quality
 Higher quality tiers produce significantly larger WebM files. `ULTRA_HD` videos typically range from 200–500 MB per map. If disk space is limited, consider using `HIGH` or `MID` tier.
 
 The pipeline stores only one video quality per map at a time. Switching quality requires re-downloading the video (or having multiple quality files already present).
+
+---
+
+## NOHUD Video File Analysis
+
+These are **NOHUD (No Heads-Up Display) coach videos** — background dance footage stripped of in-game overlays (score, arrows, coach UI, etc.). The 8 tiers above correspond to **4 quality levels × 2 variants** (`HD` and non-`HD`), plus one shared audio track.
+
+**Common properties across all `.webm` files:**
+
+- Codec: VP8
+- Pixel format: yuv420p
+- Frame rate: 25 fps
+- Duration: ~194.36s
+
+### File Reference Table
+
+| File | Resolution | Bitrate | Size | VP8 Profile |
+|---|---|---|---|---|
+| `ULTRA HD.webm` | 1920×1080 | 8,822 kbps | 214 MB | 0 |
+| `ULTRA.webm` | 1216×720 | 7,889 kbps | 192 MB | **2** |
+| `HIGH HD.webm` | 1280×720 | 3,834 kbps | 93.1 MB | 0 |
+| `HIGH.webm` | 1216×720 | 3,850 kbps | 93.5 MB | **2** |
+| `MID HD.webm` | 768×432 | 1,902 kbps | 46.2 MB | 0 |
+| `MID.webm` | 768×432 | 1,902 kbps | 46.2 MB | 0 |
+| `LOW HD.webm` | 480×270 | 533 kbps | 12.9 MB | 0 |
+| `LOW.webm` | 480×270 | 529 kbps | 12.9 MB | 0 |
+
+### The Two Encoding Generations
+
+The non-`HD` and `HD` files represent **two different encoding targets** — likely an **original game rip** vs. a **re-encoded/corrected version**.
+
+#### The 1216-Wide Non-Standard Width
+
+`HIGH.webm` and `ULTRA.webm` are **1216 pixels wide** — not a broadcast or web standard. Standard 720p is 1280×720.
+
+This strongly suggests these non-HD videos were **cropped from their original source** — likely to remove letterboxing, pillarboxing, or a HUD-safe zone that the game rendered around the coach area. The `HD` variants correct this to proper standard resolutions (**1280×720** and **1920×1080**).
+
+#### VP8 Profile Difference
+
+- **Profile 0** (HD variants): Simpler, widely compatible — the standard for web/game use.
+- **Profile 2** (ULTRA.webm, HIGH.webm): Supports more complex motion estimation. Often an artifact of the original game engine's encoder. Less universally supported on older or embedded decoders.
+
+This further supports that the non-HD files are **original game-extracted rips**, while HD variants were re-encoded for better compatibility.
+
+### MID and LOW: No Real Difference
+
+For `MID` and `LOW`, both variants are **functionally identical** — same resolution, same profile, within ~0.1% file size of each other. The `HD` label is effectively meaningless at these tiers.
+
+### Audio Gap
+
+`AUDIO.ogg` (Vorbis, 224 kbps) is **~188.95s** — about **5.4 seconds shorter** than the video files (~194.36s).
+
+The audio is intentionally not aligned 1:1 with the video and requires tuning via the installer's **audio offset sync feature**.
+
+---
+
+## Quick-Reference Q&A
+
+| Question | Answer |
+|---|---|
+| Which variants to use? | **HD** for ULTRA and HIGH (correct aspect ratio, Profile 0). MID/LOW are interchangeable. |
+| Why is ULTRA HD so much bigger? | 1920×1080 vs 1216×720 is ~2.3× the pixel count, reflected in the larger file size. |
+| Why is audio shorter than video? | Intentional offset — handled by the installer's audio sync feature. |
