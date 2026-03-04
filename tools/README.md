@@ -87,6 +87,30 @@ python convert_tape_raw.py file1_tml_dance.dtape.ckd file2_tml_karaoke.ktape.ckd
 python convert_tape_raw.py file1.dtape.ckd --output path/to/output
 ```
 
+---
+
+### 6. `convert_json_to_lua.py` (Generic JSON -> Lua Converter)
+
+A generic translation utility for converting standard non-tape CKD JSON objects (such as autodance templates, `configmusic.sfi.ckd`, and arbitrary UbiArt parameters) into formatted Engine Lua setups.
+
+**Usage:**
+
+```bash
+python convert_json_to_lua.py path/to/input.ckd path/to/output.lua
+```
+
+---
+
+### 7. `create_autodance_stubs.py` (Autodance Stub Generator)
+
+Generates the native Autodance camera logic (`.act` / `.isc` / `.tpl`) files with full recording/video structures and FX parameters. It safely skips overwriting `.tpl` files that have already been populated via engine integration.
+
+**Usage:**
+
+```bash
+python create_autodance_stubs.py --map-name MapName --output path/to/output
+```
+
 ## Requirements
 
 These tools are written in pure Python 3 and have no external library dependencies (no `lxml`, no `quickbms` required).
