@@ -1,6 +1,6 @@
 # JD2021 Modding Tools
 
-This folder contains a collection of Python scripts for working with Just Dance 2021 PC game files. These tools aid in extracting, converting, and registering map data.
+This folder contains a collection of standalone Python scripts for working with Just Dance 2021 PC game files. These tools aid in extracting, converting, and registering map data.
 
 ## Available Tools
 
