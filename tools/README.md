@@ -71,6 +71,22 @@ This is a core utility module imported by the other tools. It is not meant to be
 - UbiArt class transformations and empty-field stripping
 - A `Vector2D` class used specifically when processing cinematic curve coordinates
 
+---
+
+### 5. `convert_tape_raw.py` (Raw Tape Converter)
+
+Converts "cooked" UbiArt tape data (`.dtape.ckd` or `.ktape.ckd`) into raw, readable JSON files by stripping trailing null bytes and formatting the JSON data.
+
+**Usage:**
+
+```bash
+# Convert one or more tape CKD files to raw JSON in the current directory
+python convert_tape_raw.py file1_tml_dance.dtape.ckd file2_tml_karaoke.ktape.ckd
+
+# Convert files and save them to a specific output directory
+python convert_tape_raw.py file1.dtape.ckd --output path/to/output
+```
+
 ## Requirements
 
 These tools are written in pure Python 3 and have no external library dependencies (no `lxml`, no `quickbms` required).
