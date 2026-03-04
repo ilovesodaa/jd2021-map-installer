@@ -184,7 +184,7 @@ The batch installer uses two-phase execution: Phase 1 downloads all maps first (
 ## What the Installer Does
 
 | Step | Description |
-|------|-------------|
+| ------ | ------------- |
 | **[1]** | Pre-install cleanup (remove previous map installation from game directory) |
 | **[2]** | Clean previous build output (target dir, cache, extracted dirs) |
 | **[3]** | Download assets (IPKs, ZIPs, WebMs, textures) from JDU servers |

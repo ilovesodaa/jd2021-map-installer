@@ -22,37 +22,42 @@ An automated pipeline for extracting, building, and installing JDU (Just Dance U
 
 ## Core Scripts
 
-* `gui_installer.py`: Graphical interface for the installer. Provides file browsing, auto-detected map name, video quality selection, real-time progress, sync refinement with FFplay preview, and map config persistence.
-* `map_installer.py`: The main orchestrator. Handles downloading, unzipping, IPK unpacking, tape conversion, audio/video synchronization, intro AMB generation, asset conversion, and engine integration. Can be used standalone via CLI.
-* `map_builder.py`: Autogenerates the UbiArt `.isc`, `.tpl`, `.act`, `.trk`, and `.mpd` configurations for the map, including enriched SongDesc metadata and full DefaultColors extraction from CKD data.
-* `map_downloader.py`: Scrapes and downloads all necessary IPKs, ZIPs, WebMs, and CKD assets from JDU server mapping HTML files.
-* `ubiart_lua.py`: UbiArt-aware Lua converter for tapes and game data. Handles MotionClip color encoding, MotionPlatformSpecifics KEY/VAL conversion, cinematic curve processing with `vector2dNew()`, ActorIndices-to-ActorPaths resolution, `Tracks` array generation, and ambient sound template processing.
-* `json_to_lua.py`: Generic JSON-to-Lua converter used for non-tape files (autodance templates, stape data). For tape conversion, see `ubiart_lua.py`.
-* `ckd_decode.py`: Decodes compressed CKD textures (strips 44-byte UbiArt header, handles DDS and XTX/Nintendo Switch formats).
-* `batch_install_maps.py`: Two-phase batch installer. Downloads all maps first (while CDN links are fresh), then processes them locally. Supports `--skip-existing`, `--only`, and `--exclude` filters.
+- `gui_installer.py`: Graphical interface for the installer. Provides file browsing, auto-detected map name, video quality selection, real-time progress, sync refinement with FFplay preview, and map config persistence.
+- `map_installer.py`: The main orchestrator. Handles downloading, unzipping, IPK unpacking, tape conversion, audio/video synchronization, intro AMB generation, asset conversion, and engine integration. Can be used standalone via CLI.
+- `map_builder.py`: Autogenerates the UbiArt `.isc`, `.tpl`, `.act`, `.trk`, and `.mpd` configurations for the map, including enriched SongDesc metadata and full DefaultColors extraction from CKD data.
+- `map_downloader.py`: Scrapes and downloads all necessary IPKs, ZIPs, WebMs, and CKD assets from JDU server mapping HTML files.
+- `ubiart_lua.py`: UbiArt-aware Lua converter for tapes and game data. Handles MotionClip color encoding, MotionPlatformSpecifics KEY/VAL conversion, cinematic curve processing with `vector2dNew()`, ActorIndices-to-ActorPaths resolution, `Tracks` array generation, and ambient sound template processing.
+- `json_to_lua.py`: Generic JSON-to-Lua converter used for non-tape files (autodance templates, stape data). For tape conversion, see `ubiart_lua.py`.
+- `ckd_decode.py`: Decodes compressed CKD textures (strips 44-byte UbiArt header, handles DDS and XTX/Nintendo Switch formats).
+- `batch_install_maps.py`: Two-phase batch installer. Downloads all maps first (while CDN links are fresh), then processes them locally. Supports `--skip-existing`, `--only`, and `--exclude` filters.
 
 ## Documentation
 
 ### Setup and Usage
+
 - **[Getting Started](docs/GETTING_STARTED.md)** — Full setup walkthrough: dependencies, third-party tools, obtaining JD2021 PC, and running the installer.
 - **[GUI Reference](docs/GUI_REFERENCE.md)** — GUI controls, sync refinement panel, embedded preview, and post-install cleanup.
 - **[CLI Reference](docs/CLI_REFERENCE.md)** — CLI arguments, interactive sync loop, batch mode, and preflight checks.
-- **[Video Quality](docs/VIDEO_QUALITY.md)** — Quality tiers, fallback behavior, and persistence.
+- **[Asset HTML Files](docs/ASSETS.md)** — Format and contents of `assets.html` and `nohud.html`, CDN URL anatomy, and what the pipeline downloads from each.
+- **[Video Reference](docs/VIDEO.md)** — Quality tiers, fallback behavior, persistence, and NOHUD file analysis.
 - **[Troubleshooting](docs/TROUBLESHOOTING.md)** — Common errors and solutions derived from code analysis.
 
 ### Architecture and Internals
+
 - **[Architecture](docs/ARCHITECTURE.md)** — Internal component map, PipelineState, data flow, dual interface pattern, and design decisions.
 - **[Pipeline Reference](docs/PIPELINE_REFERENCE.md)** — Every pipeline step: inputs, outputs, failure modes, and skip conditions.
 - **[Audio Timing & Pre-Roll Silence](docs/AUDIO_TIMING.md)** — The `videoStartTime` synchronization model and the AMB intro solution.
 - **[Data Formats](docs/DATA_FORMATS.md)** — Binary and text file format reference (CKD, IPK, ISC, TRK, TPL, etc.).
 
 ### Data References
+
 - **[JDU Data Mapping](docs/JDU_DATA_MAPPING.md)** — Field-level mapping between JDU JSON payloads and JD2021 PC engine files.
 - **[Map Config Format](docs/MAP_CONFIG_FORMAT.md)** — Per-map sync configuration JSON schema.
 - **[Game Config Reference](docs/GAME_CONFIG_REFERENCE.md)** — JD2021 PC game configuration files and modding-relevant settings.
 - **[Third-Party Tools](docs/THIRD_PARTY_TOOLS.md)** — External dependencies, bundled tools, and referenced projects.
 
 ### Guides and Research
+
 - **[Manual Porting Guide](docs/MANUAL_PORTING_GUIDE.md)** — How to manually port a map without using the scripts; full map directory structure.
 - **[Unused Data Opportunities](docs/JDU_UNUSED_DATA_OPPORTUNITIES.md)** — Catalog of JDU data fields not currently used.
 - **[Known Gaps](docs/KNOWN_GAPS.md)** — Remaining limitations and potential improvements.
