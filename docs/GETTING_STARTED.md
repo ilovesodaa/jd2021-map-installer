@@ -7,16 +7,19 @@ This guide walks you through setting up the project from scratch.
 ## Step 1 — Install System Dependencies
 
 ### Python 3.6+
-Download from https://www.python.org/downloads/
+
+Download from <https://www.python.org/downloads/>
 
 During installation, check **"Add Python to PATH"**.
 
 Verify after installing:
+
 ```
 python --version
 ```
 
 ### Pillow (Python image library)
+
 ```
 pip install Pillow
 ```
@@ -72,7 +75,8 @@ projectRoot/
 │   ├── TROUBLESHOOTING.md
 │   ├── DATA_FORMATS.md
 │   ├── MAP_CONFIG_FORMAT.md
-│   ├── VIDEO_QUALITY.md
+│   ├── ASSETS.md
+│   ├── VIDEO.md
 │   ├── GAME_CONFIG_REFERENCE.md
 │   ├── THIRD_PARTY_TOOLS.md
 │   ├── KNOWN_GAPS.md
@@ -211,5 +215,7 @@ The batch installer uses two-phase execution: Phase 1 downloads all maps first (
 - **[Audio Timing](AUDIO_TIMING.md)** — How `videoStartTime` causes pre-roll silence and how the AMB intro fix works
 - **[Troubleshooting](TROUBLESHOOTING.md)** — Common errors and their solutions
 - **[Data Formats](DATA_FORMATS.md)** — Binary and text file format reference (CKD, IPK, ISC, etc.)
+- **[Asset HTML Files](ASSETS.md)** — Format and contents of `assets.html` and `nohud.html`, CDN URL anatomy, and what the pipeline downloads from each
+- **[Video Reference](VIDEO.md)** — Quality tiers, selection/fallback behaviour, and NOHUD file analysis
 - **[JDU Data Mapping](JDU_DATA_MAPPING.md)** — Field-level mapping between JDU JSON and JD2021 PC
 - **[Manual Porting Guide](MANUAL_PORTING_GUIDE.md)** — How to manually port a map without scripts
