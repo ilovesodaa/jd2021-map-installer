@@ -933,7 +933,7 @@ class MapInstallerGUI:
         messagebox.showinfo(
             "Complete",
             f"Installation pipeline finished for {state.map_name}.\n\n"
-            "The Tool isnt perfect so offset refinement is needed"
+            "The Tool isnt perfect, offset refinement is needed.\n\n"
             "Use the Sync Refinement panel below to fine-tune "
             "audio/video timing, then click 'Apply & Finish'.")
 
