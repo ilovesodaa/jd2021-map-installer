@@ -68,5 +68,5 @@ This section appears after the pipeline completes.
 - `StdoutToLogger` wraps `sys.stdout` and `sys.stderr` to capture `print()` output and forward it to logging.
 - On window close: kills preview processes, restores `stdout`/`stderr`, and destroys the window.
 - Post-apply cleanup prompt asks the user whether to delete ZIPs, extracted scenes, and CKDs.
-- Map configuration is saved to `map_configs/{map_name}.json`.
+- Global settings (default quality, offsets, etc.) are managed via `installer_settings.json` and the Settings dialog.
 - FFmpeg auto-install is offered if it is missing during preflight.

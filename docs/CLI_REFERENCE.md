@@ -92,7 +92,7 @@ The batch installer splits work into two phases to account for CDN link expirati
 
 - Auto-detects the codename from asset URLs.
 - Auto-detects existing video quality from already-downloaded files.
-- Loads saved sync configs from `map_configs/{map_name}.json`.
+- Supports `--readjust DOWNLOAD_DIR` for offset readjustment, loading settings from `installer_settings.json`.
 - Runs the preflight check using the first map's HTML files.
 - Ctrl+C is handled with graceful interruption.
 - Prints per-phase and final summary with OK / FAILED / SKIPPED counts.

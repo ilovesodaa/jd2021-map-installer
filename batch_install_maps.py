@@ -132,6 +132,9 @@ def run_steps(state, steps):
 
 
 def main():
+    # Load persistent settings for defaults
+    settings = map_installer.load_settings()
+
     parser = argparse.ArgumentParser(
         description="Batch-install map folders using two-phase execution. "
                     "Phase 1: Download all maps first (before links expire). "
@@ -147,8 +150,8 @@ def main():
         "--quality",
         choices=["ultra_hd", "ultra", "high_hd", "high",
                  "mid_hd", "mid", "low_hd", "low"],
-        default="ultra_hd",
-        help="Video quality for all maps (default: ultra_hd)")
+        default=settings["default_quality"],
+        help=f"Video quality for all maps (default: {settings['default_quality']})")
     parser.add_argument(
         "--skip-existing", action="store_true",
         help="Skip maps that already have an installed folder in MAPS/")
@@ -182,10 +185,13 @@ def main():
         sys.exit(1)
 
     # Preflight using first map's HTMLs
-    first_asset, first_nohud = found[0][1], found[0][2]
-    if not map_installer.preflight_check(jd_dir, first_asset, first_nohud,
-                                         interactive=False):
-        sys.exit(1)
+    if settings["skip_preflight"]:
+        print("    Pre-flight skipped (disabled in settings)")
+    else:
+        first_asset, first_nohud = found[0][1], found[0][2]
+        if not map_installer.preflight_check(jd_dir, first_asset, first_nohud,
+                                             interactive=False):
+            sys.exit(1)
 
     # Resolve game paths for skip-existing check
     game_paths = map_installer.resolve_game_paths(jd_dir)

@@ -1,12 +1,12 @@
-# Map Config Format
+# Installer Settings Format
 
-This document describes the per-map configuration JSON files stored in `map_configs/`.
+This document describes the persistent user settings stored in `installer_settings.json`.
 
 ---
 
 ## Overview
 
-When a map installation is finalized (via "Apply & Finish" in the GUI or the CLI sync refinement loop), the pipeline saves a configuration JSON file to `map_configs/{map_name}.json`. On subsequent installations of the same map, this config is automatically loaded to restore previous sync settings.
+The installer supports a shared settings file that controls behavior across all entry points (GUI, CLI, batch installer). Settings are loaded at startup and can be edited via the GUI Settings dialog or by editing the JSON file directly.
 
 ---
 
@@ -14,13 +14,10 @@ When a map installation is finalized (via "Apply & Finish" in the GUI or the CLI
 
 ```
 project_root/
-└── map_configs/
-    ├── Starships.json
-    ├── BadRomance.json
-    └── Albatraoz.json
+└── installer_settings.json
 ```
 
-The `map_configs/` directory is created automatically by `_config_dir()` (`map_installer.py:175`).
+Created automatically when settings are saved for the first time via the GUI Settings dialog or programmatically via `save_settings()`.
 
 ---
 
@@ -28,66 +25,67 @@ The `map_configs/` directory is created automatically by `_config_dir()` (`map_i
 
 ```json
 {
-  "map_name": "Starships",
-  "v_override": -2.145,
-  "a_offset": -2.060,
-  "quality": "ULTRA_HD",
-  "codename": "Starships",
-  "marker_preroll_ms": 2060.0,
-  "installed_at": "2024-01-15T14:30:00.123456"
+  "skip_preflight": false,
+  "suppress_offset_notification": false,
+  "auto_cleanup_downloads": false,
+  "default_quality": "ultra_hd"
 }
 ```
 
 ### Fields
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `map_name` | string | Sanitized map name used for file paths |
-| `v_override` | float | Video start time override in seconds (typically negative) |
-| `a_offset` | float | Audio offset in seconds (negative = trim, positive = pad) |
-| `quality` | string | Video quality tier used (e.g., `"ULTRA_HD"`, `"HIGH"`) |
-| `codename` | string | Internal JDU codename (may differ from map_name for sanitized names) |
-| `marker_preroll_ms` | float or null | Marker-based pre-roll duration in milliseconds, or null if unavailable |
-| `installed_at` | string | ISO 8601 timestamp of when the config was saved |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `skip_preflight` | bool | `false` | Skip pre-flight checks (ffmpeg, game paths, etc.). When enabled, the GUI Install button is available immediately without running Pre-flight Check first. CLI and batch also skip the preflight step. |
+| `suppress_offset_notification` | bool | `false` | Don't show the "offset refinement is needed" popup in the GUI after the installation pipeline completes. |
+| `auto_cleanup_downloads` | bool | `false` | Automatically delete intermediate download files (scene ZIPs, extracted scenes, decoded CKDs) after Apply & Finish, without prompting. Audio (.ogg), video (.webm), and IPK data are always kept. |
+| `default_quality` | string | `"ultra_hd"` | Default video quality tier. Used as the initial value for the GUI quality dropdown and as the CLI/batch default when `--quality` is not specified. Valid values: `ultra_hd`, `ultra`, `high_hd`, `high`, `mid_hd`, `mid`, `low_hd`, `low`. |
 
 ---
 
-## Loading Behavior
+## Where Settings Are Applied
 
-`load_map_config(map_name)` (`map_installer.py:182`) is called during pipeline state creation:
+### GUI (`gui_installer.py`)
+- **Startup**: Loads settings, applies `default_quality` to dropdown, enables Install button if `skip_preflight` is set
+- **Pre-flight Check button**: Skips checks if `skip_preflight` is enabled
+- **Pipeline complete**: Suppresses notification popup if `suppress_offset_notification` is set
+- **Post-apply cleanup**: Auto-cleans without dialog if `auto_cleanup_downloads` is set
+- **Settings dialog**: Opens a Toplevel window to edit all settings with Save/Cancel
 
-1. Checks for `map_configs/{map_name}.json`
-2. If found, loads and returns the JSON dict
-3. Prints the loaded sync values: `v_override`, `a_offset`, `quality`
-4. If the file is missing, corrupt, or unreadable, returns `None`
+### CLI (`map_installer.py`)
+- **Quality default**: `--quality` flag defaults to `default_quality` setting
+- **Pre-flight**: Skipped if `skip_preflight` is enabled
 
-In the batch installer (`batch_install_maps.py`), saved configs are loaded during `create_state()` to automatically apply previous sync settings.
-
----
-
-## Saving Behavior
-
-`save_map_config()` (`map_installer.py:197`) is called:
-- In the GUI: when "Apply & Finish" is clicked
-- In the CLI: not called automatically (the CLI sync loop exits on option 0 without saving)
-
-The function writes the JSON with `indent=2` formatting.
+### Batch (`batch_install_maps.py`)
+- **Quality default**: `--quality` flag defaults to `default_quality` setting
+- **Pre-flight**: Skipped if `skip_preflight` is enabled
 
 ---
 
-## Interaction with CLI Arguments
+## API Functions (`map_installer.py`)
 
-CLI arguments take precedence over saved config values:
+| Function | Description |
+|----------|-------------|
+| `load_settings()` | Returns a dict of all settings (defaults merged with saved values) |
+| `save_settings(settings_dict)` | Writes settings dict to `installer_settings.json` |
+| `get_setting(key)` | Convenience accessor for a single setting value |
 
+---
+
+## Offset Readjustment
+
+The installer also supports re-adjusting offset on an already-installed map without re-running the full pipeline, provided the original download files (`.ogg`, `.webm`) still exist.
+
+### GUI
+Click "Re-adjust Offset" and select the map's download folder. The sync refinement panel activates with the map's current values.
+
+### CLI
 ```bash
-# Uses saved config if available
-python map_installer.py --asset-html assets.html --nohud-html nohud.html
-
-# Overrides saved v_override
-python map_installer.py --asset-html assets.html --nohud-html nohud.html --video-override -3.0
-
-# Loads from explicit config file (overrides auto-detected config)
-python map_installer.py --asset-html assets.html --nohud-html nohud.html --sync-config my_config.json
+python map_installer.py --readjust path/to/MapDownloads/SomeMap
 ```
 
-When `--sync-config` is provided, `v_override`, `a_offset`, and `marker_preroll_ms` are loaded from the specified JSON file. Explicit CLI arguments (`--video-override`, `--audio-offset`) still take priority if both are provided.
+The `reconstruct_state_for_readjust()` function builds a minimal pipeline state from:
+- `.ogg` audio file in the download directory
+- `.webm` video file (excluding previews)
+- `ipk_extracted/` musictrack metadata (if available)
+- Installed `.trk` file `videoStartTime` (fallback)

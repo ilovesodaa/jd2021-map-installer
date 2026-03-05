@@ -19,7 +19,7 @@ Binary and text data formats used by the JD2021 Map Installer pipeline.
 - [SFI (Sound Format Info)](#sfi-sound-format-info)
 - [MPD (DASH Manifest)](#mpd-dash-manifest)
 - [WAV Audio Requirements](#wav-audio-requirements)
-- [Map Config JSON](#map-config-json)
+- [Installer Settings JSON](#installer-settings-json)
 - [installer_paths.json](#installer_pathsjson)
 
 ---
@@ -344,21 +344,18 @@ the source OGG file during conversion.
 
 ## Configuration Files
 
-### Map Config JSON
+### Installer Settings JSON
 
-Located in `map_configs/*.json`. Saved by `save_map_config()`.
+Located at `installer_settings.json` in the project root. See [MAP_CONFIG_FORMAT.md](MAP_CONFIG_FORMAT.md) for full documentation.
 
 **Fields:**
 
-| Field | Type | Description |
-|-------|------|-------------|
-| map_name | string | Display name of the map |
-| v_override | string | Video override path (if any) |
-| a_offset | float | Audio offset in seconds |
-| quality | string | Encoding quality setting |
-| codename | string | Internal map codename |
-| marker_preroll_ms | int | Pre-roll before first marker, in milliseconds |
-| installed_at | string | ISO 8601 timestamp of installation |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| skip_preflight | bool | false | Skip pre-flight checks on startup |
+| suppress_offset_notification | bool | false | Don't show offset refinement popup after install |
+| auto_cleanup_downloads | bool | false | Auto-delete intermediates after Apply & Finish |
+| default_quality | string | "ultra_hd" | Default video quality tier |
 
 ---
 

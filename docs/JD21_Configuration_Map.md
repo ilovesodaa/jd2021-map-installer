@@ -9,7 +9,7 @@
 | `jd21/engine/projectinfo.xml` | XML | Project ID (JD2021_TU1), branch info |
 | `jd21/engine/bloomberg_settings.ini` | INI | Crash reporting servers, logging level, build numbers |
 | `installer_paths.json` | JSON | Install directory paths, SKU scene reference |
-| `map_configs/*.json` | JSON | Per-map video/audio offset and quality (Balance, WorthIt, BrokenHeart) |
+| `installer_settings.json` | JSON | Global installer settings: default video quality, audio offset, and other defaults |
 
 ## 2. EngineData/GameConfig - Lua-Based Configs (84 files)
 

@@ -169,48 +169,149 @@ def detect_jd_dir(provided_dir=None):
     return SCRIPT_DIR
 
 
-CONFIG_DIR_NAME = "map_configs"
 
+# ---------------------------------------------------------------------------
+# Offset readjustment: reconstruct state from existing downloads
+# ---------------------------------------------------------------------------
 
-def _config_dir():
-    """Return the path to the project map_configs/ dir, creating it if needed."""
-    d = os.path.join(SCRIPT_DIR, CONFIG_DIR_NAME)
-    os.makedirs(d, exist_ok=True)
-    return d
+def reconstruct_state_for_readjust(download_dir, jd_dir=None):
+    """Build a minimal PipelineState from a map's download directory.
 
+    Used for re-adjusting offset on an already-installed map without
+    re-running the full pipeline.  Requires that .ogg and .webm files
+    still exist in download_dir.
 
-def load_map_config(map_name):
-    """Load a saved config JSON for a map. Returns dict or None."""
-    config_path = os.path.join(_config_dir(), f"{map_name}.json")
-    if os.path.isfile(config_path):
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            print(f"    Found previous config for {map_name}, using saved sync values")
-            print(f"      v_override={data.get('v_override')}, a_offset={data.get('a_offset')}, quality={data.get('quality')}")
-            return data
-        except (json.JSONDecodeError, OSError, KeyError) as e:
-            logger.warning("    Warning: Could not load config for %s: %s", map_name, e)
-    return None
+    Args:
+        download_dir: Path to the map's download folder (containing .ogg, .webm,
+                      and optionally ipk_extracted/).
+        jd_dir:       Search root for game data (auto-detected if omitted).
 
+    Returns:
+        A PipelineState ready for reprocess_audio() / generate_text_files().
 
-def save_map_config(map_name, v_override, a_offset, quality="ULTRA", codename=None,
-                    marker_preroll_ms=None):
-    """Save a sync config JSON for a map."""
-    config_path = os.path.join(_config_dir(), f"{map_name}.json")
-    data = {
-        "map_name": map_name,
-        "v_override": v_override,
-        "a_offset": a_offset,
-        "quality": quality,
-        "codename": codename or map_name,
-        "marker_preroll_ms": marker_preroll_ms,
-        "installed_at": datetime.datetime.now().isoformat(),
-    }
-    with open(config_path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2)
-    print(f"    Config saved to {config_path}")
-    return config_path
+    Raises:
+        FileNotFoundError: If required audio/video files are missing.
+        RuntimeError:      If game data cannot be located.
+    """
+    download_dir = os.path.abspath(download_dir)
+    if not os.path.isdir(download_dir):
+        raise FileNotFoundError(f"Download directory not found: {download_dir}")
+
+    # --- Locate .ogg audio ---
+    ogg_files = [f for f in os.listdir(download_dir) if f.endswith('.ogg')]
+    if not ogg_files:
+        raise FileNotFoundError(f"No .ogg audio file found in {download_dir}")
+    audio_path = os.path.join(download_dir, ogg_files[0])
+
+    # --- Locate .webm video (exclude previews) ---
+    webm_files = [f for f in os.listdir(download_dir)
+                  if f.endswith('.webm')
+                  and 'MapPreview' not in f
+                  and 'VideoPreview' not in f]
+    if not webm_files:
+        raise FileNotFoundError(f"No gameplay .webm video found in {download_dir}")
+    video_path = os.path.join(download_dir, webm_files[0])
+
+    # --- Derive map name ---
+    map_name = None
+    asset_html = os.path.join(download_dir, "assets.html")
+    if os.path.isfile(asset_html):
+        urls = map_downloader.extract_urls(asset_html)
+        map_name = map_downloader.extract_codename_from_urls(urls)
+    if not map_name:
+        map_name = os.path.basename(download_dir)
+    map_name = sanitize_map_name(map_name, interactive=False)
+
+    # --- Resolve game paths ---
+    search_root = jd_dir or SCRIPT_DIR
+    game_paths = resolve_game_paths(search_root)
+    if not game_paths:
+        raise RuntimeError(
+            f"Cannot locate JD2021 game data from '{search_root}'. "
+            "Provide the correct --jd-dir or ensure jd21/ is accessible.")
+    jd21_dir = game_paths['jd21_dir']
+
+    # --- Build a minimal PipelineState ---
+    # Use dummy HTML paths since we won't download anything
+    state = PipelineState(
+        map_name=map_name,
+        asset_html=asset_html if os.path.isfile(asset_html) else "(readjust)",
+        nohud_html="(readjust)",
+        jd_dir=search_root,
+    )
+    state.audio_path = audio_path
+    state.video_path = video_path
+    state._interactive = True
+
+    # --- IPK extracted dir ---
+    ipk_dir = os.path.join(download_dir, "ipk_extracted")
+    if os.path.isdir(ipk_dir):
+        state.ipk_extracted = ipk_dir
+
+    # --- Extract musictrack metadata from ipk_extracted if available ---
+    v_override = None
+    marker_preroll_ms = None
+    if os.path.isdir(ipk_dir):
+        mt_meta = map_builder.extract_musictrack_metadata(ipk_dir)
+        if mt_meta:
+            v_override = mt_meta["video_start_time"]
+            state.musictrack_start_beat = mt_meta["start_beat"]
+            marker_preroll_ms = compute_marker_preroll(
+                mt_meta["markers"], mt_meta["start_beat"])
+
+    # --- Fallback: parse videoStartTime from installed .trk file ---
+    if v_override is None:
+        trk_pattern = os.path.join(
+            state.target_dir, "Timeline", f"{map_name}_MusicTrack.trk")
+        if os.path.isfile(trk_pattern):
+            try:
+                with open(trk_pattern, 'r', encoding='utf-8') as f:
+                    trk_text = f.read()
+                m = re.search(r'videoStartTime\s*=\s*([-\d.]+)', trk_text)
+                if m:
+                    v_override = float(m.group(1))
+                    print(f"    Read videoStartTime from installed .trk: {v_override}")
+            except (OSError, ValueError) as e:
+                logger.warning("    Could not read .trk file: %s", e)
+
+    state.v_override = v_override if v_override is not None else 0.0
+    state.marker_preroll_ms = marker_preroll_ms
+
+    # --- Compute a_offset from marker data ---
+    if marker_preroll_ms is not None:
+        state.a_offset = -(marker_preroll_ms / 1000.0)
+    else:
+        state.a_offset = state.v_override
+
+    # --- Load AMB sound clip metadata from mainsequence tape if available ---
+    if os.path.isdir(ipk_dir):
+        import ubiart_lua as _ual
+        cine_tapes = glob.glob(
+            os.path.join(ipk_dir, "**", "*mainsequence*tape.ckd"), recursive=True)
+        for tape_file in cine_tapes:
+            try:
+                tape_data = _ual.load_ckd_json(tape_file)
+                for raw_clip in tape_data.get("Clips", []):
+                    if raw_clip.get("__class") == "SoundSetClip":
+                        clip_name = raw_clip["SoundSetPath"].split("/")[-1].split(".")[0]
+                        state.amb_sound_clips.append({
+                            "name": clip_name,
+                            "start_time": raw_clip["StartTime"],
+                            "duration": raw_clip["Duration"],
+                            "path": raw_clip["SoundSetPath"],
+                        })
+            except (json.JSONDecodeError, KeyError, OSError):
+                pass
+
+    print(f"    Readjust state built for '{map_name}':")
+    print(f"      Audio:    {audio_path}")
+    print(f"      Video:    {video_path}")
+    print(f"      v_override: {state.v_override}")
+    print(f"      a_offset:   {state.a_offset}")
+    if marker_preroll_ms is not None:
+        print(f"      marker_preroll_ms: {marker_preroll_ms:.1f}")
+
+    return state
 
 
 # ---------------------------------------------------------------------------
@@ -248,10 +349,54 @@ def clear_paths_cache():
     return False
 
 
+# ---------------------------------------------------------------------------
+# User settings (persistent preferences)
+# ---------------------------------------------------------------------------
+
+SETTINGS_FILE = os.path.join(SCRIPT_DIR, "installer_settings.json")
+
+DEFAULT_SETTINGS = {
+    "skip_preflight": False,
+    "suppress_offset_notification": False,
+    "auto_cleanup_downloads": False,
+    "default_quality": "ultra_hd",
+}
+
+
+def load_settings():
+    """Load user settings, returning defaults merged with saved values."""
+    settings = dict(DEFAULT_SETTINGS)
+    if os.path.isfile(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                saved = json.load(f)
+            # Only merge known keys to avoid stale/invalid entries
+            for key in DEFAULT_SETTINGS:
+                if key in saved:
+                    settings[key] = saved[key]
+        except (json.JSONDecodeError, OSError):
+            pass
+    return settings
+
+
+def save_settings(settings):
+    """Persist user settings to disk."""
+    try:
+        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(settings, f, indent=2)
+    except OSError as e:
+        logger.warning("Could not save settings: %s", e)
+
+
+def get_setting(key):
+    """Convenience accessor for a single setting value."""
+    return load_settings().get(key, DEFAULT_SETTINGS.get(key))
+
+
 def _scan_for_sku_scene(search_root):
     """Walk search_root recursively to find SkuScene_Maps_PC_All.isc."""
     target = "SkuScene_Maps_PC_All.isc"
-    skip = {'__pycache__', '.git', 'logs', 'map_configs', 'downloads',
+    skip = {'__pycache__', '.git', 'logs', 'downloads',
             'main_scene_extracted', 'ipk_extracted', 'tools', 'xtx_extractor'}
     for root, dirs, files in os.walk(search_root):
         dirs[:] = [d for d in dirs if d not in skip]
@@ -1725,90 +1870,125 @@ def main():
     print("  fetch fresh links from the server.")
     print("==================================================\n")
 
+    # Load persistent settings for defaults
+    settings = load_settings()
+
     parser = argparse.ArgumentParser(description="Fully Automated Just Dance 2021 Map Installer")
     parser.add_argument("--map-name", default=None, help="Map name (default: derived from asset-html parent folder)")
-    parser.add_argument("--asset-html", required=True, help="Path to asset mapping HTML")
-    parser.add_argument("--nohud-html", required=True, help="Path to nohud mapping HTML")
+    parser.add_argument("--asset-html", default=None, help="Path to asset mapping HTML")
+    parser.add_argument("--nohud-html", default=None, help="Path to nohud mapping HTML")
     parser.add_argument("--jd-dir", default=None, help="Base directory of JD tools / JD21 install (auto-detected if omitted)")
     parser.add_argument("--quality", choices=["ultra_hd", "ultra", "high_hd", "high", "mid_hd", "mid", "low_hd", "low"],
-                        default="ultra_hd", help="Video quality to download (default: ultra_hd)")
+                        default=settings["default_quality"],
+                        help=f"Video quality to download (default: {settings['default_quality']})")
     parser.add_argument("--video-override", type=float, default=None, help="Force a specific video start time")
     parser.add_argument("--audio-offset", type=float, default=None, help="Force a specific audio trim offset")
     parser.add_argument("--sync-config", default=None, help="Path to a JSON config file to load sync values from")
+    parser.add_argument("--readjust", metavar="DOWNLOAD_DIR", default=None,
+                        help="Re-adjust offset on an already-installed map. "
+                             "Point to the map's download directory (must contain .ogg and .webm files).")
     args = parser.parse_args()
 
-    # Derive map name from JDU asset URLs first (most reliable), fallback to folder name
-    map_name = args.map_name
-    if not map_name:
-        if os.path.exists(args.asset_html):
-            urls = map_downloader.extract_urls(args.asset_html)
-            map_name = map_downloader.extract_codename_from_urls(urls)
-            if map_name:
-                print(f"    Auto-detected map name from URLs: {map_name}")
-        if not map_name:
-            map_name = os.path.basename(os.path.dirname(os.path.abspath(args.asset_html)))
-            print(f"    Auto-detected map name from folder: {map_name}")
-
-    # Create pipeline state
-    state = PipelineState(
-        map_name=map_name,
-        asset_html=args.asset_html,
-        nohud_html=args.nohud_html,
-        jd_dir=args.jd_dir,
-        video_override=args.video_override,
-        audio_offset=args.audio_offset,
-        quality=args.quality,
-    )
-
-    # Load sync config from explicit path if provided (overrides pipeline-calculated values)
-    saved = None
-    if args.sync_config and os.path.isfile(args.sync_config):
-        with open(args.sync_config, 'r', encoding='utf-8') as f:
-            saved = json.load(f)
-        print(f"    Loaded sync config from {args.sync_config}")
-        if saved:
-            if state.v_override is None:
-                state.v_override = saved.get('v_override')
-            if state.a_offset is None:
-                state.a_offset = saved.get('a_offset')
-            if state.marker_preroll_ms is None:
-                state.marker_preroll_ms = saved.get('marker_preroll_ms')
-
-    # Start logging to file — everything from here on is captured to both terminal and log
-    _log_path = setup_cli_logging(state.map_name)
-
-    print(f"--- Environment ---")
-    print(f"Game Dir:    {state.jd21_dir}")
-    print(f"Search Root: {state.jd_dir}")
-    print(f"Map Name:    {state.map_name}")
-    print(f"Asset HTML:  {state.asset_html}")
-    if _log_path:
-        print(f"Log file:    {_log_path}")
-    print(f"-------------------")
-
-    if not preflight_check(state.jd_dir, state.asset_html, state.nohud_html):
-        sys.exit(1)
-
-    print(f"=== Starting Automation for {state.map_name} ===")
-
-    # Run all pipeline steps
-    for step_name, step_fn in PIPELINE_STEPS:
-        if _interrupted:
-            logger.warning("Interrupted before '%s'. Exiting.", step_name)
-            sys.exit(130)
+    # --- READJUST MODE: skip pipeline, go straight to sync refinement ---
+    if args.readjust:
+        _log_path = setup_cli_logging("readjust")
         try:
-            step_fn(state)
-        except RuntimeError as e:
+            state = reconstruct_state_for_readjust(args.readjust, jd_dir=args.jd_dir)
+        except (FileNotFoundError, RuntimeError) as e:
             print(f"ERROR: {e}")
             sys.exit(1)
 
-    print("=== Automation Complete! ===")
-    time.sleep(1)  # Give terminal buffers a second to clear
-    sys.stdout.flush()
+        # Allow CLI overrides
+        if args.video_override is not None:
+            state.v_override = args.video_override
+        if args.audio_offset is not None:
+            state.a_offset = args.audio_offset
 
-    # --- INTERACTIVE CLI LOOP ---
-    v_override = state.v_override
-    a_offset = state.a_offset
+        v_override = state.v_override
+        a_offset = state.a_offset
+
+        print(f"\n=== Offset Readjustment for {state.map_name} ===")
+        # Fall through to the interactive sync loop below
+    else:
+        # --- NORMAL INSTALL MODE ---
+        if not args.asset_html or not args.nohud_html:
+            parser.error("--asset-html and --nohud-html are required for installation "
+                         "(use --readjust for offset-only adjustment)")
+
+        # Derive map name from JDU asset URLs first (most reliable), fallback to folder name
+        map_name = args.map_name
+        if not map_name:
+            if os.path.exists(args.asset_html):
+                urls = map_downloader.extract_urls(args.asset_html)
+                map_name = map_downloader.extract_codename_from_urls(urls)
+                if map_name:
+                    print(f"    Auto-detected map name from URLs: {map_name}")
+            if not map_name:
+                map_name = os.path.basename(os.path.dirname(os.path.abspath(args.asset_html)))
+                print(f"    Auto-detected map name from folder: {map_name}")
+
+        # Create pipeline state
+        state = PipelineState(
+            map_name=map_name,
+            asset_html=args.asset_html,
+            nohud_html=args.nohud_html,
+            jd_dir=args.jd_dir,
+            video_override=args.video_override,
+            audio_offset=args.audio_offset,
+            quality=args.quality,
+        )
+
+        # Load sync config from explicit path if provided (overrides pipeline-calculated values)
+        saved = None
+        if args.sync_config and os.path.isfile(args.sync_config):
+            with open(args.sync_config, 'r', encoding='utf-8') as f:
+                saved = json.load(f)
+            print(f"    Loaded sync config from {args.sync_config}")
+            if saved:
+                if state.v_override is None:
+                    state.v_override = saved.get('v_override')
+                if state.a_offset is None:
+                    state.a_offset = saved.get('a_offset')
+                if state.marker_preroll_ms is None:
+                    state.marker_preroll_ms = saved.get('marker_preroll_ms')
+
+        # Start logging to file — everything from here on is captured to both terminal and log
+        _log_path = setup_cli_logging(state.map_name)
+
+        print(f"--- Environment ---")
+        print(f"Game Dir:    {state.jd21_dir}")
+        print(f"Search Root: {state.jd_dir}")
+        print(f"Map Name:    {state.map_name}")
+        print(f"Asset HTML:  {state.asset_html}")
+        if _log_path:
+            print(f"Log file:    {_log_path}")
+        print(f"-------------------")
+
+        if settings["skip_preflight"]:
+            print("    Pre-flight skipped (disabled in settings)")
+        elif not preflight_check(state.jd_dir, state.asset_html, state.nohud_html):
+            sys.exit(1)
+
+        print(f"=== Starting Automation for {state.map_name} ===")
+
+        # Run all pipeline steps
+        for step_name, step_fn in PIPELINE_STEPS:
+            if _interrupted:
+                logger.warning("Interrupted before '%s'. Exiting.", step_name)
+                sys.exit(130)
+            try:
+                step_fn(state)
+            except RuntimeError as e:
+                print(f"ERROR: {e}")
+                sys.exit(1)
+
+        print("=== Automation Complete! ===")
+        time.sleep(1)  # Give terminal buffers a second to clear
+        sys.stdout.flush()
+
+        # --- INTERACTIVE CLI LOOP ---
+        v_override = state.v_override
+        a_offset = state.a_offset
 
     while True:
         print("\n" + "="*50)

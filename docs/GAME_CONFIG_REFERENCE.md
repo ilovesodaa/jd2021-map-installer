@@ -24,7 +24,7 @@ These files are created by the installer pipeline, not part of the base game.
 | File | Format | Purpose |
 |------|--------|---------|
 | `installer_paths.json` | JSON | Cached game-data directory paths and SkuScene reference |
-| `map_configs/{map_name}.json` | JSON | Per-map sync settings: v_override, a_offset, quality, codename, marker_preroll_ms |
+| `installer_settings.json` | JSON | Global installer settings: default_quality, a_offset, v_override, marker_preroll_ms |
 
 ---
 

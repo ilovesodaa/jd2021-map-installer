@@ -79,21 +79,18 @@ The batch quality applies to all maps unless an existing video of a different qu
 
 ## Quality Persistence
 
-When a map config is saved (via "Apply & Finish" in GUI or the sync refinement loop), the selected quality is stored in `map_configs/{map_name}.json`:
+The default video quality is controlled by `installer_settings.json`. The selected quality is stored globally:
 
 ```json
 {
-  "map_name": "Starships",
+  "default_quality": "ULTRA_HD",
   "v_override": -2.145,
   "a_offset": -2.060,
-  "quality": "ULTRA_HD",
-  "codename": "Starships",
-  "marker_preroll_ms": 2060.0,
-  "installed_at": "2024-01-15T14:30:00"
+  "marker_preroll_ms": 2060.0
 }
 ```
 
-On reinstallation, saved configs are loaded automatically, including the quality setting.
+On reinstallation, these global settings are loaded automatically, including the default quality.
 
 ---
 
