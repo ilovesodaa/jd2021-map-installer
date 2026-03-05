@@ -138,6 +138,14 @@ class PipelineState:
         # Interactive mode: True for CLI, False for GUI/batch (controls input() calls)
         self._interactive = True
 
+        # Source mode flags (default: legacy HTML-driven flow)
+        self.source_type = "html"
+        self.skip_download = False
+        self.skip_scene_extract = False
+        self.skip_ipk_unpack = False
+        self.preserve_source_dirs = False
+        self.manual_ipk_file = None
+
 
 def clean_path(path):
     """Deep cleans a path: removes quotes, trims whitespace, normalizes, and makes absolute if possible."""
@@ -978,7 +986,7 @@ def _install_ffmpeg():
 
 
 def preflight_check(jd_dir, asset_html, nohud_html, auto_install=False,
-                    interactive=True):
+                    interactive=True, require_html=True):
     """Run pre-flight dependency checks. Returns True if all critical checks pass.
 
     Args:
@@ -1106,16 +1114,19 @@ def preflight_check(jd_dir, asset_html, nohud_html, auto_install=False,
     except ImportError:
         fail("Pillow not installed (run: pip install Pillow)")
 
-    # Critical: input HTML files
-    if os.path.isfile(asset_html):
-        ok("Asset HTML file")
-    else:
-        fail(f"Asset HTML file not found: {asset_html}")
+    # Critical: input HTML files (optional for manual/IPK modes)
+    if require_html:
+        if os.path.isfile(asset_html):
+            ok("Asset HTML file")
+        else:
+            fail(f"Asset HTML file not found: {asset_html}")
 
-    if os.path.isfile(nohud_html):
-        ok("NOHUD HTML file")
+        if os.path.isfile(nohud_html):
+            ok("NOHUD HTML file")
+        else:
+            fail(f"NOHUD HTML file not found: {nohud_html}")
     else:
-        fail(f"NOHUD HTML file not found: {nohud_html}")
+        warn("HTML file validation skipped for manual/IPK source mode")
 
     # Optional: ffplay
     if check_executable("ffplay"):
@@ -1676,12 +1687,47 @@ def step_01_clean(state):
     print("[1] Cleaning up if there is a previous build...")
     _safe_rmtree(state.target_dir)
     _safe_rmtree(state.cache_dir)
-    _safe_rmtree(state.extracted_zip_dir)
-    _safe_rmtree(state.ipk_extracted)
+    if not getattr(state, "preserve_source_dirs", False):
+        _safe_rmtree(state.extracted_zip_dir)
+        _safe_rmtree(state.ipk_extracted)
 
 
 def step_02_download(state):
     """Download assets from JDU servers and detect codename/audio/video paths."""
+    if getattr(state, "skip_download", False):
+        print("[2] Skipping remote download (manual/IPK source mode)...")
+        if not state.codename:
+            state.codename = state.map_name
+
+        # Best-effort media auto-detection if caller did not pre-fill paths.
+        if not state.audio_path:
+            preferred_audio = os.path.join(state.download_dir, f"{state.codename}.ogg")
+            if os.path.exists(preferred_audio):
+                state.audio_path = preferred_audio
+            else:
+                oggs = [f for f in glob.glob(os.path.join(state.download_dir, "*.ogg"))
+                        if "AudioPreview" not in os.path.basename(f)]
+                if oggs:
+                    state.audio_path = oggs[0]
+
+        if not state.video_path:
+            preferred_video, _actual = map_downloader.find_best_video_file(
+                state.download_dir, state.codename or state.map_name, state.quality)
+            if preferred_video:
+                state.video_path = preferred_video
+            else:
+                webms = [f for f in glob.glob(os.path.join(state.download_dir, "*.webm"))
+                         if "MapPreview" not in os.path.basename(f)
+                         and "VideoPreview" not in os.path.basename(f)]
+                if webms:
+                    state.video_path = webms[0]
+
+        if not state.audio_path:
+            raise RuntimeError("Audio file is required for manual/IPK install mode.")
+        if not state.video_path:
+            raise RuntimeError("Gameplay video (.webm) is required for manual/IPK install mode.")
+        return
+
     print("[2] Downloading assets from JDU servers...")
     urls1 = map_downloader.extract_urls(state.asset_html) if state.asset_html and os.path.exists(state.asset_html) else []
     urls2 = map_downloader.extract_urls(state.nohud_html) if state.nohud_html and os.path.exists(state.nohud_html) else []
@@ -1727,6 +1773,10 @@ def step_02_download(state):
 
 def step_03_extract_scenes(state):
     """Extract scene ZIP archives, preferring DURANGO platform."""
+    if getattr(state, "skip_scene_extract", False):
+        print("[3] Skipping scene ZIP extraction (source already prepared)...")
+        return
+
     print("[3] Extracting scene archives...")
     sys.stdout.flush()
 
@@ -1764,6 +1814,18 @@ def step_03_extract_scenes(state):
 
 def step_04_unpack_ipk(state):
     """Unpack IPK archives."""
+    if getattr(state, "skip_ipk_unpack", False) and os.path.isdir(state.ipk_extracted):
+        print("[4] Skipping IPK unpack (already prepared)...")
+        return
+
+    if getattr(state, "manual_ipk_file", None) and os.path.isfile(state.manual_ipk_file):
+        print("[4] Unpacking selected IPK file...")
+        try:
+            ipk_unpack.extract(state.manual_ipk_file, state.ipk_extracted)
+        except (AssertionError, OSError, struct.error) as e:
+            logger.warning("    Warning: IPK extraction issue: %s", e)
+        return
+
     print("[4] Unpacking IPK archives...")
     ipk_files = glob.glob(os.path.join(state.extracted_zip_dir, "*.ipk"))
     for ipk in ipk_files:
@@ -2283,6 +2345,36 @@ def step_14_register_sku(state):
     with open(sku_isc, "w", encoding="utf-8") as f:
         f.write(new_data)
     print(f"[14] Successfully registered {state.map_name} in SkuScene.")
+
+
+def configure_manual_source(
+    state,
+    source_type,
+    source_dir,
+    ipk_extracted=None,
+    audio_path=None,
+    video_path=None,
+    codename=None,
+    manual_ipk_file=None,
+):
+    """Configure a PipelineState for manual/IPK source workflows.
+
+    This keeps the existing pipeline but skips remote download/extract stages
+    when inputs are already available on disk.
+    """
+    state.source_type = source_type
+    state.download_dir = os.path.abspath(source_dir)
+    state.extracted_zip_dir = os.path.join(state.download_dir, "main_scene_extracted")
+    state.ipk_extracted = os.path.abspath(ipk_extracted) if ipk_extracted else os.path.join(state.download_dir, "ipk_extracted")
+    state.audio_path = os.path.abspath(audio_path) if audio_path else state.audio_path
+    state.video_path = os.path.abspath(video_path) if video_path else state.video_path
+    state.codename = (codename or state.map_name).strip()
+    state.manual_ipk_file = os.path.abspath(manual_ipk_file) if manual_ipk_file else None
+
+    state.skip_download = True
+    state.skip_scene_extract = True
+    state.skip_ipk_unpack = bool(ipk_extracted and os.path.isdir(state.ipk_extracted))
+    state.preserve_source_dirs = True
 
 
 # ---------------------------------------------------------------------------
