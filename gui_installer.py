@@ -23,6 +23,7 @@ from helpers import TOOLTIP_DELAY_MS, PREVIEW_FPS, PREVIEW_POLL_FRAMES
 import map_installer
 import map_builder
 import map_downloader
+import source_analysis
 
 logger = get_logger("gui")
 
@@ -149,6 +150,9 @@ class MapInstallerGUI:
         self._preview_resizing_timer = None
         self._preview_debounce_timer = None
         self._preview_duration = 0.0
+        self._preview_starting = False
+        self._keep_preview_image = False
+        self._ffplay_warned = False
         self._original_stdout = sys.stdout
         self._original_stderr = sys.stderr
         self._preflight_passed = False
@@ -157,6 +161,7 @@ class MapInstallerGUI:
         self._pipeline_running = False
         self._fetch_mode_lock = False
         self._last_run_from_fetch = False
+        self._source_spec = None
 
         # Tkinter variables for sync refinement
         self.v_override_var = tk.DoubleVar(value=0.0)
@@ -193,6 +198,78 @@ class MapInstallerGUI:
     def _build_ui(self):
         container = ttk.Frame(self.root)
         container.pack(fill="both", expand=True, padx=8, pady=4)
+
+        # ===================== SOURCE MODES =====================
+        mode_cfg = ttk.LabelFrame(container, text="Install Modes", padding=6)
+        mode_cfg.pack(fill="x", pady=(0, 4))
+
+        ttk.Label(mode_cfg, text="Mode:", width=16, anchor="e").grid(
+            row=0, column=0, sticky="e", padx=(0, 4))
+        self.source_mode_var = tk.StringVar(value="fetch")
+        self.source_mode_combo = ttk.Combobox(
+            mode_cfg,
+            textvariable=self.source_mode_var,
+            values=["fetch", "html", "ipk", "manual", "batch"],
+            state="readonly",
+            width=18,
+        )
+        self.source_mode_combo.grid(row=0, column=1, sticky="w", pady=1)
+        self.source_mode_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_source_mode_changed())
+
+        ttk.Label(mode_cfg, text="Manual Submode:", width=16, anchor="e").grid(
+            row=0, column=2, sticky="e", padx=(12, 4))
+        self.manual_submode_var = tk.StringVar(value="auto")
+        self.manual_submode_combo = ttk.Combobox(
+            mode_cfg,
+            textvariable=self.manual_submode_var,
+            values=["auto", "unpacked_ipk", "downloaded_assets"],
+            state="readonly",
+            width=18,
+        )
+        self.manual_submode_combo.grid(row=0, column=3, sticky="w", pady=1)
+
+        ttk.Label(mode_cfg, text="Source File/Folder:", width=16, anchor="e").grid(
+            row=1, column=0, sticky="e", padx=(0, 4))
+        self.source_path_entry = ttk.Entry(mode_cfg, width=64)
+        self.source_path_entry.grid(row=1, column=1, columnspan=2, sticky="ew", pady=1)
+        self.source_browse_btn = ttk.Button(
+            mode_cfg, text="Browse", width=8, command=self._browse_mode_source)
+        self.source_browse_btn.grid(row=1, column=3, sticky="w", padx=(4, 0))
+
+        ttk.Label(mode_cfg, text="Audio (.ogg):", width=16, anchor="e").grid(
+            row=2, column=0, sticky="e", padx=(0, 4))
+        self.mode_audio_entry = ttk.Entry(mode_cfg, width=64)
+        self.mode_audio_entry.grid(row=2, column=1, columnspan=2, sticky="ew", pady=1)
+        self.mode_audio_browse_btn = ttk.Button(
+            mode_cfg, text="Browse", width=8,
+            command=lambda: self._browse_specific_file(self.mode_audio_entry, [("OGG files", "*.ogg"), ("All files", "*.*")]))
+        self.mode_audio_browse_btn.grid(row=2, column=3, sticky="w", padx=(4, 0))
+
+        ttk.Label(mode_cfg, text="Video (.webm):", width=16, anchor="e").grid(
+            row=3, column=0, sticky="e", padx=(0, 4))
+        self.mode_video_entry = ttk.Entry(mode_cfg, width=64)
+        self.mode_video_entry.grid(row=3, column=1, columnspan=2, sticky="ew", pady=1)
+        self.mode_video_browse_btn = ttk.Button(
+            mode_cfg, text="Browse", width=8,
+            command=lambda: self._browse_specific_file(self.mode_video_entry, [("WEBM files", "*.webm"), ("All files", "*.*")]))
+        self.mode_video_browse_btn.grid(row=3, column=3, sticky="w", padx=(4, 0))
+
+        mode_btns = ttk.Frame(mode_cfg)
+        mode_btns.grid(row=4, column=0, columnspan=4, sticky="w", pady=(6, 0))
+
+        self.mode_analyze_btn = ttk.Button(mode_btns, text="Analyze", command=self._analyze_mode_source)
+        self.mode_analyze_btn.pack(side="left")
+        self.mode_prepare_btn = ttk.Button(mode_btns, text="Prepare", command=self._prepare_mode_source)
+        self.mode_prepare_btn.pack(side="left", padx=(8, 0))
+        self.mode_install_btn = ttk.Button(mode_btns, text="Install From Mode", command=self._install_from_mode)
+        self.mode_install_btn.pack(side="left", padx=(8, 0))
+
+        self.mode_status_var = tk.StringVar(value="Mode panel ready. Select mode and source, then Analyze.")
+        ttk.Label(mode_cfg, textvariable=self.mode_status_var, foreground="#555555").grid(
+            row=5, column=0, columnspan=4, sticky="w", pady=(4, 0))
+
+        mode_cfg.columnconfigure(1, weight=1)
+        mode_cfg.columnconfigure(2, weight=1)
 
         # ===================== CONFIGURATION =====================
         cfg = ttk.LabelFrame(container, text="Configuration", padding=6)
@@ -476,6 +553,7 @@ class MapInstallerGUI:
         # Start with sync refinement and preview controls disabled
         self._set_sync_state("disabled")
         self._set_preview_state("disabled")
+        self._on_source_mode_changed()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -519,8 +597,8 @@ class MapInstallerGUI:
                     derived = map_downloader.extract_codename_from_urls(urls)
                     if derived:
                         return derived
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("codename derivation failed for %s: %s", candidate, e)
 
         for candidate in (asset_html, nohud_html):
             if candidate:
@@ -558,6 +636,7 @@ class MapInstallerGUI:
         self._pipeline_running = False
         self._fetch_mode_lock = False
         self._last_run_from_fetch = False
+        self._source_spec = None
 
         self._kill_current_preview()
         self.pipeline_state = None
@@ -580,6 +659,7 @@ class MapInstallerGUI:
         # Restore top-level controls.
         self.preflight_btn.configure(state="normal", text="Pre-flight Check")
         self.install_btn.configure(state="disabled")
+        self.mode_install_btn.configure(state="normal")
         self.fetch_install_btn.configure(state="normal")
         self.codename_entry.configure(state="normal")
         self._set_html_inputs_state(True)
@@ -587,6 +667,8 @@ class MapInstallerGUI:
         if clear_html:
             self.asset_html_entry.delete(0, tk.END)
             self.nohud_html_entry.delete(0, tk.END)
+
+        self.mode_status_var.set("Mode panel ready. Select mode and source, then Analyze.")
 
         self._on_html_inputs_changed()
 
@@ -635,6 +717,298 @@ class MapInstallerGUI:
                     print(f"Error during complementary HTML auto-detect: {e}")
 
             self._on_html_inputs_changed()
+
+    def _browse_specific_file(self, entry, filetypes):
+        path = filedialog.askopenfilename(filetypes=filetypes)
+        if path:
+            entry.delete(0, tk.END)
+            entry.insert(0, path)
+
+    def _browse_mode_source(self):
+        mode = self.source_mode_var.get()
+        if mode == "ipk":
+            path = filedialog.askopenfilename(
+                filetypes=[("IPK files", "*.ipk"), ("All files", "*.*")])
+        else:
+            # Allow selecting either an anchor file (assets/nohud/ogg/webm)
+            # or a full folder; if file selection is canceled, fallback to folder.
+            path = filedialog.askopenfilename(filetypes=[("All supported", "*.html *.ogg *.webm *.ipk"), ("All files", "*.*")])
+            if not path:
+                path = filedialog.askdirectory(mustexist=True)
+
+        if not path:
+            return
+
+        self.source_path_entry.delete(0, tk.END)
+        self.source_path_entry.insert(0, path)
+        self._analyze_mode_source()
+
+    def _on_source_mode_changed(self):
+        mode = self.source_mode_var.get()
+        manual_enabled = "readonly" if mode == "manual" else "disabled"
+        self.manual_submode_combo.configure(state=manual_enabled)
+
+        source_hint = "file" if mode == "ipk" else "folder"
+        self.mode_status_var.set(
+            f"Mode: {mode}. Select a source {source_hint} and click Analyze.")
+
+    def _analyze_mode_source(self):
+        mode = self.source_mode_var.get()
+        source_path = self.source_path_entry.get().strip()
+        audio_path = self.mode_audio_entry.get().strip()
+        video_path = self.mode_video_entry.get().strip()
+
+        if source_path and os.path.isfile(source_path) and mode in {"manual", "batch", "html"}:
+            source_folder = os.path.dirname(source_path)
+        else:
+            source_folder = source_path
+
+        if mode == "fetch":
+            self._source_spec = source_analysis.SourceSpec(mode="fetch", ready_for_prepare=True, ready_for_install=True)
+            self.mode_status_var.set("Fetch mode is ready. Use codename then Install From Mode.")
+            return
+
+        if mode == "html":
+            if source_path and os.path.isfile(source_path) and source_path.lower().endswith(".html"):
+                lower = os.path.basename(source_path).lower()
+                if "nohud" in lower:
+                    self.nohud_html_entry.delete(0, tk.END)
+                    self.nohud_html_entry.insert(0, source_path)
+                else:
+                    self.asset_html_entry.delete(0, tk.END)
+                    self.asset_html_entry.insert(0, source_path)
+
+            if source_folder and os.path.isdir(source_folder):
+                guessed_asset, guessed_nohud = source_analysis._find_html_pair(source_folder)
+                if guessed_asset and not self.asset_html_entry.get().strip():
+                    self.asset_html_entry.insert(0, guessed_asset)
+                if guessed_nohud and not self.nohud_html_entry.get().strip():
+                    self.nohud_html_entry.insert(0, guessed_nohud)
+
+            spec = source_analysis.analyze_html_mode(
+                self.asset_html_entry.get().strip(),
+                self.nohud_html_entry.get().strip(),
+            )
+        elif mode == "ipk":
+            spec = source_analysis.analyze_ipk_file_mode(source_path, audio_path, video_path)
+        elif mode == "manual":
+            spec = source_analysis.analyze_manual_mode(source_folder, self.manual_submode_var.get())
+        elif mode == "batch":
+            spec = source_analysis.SourceSpec(mode="batch", source_path=source_folder)
+            if not source_folder or not os.path.isdir(source_folder):
+                spec.errors.append("Batch mode requires a valid root folder.")
+            spec.ready_for_prepare = len(spec.errors) == 0
+            spec.ready_for_install = spec.ready_for_prepare
+        else:
+            return
+
+        self._source_spec = spec
+
+        if spec.audio_path and not self.mode_audio_entry.get().strip():
+            self.mode_audio_entry.insert(0, spec.audio_path)
+        if spec.video_path and not self.mode_video_entry.get().strip():
+            self.mode_video_entry.insert(0, spec.video_path)
+
+        # Auto-populate legacy HTML inputs so existing flow stays usable.
+        if spec.asset_html:
+            self.asset_html_entry.delete(0, tk.END)
+            self.asset_html_entry.insert(0, spec.asset_html)
+        if spec.nohud_html:
+            self.nohud_html_entry.delete(0, tk.END)
+            self.nohud_html_entry.insert(0, spec.nohud_html)
+
+        if spec.errors:
+            self.mode_status_var.set("Analyze failed: " + " | ".join(spec.errors))
+        else:
+            msg = f"Analyze OK ({mode})"
+            if spec.warnings:
+                msg += " | " + " | ".join(spec.warnings)
+            self.mode_status_var.set(msg)
+
+        self._on_html_inputs_changed()
+
+    def _prepare_mode_source(self):
+        if not self._source_spec:
+            self._analyze_mode_source()
+        spec = self._source_spec
+        if not spec:
+            return
+
+        if spec.errors:
+            messagebox.showerror("Prepare", "Fix source errors before prepare:\n\n" + "\n".join(spec.errors))
+            return
+
+        if spec.mode in {"fetch", "html", "batch"}:
+            self.mode_status_var.set("Prepare complete (no extra staging required for this mode).")
+            return
+
+        if spec.mode == "ipk":
+            os.makedirs(spec.ipk_extracted, exist_ok=True)
+            try:
+                import ipk_unpack
+                ipk_unpack.extract(spec.ipk_file, spec.ipk_extracted)
+            except Exception as e:
+                messagebox.showerror("Prepare Failed", f"Could not unpack IPK:\n{e}")
+                return
+            spec.ready_for_install = bool(spec.audio_path and spec.video_path)
+            self.mode_status_var.set(f"Prepared IPK source at {spec.ipk_extracted}")
+            return
+
+        if spec.mode == "manual" and spec.submode == "downloaded_assets" and not spec.ipk_extracted:
+            messagebox.showwarning(
+                "Prepare Required",
+                "Downloaded assets source is missing ipk_extracted/.\n"
+                "Please prepare/extract scene IPK first or use IPK mode.")
+            return
+
+        self.mode_status_var.set("Prepare complete.")
+
+    def _install_from_mode(self):
+        mode = self.source_mode_var.get()
+        if mode == "fetch":
+            self._on_fetch_install()
+            return
+
+        if mode == "html":
+            self._on_install(started_from_fetch=False)
+            return
+
+        if mode == "batch":
+            source_root = self.source_path_entry.get().strip()
+            if source_root and os.path.isfile(source_root):
+                source_root = os.path.dirname(source_root)
+            if not source_root or not os.path.isdir(source_root):
+                messagebox.showerror("Batch", "Select a valid batch root folder first.")
+                return
+            self._run_batch_mode(source_root)
+            return
+
+        if not self._source_spec:
+            self._analyze_mode_source()
+        spec = self._source_spec
+        if not spec:
+            return
+        if spec.errors:
+            messagebox.showerror("Install", "Fix source errors before install:\n\n" + "\n".join(spec.errors))
+            return
+
+        if mode == "ipk" and not os.path.isdir(spec.ipk_extracted):
+            self._prepare_mode_source()
+            if not os.path.isdir(spec.ipk_extracted):
+                return
+
+        if mode == "manual" and spec.submode == "downloaded_assets" and not spec.ipk_extracted:
+            messagebox.showerror(
+                "Install",
+                "Manual downloaded assets mode requires ipk_extracted/.\n"
+                "Use a prepared folder or prepare via IPK mode first.")
+            return
+
+        self._install_from_manual_spec(spec)
+
+    def _run_batch_mode(self, root_folder):
+        if self._pipeline_running:
+            return
+
+        self._pipeline_running = True
+        self.mode_install_btn.configure(state="disabled")
+        self.mode_status_var.set("Batch mode running...")
+
+        def _run():
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            cmd = [
+                sys.executable,
+                os.path.join(script_dir, "batch_install_maps.py"),
+                "--maps-dir",
+                root_folder,
+                "--jd-dir",
+                self.jd_dir_entry.get().strip() or script_dir,
+                "--quality",
+                self.quality_var.get(),
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+
+            def _after():
+                self._pipeline_running = False
+                self.mode_install_btn.configure(state="normal")
+                if proc.stdout:
+                    print(proc.stdout)
+                if proc.stderr:
+                    print(proc.stderr)
+                if proc.returncode == 0:
+                    self.mode_status_var.set("Batch mode complete.")
+                    messagebox.showinfo("Batch", "Batch installation completed.")
+                else:
+                    self.mode_status_var.set("Batch mode failed.")
+                    messagebox.showerror("Batch", "Batch installation failed. Check logs output.")
+
+            self.root.after(0, _after)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _install_from_manual_spec(self, spec):
+        if self._pipeline_running:
+            return
+
+        jd_dir = self.jd_dir_entry.get().strip()
+        if not jd_dir:
+            messagebox.showerror("Missing Input", "Game Directory is required.")
+            return
+
+        require_html = spec.mode == "manual" and spec.submode == "downloaded_assets"
+        self._pipeline_running = True
+        self.install_btn.configure(state="disabled")
+        self.fetch_install_btn.configure(state="disabled")
+        self.preflight_btn.configure(state="disabled", text="Auto-checking...")
+
+        def _auto_preflight_then_install():
+            result = map_installer.preflight_check(
+                jd_dir,
+                spec.asset_html or "(manual)",
+                spec.nohud_html or "(manual)",
+                auto_install=True,
+                interactive=False,
+                require_html=require_html,
+            )
+            passed = result if not isinstance(result, tuple) else result[0]
+
+            def _after():
+                self._pipeline_running = False
+                self.preflight_btn.configure(state="normal", text="Pre-flight Check")
+                self.fetch_install_btn.configure(state="normal")
+                if not passed:
+                    self._preflight_passed = False
+                    self.install_btn.configure(state="disabled")
+                    messagebox.showwarning("Pre-flight Failed", "Automatic pre-flight failed.")
+                    return
+
+                self._preflight_passed = True
+                state = map_installer.PipelineState(
+                    map_name=spec.codename or os.path.basename(spec.source_path),
+                    asset_html=spec.asset_html or "(manual)",
+                    nohud_html=spec.nohud_html or "(manual)",
+                    jd_dir=jd_dir or None,
+                    quality=self.quality_var.get(),
+                    original_map_name=spec.codename or os.path.basename(spec.source_path),
+                )
+                state._interactive = False
+
+                source_type = "ipk_file" if spec.mode == "ipk" else (spec.submode or "manual")
+                map_installer.configure_manual_source(
+                    state,
+                    source_type=source_type,
+                    source_dir=spec.source_path,
+                    ipk_extracted=spec.ipk_extracted,
+                    audio_path=self.mode_audio_entry.get().strip() or spec.audio_path,
+                    video_path=self.mode_video_entry.get().strip() or spec.video_path,
+                    codename=spec.codename,
+                    manual_ipk_file=spec.ipk_file,
+                )
+                self._start_pipeline_with_state(state)
+
+            self.root.after(0, _after)
+
+        threading.Thread(target=_auto_preflight_then_install, daemon=True).start()
 
     def _redirect_stdout(self):
         handler = TextWidgetHandler(self.log_text, self.root)
@@ -726,6 +1100,8 @@ class MapInstallerGUI:
         jd_dir = self.jd_dir_entry.get().strip()
         asset = self.asset_html_entry.get().strip()
         nohud = self.nohud_html_entry.get().strip()
+        mode = self.source_mode_var.get()
+        require_html = mode in {"fetch", "html"}
         if not jd_dir:
             messagebox.showerror("Missing",
                                  "Game Directory is required for pre-flight check.")
@@ -736,7 +1112,7 @@ class MapInstallerGUI:
         def _run():
             result = map_installer.preflight_check(
                 jd_dir, asset or "(not set)", nohud or "(not set)",
-                interactive=False)
+                interactive=False, require_html=require_html)
             # preflight_check returns (False, True) when ffmpeg is missing in
             # non-interactive mode, plain False for other failures, or True.
             if isinstance(result, tuple):
@@ -760,6 +1136,8 @@ class MapInstallerGUI:
         threading.Thread(target=_run, daemon=True).start()
 
     def _offer_ffmpeg_install(self, jd_dir, asset, nohud):
+        mode = self.source_mode_var.get()
+        require_html = mode in {"fetch", "html"}
         result = messagebox.askyesno(
             "FFmpeg Not Found",
             "FFmpeg is required but was not found on your system.\n\n"
@@ -769,7 +1147,7 @@ class MapInstallerGUI:
             def _run_install():
                 ok = map_installer.preflight_check(
                     jd_dir, asset or "(not set)", nohud or "(not set)",
-                    auto_install=True, interactive=False)
+                    auto_install=True, interactive=False, require_html=require_html)
                 # When auto_install=True ffmpeg gets installed, so the
                 # return is plain bool (no tuple).
                 passed = ok if not isinstance(ok, tuple) else ok[0]
@@ -1187,6 +1565,10 @@ class MapInstallerGUI:
 
         map_name = self._derive_codename(asset_html, nohud_html, fallback=None)
         if not map_name:
+            self._fetch_mode_lock = False
+            self._set_html_inputs_state(True)
+            self.codename_entry.configure(state="normal")
+            self._on_html_inputs_changed()
             messagebox.showerror(
                 "Missing Input",
                 "Could not detect map codename from the selected files.\n"
@@ -1207,18 +1589,7 @@ class MapInstallerGUI:
             if replacement and replacement.strip():
                 map_name = replacement.strip()
 
-        # Disable controls during pipeline
-        self._pipeline_running = True
-        self.install_btn.configure(state="disabled")
-        self.preflight_btn.configure(state="disabled")
-        self.fetch_install_btn.configure(state="disabled")
-        self._set_html_inputs_state(False)
-
-        # Reset progress
-        for i in range(len(self.STEP_NAMES)):
-            self._update_step_status(i, "pending")
-
-        self.pipeline_state = map_installer.PipelineState(
+        state = map_installer.PipelineState(
             map_name=map_name,
             asset_html=asset_html,
             nohud_html=nohud_html,
@@ -1227,7 +1598,24 @@ class MapInstallerGUI:
             original_map_name=original_map_name
         )
         # GUI mode: don't call input() in pipeline steps
-        self.pipeline_state._interactive = False
+        state._interactive = False
+        self._start_pipeline_with_state(state)
+
+    def _start_pipeline_with_state(self, state):
+        """Common start logic for HTML, IPK, and manual source modes."""
+        # Disable controls during pipeline
+        self._pipeline_running = True
+        self.install_btn.configure(state="disabled")
+        self.preflight_btn.configure(state="disabled")
+        self.fetch_install_btn.configure(state="disabled")
+        self.mode_install_btn.configure(state="disabled")
+        self._set_html_inputs_state(False)
+
+        # Reset progress
+        for i in range(len(self.STEP_NAMES)):
+            self._update_step_status(i, "pending")
+
+        self.pipeline_state = state
 
         # Close any previous log file handler and open a new one for this install run
         if self._file_handler:
@@ -1241,7 +1629,7 @@ class MapInstallerGUI:
         os.makedirs(logs_dir, exist_ok=True)
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         log_path = os.path.join(
-            logs_dir, f"install_{self.pipeline_state.map_name}_{timestamp}.log")
+            logs_dir, f"install_{state.map_name}_{timestamp}.log")
         fh = logging.FileHandler(log_path, encoding="utf-8")
         fh.setLevel(logging.DEBUG)
         fh.setFormatter(logging.Formatter(
@@ -1297,7 +1685,8 @@ class MapInstallerGUI:
         """Check for non-ASCII characters in song metadata and prompt via GUI dialogs."""
         try:
             problems = map_builder.check_metadata_encoding(state.ipk_extracted)
-        except Exception:
+        except Exception as e:
+            logger.warning("metadata encoding check failed: %s", e)
             return
 
         if not problems:
@@ -1388,6 +1777,7 @@ class MapInstallerGUI:
     def _on_pipeline_error(self):
         self._pipeline_running = False
         self.install_btn.configure(state="normal")
+        self.mode_install_btn.configure(state="normal")
         self.preflight_btn.configure(state="normal")
         self._fetch_mode_lock = False
         self._set_html_inputs_state(True)
@@ -1419,6 +1809,7 @@ class MapInstallerGUI:
         self._set_preview_state("normal")
         # Keep install disabled until user finishes sync refinement via Apply
         self.preflight_btn.configure(state="normal")
+        self.mode_install_btn.configure(state="normal")
         self._fetch_mode_lock = False
         self._set_html_inputs_state(True)
         self.fetch_install_btn.configure(state="normal")
@@ -1449,7 +1840,7 @@ class MapInstallerGUI:
         if self.preview_ffmpeg is not None:
             try:
                 self.preview_ffmpeg.stdout.close()
-            except Exception:
+            except OSError:
                 pass
             if self.preview_ffmpeg.poll() is None:
                 try:
@@ -1457,7 +1848,7 @@ class MapInstallerGUI:
                     self.preview_ffmpeg.wait(timeout=3)
                 except subprocess.TimeoutExpired:
                     self.preview_ffmpeg.kill()
-                except Exception:
+                except OSError:
                     pass
 
         # Kill ffplay (audio-only)
@@ -1467,7 +1858,7 @@ class MapInstallerGUI:
                 self.preview_ffplay.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 self.preview_ffplay.kill()
-            except Exception:
+            except OSError:
                 pass
 
         self.preview_ffmpeg = None
@@ -1476,7 +1867,7 @@ class MapInstallerGUI:
         self._frame_thread = None
         
         # Don't reset photo here so we keep the last frame on screen if paused
-        if not hasattr(self, '_keep_preview_image') or not self._keep_preview_image:
+        if not self._keep_preview_image:
             self._current_photo = None
 
             # Restore "No Preview" label
@@ -1517,14 +1908,15 @@ class MapInstallerGUI:
                 v_playable = v_dur - abs(offset_diff)
                 a_playable = a_dur
             return max(v_playable, a_playable)
-        except Exception:
+        except Exception as e:
+            logger.warning("media duration probe failed, using 120s fallback: %s", e)
             return 120.0  # fallback
 
     def _launch_preview(self, start_time=0.0):
         state = self.pipeline_state
         if not state or not state.video_path or not state.audio_path:
             return
-        if getattr(self, '_preview_starting', False):
+        if self._preview_starting:
             return
         self._preview_starting = True
 
@@ -1647,7 +2039,7 @@ class MapInstallerGUI:
                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                         creationflags=cflags)
                                 except FileNotFoundError:
-                                    if not getattr(self, '_ffplay_warned', False):
+                                    if not self._ffplay_warned:
                                         self._ffplay_warned = True
                                         self.root.after(0, lambda: messagebox.showinfo(
                                             "ffplay Not Found",
@@ -1677,8 +2069,8 @@ class MapInstallerGUI:
                         pct = (pos / max(self._preview_duration, 1.0)) * 100.0
                         self.root.after(0, self._update_playback_ui, pos, pct)
                         
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("frame reader ended: %s", e)
 
     def _update_playback_ui(self, pos, pct):
         self.time_lbl.configure(text=f"{int(pos//60)}:{int(pos%60):02d}")
@@ -1692,8 +2084,8 @@ class MapInstallerGUI:
             self._current_photo = photo  # prevent garbage collection
             self.preview_label.configure(image=photo, text="")
             self.preview_label.place(relx=0.5, rely=0.5, anchor="center")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("display_frame error: %s", e)
 
     # ------------------------------------------------------------------
     # Playback UI Callbacks
@@ -1782,6 +2174,8 @@ class MapInstallerGUI:
         if not state or not state.video_path or not state.audio_path:
             return
 
+        self.pad_audio_btn.configure(state="disabled")
+
         def _compute():
             try:
                 def get_dur(p):
@@ -1798,11 +2192,16 @@ class MapInstallerGUI:
                 print(f"    Video: {v_dur:.2f}s, Audio: {a_dur:.2f}s, "
                       f"Padding: {diff:.3f}s")
 
-                self.root.after(0, lambda: self.a_offset_var.set(diff))
-                self.root.after(0, self._refresh_value_displays)
-                self.root.after(0, self._debounce_resume_preview)
+                def _done():
+                    self.pad_audio_btn.configure(state="normal")
+                    self.a_offset_var.set(diff)
+                    self._refresh_value_displays()
+                    self._debounce_resume_preview()
+
+                self.root.after(0, _done)
             except Exception as e:
                 print(f"    ERROR computing durations: {e}")
+                self.root.after(0, lambda: self.pad_audio_btn.configure(state="normal"))
 
         threading.Thread(target=_compute, daemon=True).start()
 
@@ -1816,9 +2215,14 @@ class MapInstallerGUI:
         threading.Thread(target=_do, daemon=True).start()
 
     def _on_apply(self):
+        if self._pipeline_running:
+            return
         state = self.pipeline_state
         if not state:
             return
+
+        self._pipeline_running = True
+        self.apply_btn.configure(state="disabled")
 
         v_override = self.v_override_var.get()
         a_offset = self.a_offset_var.get()
@@ -1839,20 +2243,28 @@ class MapInstallerGUI:
                 map_installer.reprocess_audio(state, a_offset, v_override)
 
                 print("    Sync changes applied and config saved.")
-                self.root.after(0, lambda: messagebox.showinfo(
-                    "Applied",
-                    f"Sync values applied and files regenerated.\n\n"
-                    f"VIDEO_OVERRIDE: {v_override:.5f}\n"
-                    f"AUDIO_OFFSET: {a_offset:.5f}\n\n"
-                    f"Map '{state.map_name}' is ready to use."))
-                self.root.after(0,
-                    lambda: (self.install_btn.configure(state="normal"),
-                             self.fetch_install_btn.configure(state="normal")))
+
+                def _done():
+                    self._pipeline_running = False
+                    self.apply_btn.configure(state="normal")
+                    messagebox.showinfo(
+                        "Applied",
+                        f"Sync values applied and files regenerated.\n\n"
+                        f"VIDEO_OVERRIDE: {v_override:.5f}\n"
+                        f"AUDIO_OFFSET: {a_offset:.5f}\n\n"
+                        f"Map '{state.map_name}' is ready to use.")
+                    self.install_btn.configure(state="normal")
+                    self.fetch_install_btn.configure(state="normal")
+
+                self.root.after(0, _done)
                 self.root.after(100, lambda: self._prompt_cleanup(state))
             except Exception as e:
                 print(f"    ERROR applying changes: {e}")
-                self.root.after(0, lambda: messagebox.showerror(
-                    "Error", f"Failed to apply:\n{e}"))
+                def _err():
+                    self._pipeline_running = False
+                    self.apply_btn.configure(state="normal")
+                    messagebox.showerror("Error", f"Failed to apply:\n{e}")
+                self.root.after(0, _err)
 
         threading.Thread(target=_apply, daemon=True).start()
 
