@@ -164,9 +164,20 @@ class MapInstallerGUI:
         self._build_ui()
         self._redirect_stdout()
 
+        # Load persistent settings
+        self._settings = map_installer.load_settings()
+
+        # Apply default quality from settings
+        self.quality_var.set(self._settings["default_quality"])
+
         # Auto-detect JD directory
         detected = map_installer.detect_jd_dir()
         self.jd_dir_entry.insert(0, detected)
+
+        # If skip_preflight is enabled, auto-enable the Install button
+        if self._settings["skip_preflight"]:
+            self._preflight_passed = True
+            self.install_btn.configure(state="normal")
 
         # Clean up on close
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -251,6 +262,16 @@ class MapInstallerGUI:
             btn_row, text="Clear Path Cache", command=self._on_clear_cache)
         self.clear_cache_btn.pack(side="left", padx=(12, 0))
         ToolTip(self.clear_cache_btn, "Deletes the saved Just Dance 2021 game data paths. The next Pre-flight Check or Install will re-scan your system for the game files.")
+
+        self.readjust_btn = ttk.Button(
+            btn_row, text="Re-adjust Offset", command=self._on_readjust)
+        self.readjust_btn.pack(side="left", padx=(12, 0))
+        ToolTip(self.readjust_btn, "Re-adjust audio/video offset on an already-installed map.\nSelect the map's download folder (must contain .ogg and .webm files).")
+
+        self.settings_btn = ttk.Button(
+            btn_row, text="Settings", command=self._on_settings)
+        self.settings_btn.pack(side="left", padx=(12, 0))
+        ToolTip(self.settings_btn, "Open installer settings (preflight, notifications, cleanup, quality defaults).")
 
         # ===================== MIDDLE: PROGRESS + PREVIEW =====================
         middle = ttk.Frame(container)
@@ -595,6 +616,13 @@ class MapInstallerGUI:
     # ------------------------------------------------------------------
 
     def _on_preflight(self):
+        # If skip_preflight is enabled, auto-pass
+        if self._settings.get("skip_preflight", False):
+            print("    Pre-flight skipped (disabled in settings)")
+            self._preflight_passed = True
+            self._on_preflight_done(True)
+            return
+
         jd_dir = self.jd_dir_entry.get().strip()
         asset = self.asset_html_entry.get().strip()
         nohud = self.nohud_html_entry.get().strip()
@@ -676,6 +704,156 @@ class MapInstallerGUI:
                 "The next Pre-flight Check or Install will re-scan for game data.")
         else:
             messagebox.showinfo("Cache Cleared", "No path cache found (already clear).")
+
+    def _on_readjust(self):
+        """Re-adjust offset on an already-installed map from its download folder."""
+        if self._pipeline_running:
+            return
+        download_dir = filedialog.askdirectory(
+            title="Select Map Download Folder",
+            mustexist=True)
+        if not download_dir:
+            return
+
+        jd_dir = self.jd_dir_entry.get().strip() or None
+
+        # Reconstruct state in a background thread
+        self.readjust_btn.configure(state="disabled", text="Loading...")
+
+        def _build():
+            try:
+                state = map_installer.reconstruct_state_for_readjust(
+                    download_dir, jd_dir=jd_dir)
+                state._interactive = False
+                self.root.after(0, lambda: self._on_readjust_ready(state))
+            except (FileNotFoundError, RuntimeError) as e:
+                self.root.after(0, lambda: self._on_readjust_error(str(e)))
+
+        threading.Thread(target=_build, daemon=True).start()
+
+    def _on_readjust_ready(self, state):
+        """Called on main thread when readjust state is built successfully."""
+        self.readjust_btn.configure(state="normal", text="Re-adjust Offset")
+        self.pipeline_state = state
+
+        # Update map name display
+        self.map_name_entry.configure(state="normal")
+        self.map_name_entry.delete(0, tk.END)
+        self.map_name_entry.insert(0, state.map_name)
+        self.map_name_entry.configure(state="readonly")
+
+        # Populate sync values
+        self.v_override_var.set(
+            state.v_override if state.v_override is not None else 0.0)
+        self.a_offset_var.set(
+            state.a_offset if state.a_offset is not None else 0.0)
+        self._refresh_value_displays()
+
+        # Enable sync refinement and preview controls
+        self._set_sync_state("normal")
+        self._set_preview_state("normal")
+
+        messagebox.showinfo(
+            "Readjust Mode",
+            f"Loaded '{state.map_name}' for offset readjustment.\n\n"
+            f"VIDEO_OVERRIDE: {state.v_override}\n"
+            f"AUDIO_OFFSET: {state.a_offset}\n\n"
+            "Use the Sync Refinement panel to adjust, then click 'Apply & Finish'.")
+
+    def _on_readjust_error(self, error_msg):
+        """Called on main thread when readjust state build fails."""
+        self.readjust_btn.configure(state="normal", text="Re-adjust Offset")
+        messagebox.showerror("Readjust Error", f"Failed to load map for readjustment:\n\n{error_msg}")
+
+    # ------------------------------------------------------------------
+    # Settings dialog
+    # ------------------------------------------------------------------
+
+    def _on_settings(self):
+        """Open the settings dialog."""
+        settings = map_installer.load_settings()
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Installer Settings")
+        dlg.geometry("420x280")
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        frame = ttk.Frame(dlg, padding=12)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text="Installer Settings",
+                  font=("Consolas", 11, "bold")).pack(anchor="w", pady=(0, 8))
+
+        # Skip preflight
+        skip_pf_var = tk.BooleanVar(value=settings["skip_preflight"])
+        skip_pf_cb = ttk.Checkbutton(
+            frame, text="Skip pre-flight checks",
+            variable=skip_pf_var)
+        skip_pf_cb.pack(anchor="w", pady=2)
+        ToolTip(skip_pf_cb,
+                "Skip pre-flight checks if they've already passed.\n"
+                "The Install button will be enabled immediately on launch.")
+
+        # Suppress offset notification
+        suppress_var = tk.BooleanVar(value=settings["suppress_offset_notification"])
+        suppress_cb = ttk.Checkbutton(
+            frame, text="Suppress offset refinement notification",
+            variable=suppress_var)
+        suppress_cb.pack(anchor="w", pady=2)
+        ToolTip(suppress_cb,
+                "Don't show the 'offset refinement is needed' popup\n"
+                "after the installation pipeline completes.")
+
+        # Auto cleanup
+        cleanup_var = tk.BooleanVar(value=settings["auto_cleanup_downloads"])
+        cleanup_cb = ttk.Checkbutton(
+            frame, text="Auto-cleanup downloads after Apply & Finish",
+            variable=cleanup_var)
+        cleanup_cb.pack(anchor="w", pady=2)
+        ToolTip(cleanup_cb,
+                "Automatically delete intermediate download files\n"
+                "after applying sync changes, without prompting.")
+
+        # Default quality
+        quality_frame = ttk.Frame(frame)
+        quality_frame.pack(anchor="w", pady=(8, 2))
+        ttk.Label(quality_frame, text="Default video quality:").pack(side="left", padx=(0, 8))
+        quality_var = tk.StringVar(value=settings["default_quality"])
+        quality_combo = ttk.Combobox(
+            quality_frame, textvariable=quality_var,
+            values=["ultra_hd", "ultra", "high_hd", "high",
+                    "mid_hd", "mid", "low_hd", "low"],
+            state="readonly", width=12)
+        quality_combo.pack(side="left")
+
+        # Buttons
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(side="bottom", pady=(16, 0))
+
+        def _save():
+            new_settings = {
+                "skip_preflight": skip_pf_var.get(),
+                "suppress_offset_notification": suppress_var.get(),
+                "auto_cleanup_downloads": cleanup_var.get(),
+                "default_quality": quality_var.get(),
+            }
+            map_installer.save_settings(new_settings)
+            self._settings = new_settings
+            # Apply quality default to current session
+            self.quality_var.set(new_settings["default_quality"])
+            # Enable install button if skip_preflight is on
+            if new_settings["skip_preflight"] and not self._pipeline_running:
+                self._preflight_passed = True
+                self.install_btn.configure(state="normal")
+            print(f"    Settings saved.")
+            dlg.destroy()
+
+        ttk.Button(btn_frame, text="Save", command=_save, width=10).pack(
+            side="left", padx=(0, 8))
+        ttk.Button(btn_frame, text="Cancel", command=dlg.destroy, width=10).pack(
+            side="left")
 
     # ------------------------------------------------------------------
     # Install pipeline
@@ -930,12 +1108,13 @@ class MapInstallerGUI:
         # Keep install disabled until user finishes sync refinement via Apply
         self.preflight_btn.configure(state="normal")
 
-        messagebox.showinfo(
-            "Complete",
-            f"Installation pipeline finished for {state.map_name}.\n\n"
-            "The Tool isnt perfect, offset refinement is needed.\n\n"
-            "Use the Sync Refinement panel below to fine-tune "
-            "audio/video timing, then click 'Apply & Finish'.")
+        if not self._settings.get("suppress_offset_notification", False):
+            messagebox.showinfo(
+                "Complete",
+                f"Installation pipeline finished for {state.map_name}.\n\n"
+                "The Tool isnt perfect, offset refinement is needed.\n\n"
+                "Use the Sync Refinement panel below to fine-tune "
+                "audio/video timing, then click 'Apply & Finish'.")
 
     # ------------------------------------------------------------------
     # Preview management (PIL frame-by-frame + ffplay audio-only)
@@ -1366,13 +1545,16 @@ class MapInstallerGUI:
         if not dl_dir or not os.path.isdir(dl_dir):
             return
 
-        answer = messagebox.askyesno(
-            "Clean Up Downloads",
-            f"Delete downloaded source files for '{state.map_name}' to save disk space?\n\n"
-            "This removes extracted scenes and decoded intermediates.\n"
-            "Audio (.ogg), video (.webm), and IPK data are kept in case\n"
-            "you need to reinstall or adjust the offset later.\n\n"
-            "This cannot be undone.")
+        if self._settings.get("auto_cleanup_downloads", False):
+            answer = True
+        else:
+            answer = messagebox.askyesno(
+                "Clean Up Downloads",
+                f"Delete downloaded source files for '{state.map_name}' to save disk space?\n\n"
+                "This removes extracted scenes and decoded intermediates.\n"
+                "Audio (.ogg), video (.webm), and IPK data are kept in case\n"
+                "you need to reinstall or adjust the offset later.\n\n"
+                "This cannot be undone.")
 
         if not answer:
             return

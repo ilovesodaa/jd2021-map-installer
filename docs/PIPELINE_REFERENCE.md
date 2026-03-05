@@ -418,9 +418,8 @@ The GUI provides:
 - "Apply & Finish" button that:
   1. Regenerates config files
   2. Reprocesses audio
-  3. Saves map config to `map_configs/{map_name}.json`
-  4. Clears game cache
-  5. Prompts for optional cleanup of downloaded files
+  3. Clears game cache
+  4. Prompts for optional cleanup of downloaded files
 
 ---
 

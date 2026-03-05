@@ -84,6 +84,6 @@ This guide covers common errors and their solutions, derived from the error hand
 
 - Always get fresh HTML links immediately before running the installer.
 - Use video quality tier that matches what's already downloaded to avoid re-downloading.
-- Map configs are saved to `map_configs/{map_name}.json` and auto-loaded on reinstall.
+- Global installer settings are saved to `installer_settings.json` and auto-loaded on reinstall.
 - Log files are written to `logs/install_{map_name}_{timestamp}.log`.
 - Ctrl+C gracefully stops after the current pipeline step completes.
