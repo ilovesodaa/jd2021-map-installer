@@ -27,6 +27,7 @@ JustDanceTools/
 jd2021pc tools/
 jd2021pc tools.zip
 MapDownloads/
+MapDownloads2/
 
 # Legacy external tool directories (now integrated into project)
 3rdPartyTools/
@@ -53,3 +54,4 @@ compare*
 
 todo/
 installer_settings.json
+get_codenames.py
