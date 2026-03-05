@@ -161,6 +161,10 @@ def main():
     parser.add_argument(
         "--exclude", nargs="+", metavar="MAP",
         help="Skip these specific map names")
+    parser.add_argument(
+        "--codename", nargs="+", metavar="CODENAME",
+        help="Fetch HTML for these codenames via JDH_Downloader before batch install. "
+             "Each codename runs a separate browser session.")
     args = parser.parse_args()
 
     # Default maps directory
@@ -169,13 +173,42 @@ def main():
     maps_root = os.path.abspath(maps_root)
 
     if not os.path.isdir(maps_root):
-        print(f"Error: maps directory not found: {maps_root}")
-        sys.exit(1)
+        # If --codename is used, create MapDownloads/ if it doesn't exist
+        if args.codename:
+            os.makedirs(maps_root, exist_ok=True)
+        else:
+            print(f"Error: maps directory not found: {maps_root}")
+            sys.exit(1)
 
     jd_dir = args.jd21_path or script_dir
 
     # Set up logging for the batch run
     setup_cli_logging("batch")
+
+    # --- FETCH PHASE: download HTML for any --codename arguments ---
+    if args.codename:
+        print(f"\n{'='*60}")
+        print(f" FETCH PHASE: Retrieving HTML for {len(args.codename)} codename(s)")
+        print(f"{'='*60}")
+
+        fetch_ok = 0
+        fetch_fail = 0
+        for cn in args.codename:
+            print(f"\n--- Fetching: {cn} ---")
+            try:
+                map_installer.fetch_html_via_downloader(cn, maps_root)
+                fetch_ok += 1
+            except RuntimeError as e:
+                print(f"  FAILED: {e}")
+                fetch_fail += 1
+
+        print(f"\n{'='*60}")
+        print(f" FETCH COMPLETE: {fetch_ok} OK, {fetch_fail} failed")
+        print(f"{'='*60}")
+
+        if fetch_ok == 0:
+            print("No codenames fetched successfully. Aborting.")
+            sys.exit(1)
 
     # Discover maps
     found = collect_map_folders(maps_root)

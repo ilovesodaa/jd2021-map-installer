@@ -203,6 +203,20 @@ class MapInstallerGUI:
         )
         warning_lbl.grid(row=0, column=0, columnspan=3, pady=(0, 6), sticky="w")
 
+        # --- Codename quick-install row ---
+        ttk.Label(cfg, text="Codename:", width=16, anchor="e").grid(
+            row=1, column=0, sticky="e", padx=(0, 4))
+        self.codename_entry = ttk.Entry(cfg, width=64)
+        self.codename_entry.grid(row=1, column=1, sticky="ew", pady=1)
+        ToolTip(self.codename_entry, "Enter a map codename (e.g. TemperatureALT) to fetch HTML from Discord and install automatically.")
+        self.fetch_install_btn = ttk.Button(
+            cfg, text="Fetch && Install", width=14, command=self._on_fetch_install)
+        self.fetch_install_btn.grid(row=1, column=2, padx=(4, 0))
+        ToolTip(self.fetch_install_btn, "Fetch asset/nohud HTML from Discord via JDH_Downloader, then run the full install pipeline.\nRequires Node.js 18+ and tools/JDH_Downloader/config.json.")
+
+        ttk.Separator(cfg, orient="horizontal").grid(
+            row=2, column=0, columnspan=3, sticky="ew", pady=6)
+
         for i, (label_text, attr_name, browse_type) in enumerate([
             ("Map Name:", "map_name_entry", None),
             ("Asset HTML:", "asset_html_entry", "html"),
@@ -210,9 +224,9 @@ class MapInstallerGUI:
             ("Game Directory:", "jd_dir_entry", "dir"),
         ]):
             ttk.Label(cfg, text=label_text, width=16, anchor="e").grid(
-                row=i+1, column=0, sticky="e", padx=(0, 4))
+                row=i+3, column=0, sticky="e", padx=(0, 4))
             entry = ttk.Entry(cfg, width=64)
-            entry.grid(row=i+1, column=1, sticky="ew", pady=1)
+            entry.grid(row=i+3, column=1, sticky="ew", pady=1)
             setattr(self, attr_name, entry)
 
             # Tooltips for configuration entries
@@ -230,7 +244,7 @@ class MapInstallerGUI:
                 else:
                     cmd = (lambda e=entry, bt=browse_type: self._browse(e, bt))
                 ttk.Button(cfg, text="Browse", width=8, command=cmd).grid(
-                    row=i+1, column=2, padx=(4, 0))
+                    row=i+3, column=2, padx=(4, 0))
 
         # Map name is auto-derived from Asset HTML; readonly unless detection fails
         self.map_name_entry.configure(state="readonly")
@@ -239,15 +253,15 @@ class MapInstallerGUI:
 
         # Video quality selector
         ttk.Label(cfg, text="Video Quality:", width=16, anchor="e").grid(
-            row=5, column=0, sticky="e", padx=(0, 4))
+            row=7, column=0, sticky="e", padx=(0, 4))
         self.quality_var = tk.StringVar(value="ultra_hd")
         quality_combo = ttk.Combobox(cfg, textvariable=self.quality_var,
                                      values=["ultra_hd", "ultra", "high_hd", "high", "mid_hd", "mid", "low_hd", "low"],
                                      state="readonly", width=12)
-        quality_combo.grid(row=5, column=1, sticky="w", pady=1)
+        quality_combo.grid(row=7, column=1, sticky="w", pady=1)
 
         btn_row = ttk.Frame(cfg)
-        btn_row.grid(row=6, column=0, columnspan=3, pady=(6, 0))
+        btn_row.grid(row=8, column=0, columnspan=3, pady=(6, 0))
         self.preflight_btn = ttk.Button(
             btn_row, text="Pre-flight Check", command=self._on_preflight)
         self.preflight_btn.pack(side="left", padx=(0, 12))
@@ -859,6 +873,80 @@ class MapInstallerGUI:
     # Install pipeline
     # ------------------------------------------------------------------
 
+    def _on_fetch_install(self):
+        """Fetch HTML via JDH_Downloader, then trigger install."""
+        if self._pipeline_running:
+            return
+
+        codename = self.codename_entry.get().strip()
+        if not codename:
+            messagebox.showerror(
+                "Missing Input",
+                "Enter a map codename (e.g. TemperatureALT) in the Codename field.")
+            return
+
+        # Disable controls during fetch
+        self._pipeline_running = True
+        self.fetch_install_btn.configure(state="disabled")
+        self.install_btn.configure(state="disabled")
+        self.preflight_btn.configure(state="disabled")
+
+        # Reset progress
+        for i in range(len(self.STEP_NAMES)):
+            self._update_step_status(i, "pending")
+
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        maps_dir = os.path.join(script_dir, "MapDownloads")
+
+        def _fetch():
+            try:
+                print("--- JDH_Downloader: Fetching HTML from Discord ---")
+                asset_html, nohud_html = map_installer.fetch_html_via_downloader(
+                    codename, maps_dir)
+                print("--- Fetch complete, starting installation ---\n")
+
+                # Fill in the GUI entries on the main thread, then trigger install
+                def _proceed():
+                    self._pipeline_running = False
+
+                    # Fill Asset HTML
+                    self.asset_html_entry.delete(0, tk.END)
+                    self.asset_html_entry.insert(0, asset_html)
+
+                    # Fill NoHUD HTML
+                    self.nohud_html_entry.delete(0, tk.END)
+                    self.nohud_html_entry.insert(0, nohud_html)
+
+                    # Fill Map Name
+                    self.map_name_entry.configure(state="normal")
+                    self.map_name_entry.delete(0, tk.END)
+                    self.map_name_entry.insert(0, codename)
+                    self.map_name_entry.configure(state="readonly")
+
+                    # Re-enable and trigger install
+                    self.fetch_install_btn.configure(state="normal")
+                    self.install_btn.configure(state="normal")
+                    self.preflight_btn.configure(state="normal")
+                    self._on_install()
+
+                self.root.after(0, _proceed)
+
+            except RuntimeError as e:
+                err_msg = str(e)
+                print(f"ERROR: {err_msg}")
+                def _error():
+                    self._pipeline_running = False
+                    self.fetch_install_btn.configure(state="normal")
+                    self.install_btn.configure(
+                        state="normal" if self._preflight_passed else "disabled")
+                    self.preflight_btn.configure(state="normal")
+                    messagebox.showerror(
+                        "Fetch Failed",
+                        f"JDH_Downloader failed for '{codename}':\n\n{err_msg}")
+                self.root.after(0, _error)
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
     def _on_install(self):
         if self._pipeline_running:
             return
@@ -871,8 +959,8 @@ class MapInstallerGUI:
             messagebox.showerror(
                 "Missing Input",
                 "Both Asset HTML and NOHUD HTML files are required.\n\n"
-                "Use the 'Browse' buttons to select the downloaded HTML files\n"
-                "that contain the map's asset and video links.")
+                "Use the 'Browse' buttons to select the downloaded HTML files,\n"
+                "or enter a codename and click 'Fetch & Install' to automate it.")
             return
 
         if not map_name:
@@ -915,6 +1003,7 @@ class MapInstallerGUI:
         self._pipeline_running = True
         self.install_btn.configure(state="disabled")
         self.preflight_btn.configure(state="disabled")
+        self.fetch_install_btn.configure(state="disabled")
 
         # Reset progress
         for i in range(len(self.STEP_NAMES)):
@@ -1091,6 +1180,7 @@ class MapInstallerGUI:
         self._pipeline_running = False
         self.install_btn.configure(state="normal")
         self.preflight_btn.configure(state="normal")
+        self.fetch_install_btn.configure(state="normal")
 
     def _on_pipeline_complete(self):
         self._pipeline_running = False
@@ -1107,6 +1197,7 @@ class MapInstallerGUI:
         self._set_preview_state("normal")
         # Keep install disabled until user finishes sync refinement via Apply
         self.preflight_btn.configure(state="normal")
+        self.fetch_install_btn.configure(state="normal")
 
         if not self._settings.get("suppress_offset_notification", False):
             messagebox.showinfo(
@@ -1526,7 +1617,8 @@ class MapInstallerGUI:
                     f"AUDIO_OFFSET: {a_offset:.5f}\n\n"
                     f"Map '{state.map_name}' is ready to use."))
                 self.root.after(0,
-                    lambda: self.install_btn.configure(state="normal"))
+                    lambda: (self.install_btn.configure(state="normal"),
+                             self.fetch_install_btn.configure(state="normal")))
                 self.root.after(100, lambda: self._prompt_cleanup(state))
             except Exception as e:
                 print(f"    ERROR applying changes: {e}")

@@ -483,6 +483,151 @@ def check_executable(name):
         return False
 
 
+# ---------------------------------------------------------------------------
+# JDH_Downloader integration
+# ---------------------------------------------------------------------------
+
+JDH_DOWNLOADER_DIR = os.path.join(SCRIPT_DIR, "tools", "JDH_Downloader")
+
+
+def _check_node_available():
+    """Check that Node.js is available on PATH. Returns (ok, message)."""
+    try:
+        result = subprocess.run(["node", "--version"],
+                                capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            return False, "node is installed but returned an error"
+        node_ver = result.stdout.strip()
+    except FileNotFoundError:
+        return False, ("Node.js is not installed or not on PATH.\n"
+                       "  Download it from: https://nodejs.org/")
+    except subprocess.TimeoutExpired:
+        return False, "node --version timed out"
+
+    # Check minimum version (18+)
+    try:
+        major = int(node_ver.lstrip('v').split('.')[0])
+        if major < 18:
+            return False, (f"Node.js {node_ver} found but v18+ is required.\n"
+                           "  Download from: https://nodejs.org/")
+    except ValueError:
+        pass  # Can't parse version, proceed anyway
+
+    return True, f"Node.js {node_ver}"
+
+
+def _check_downloader_setup():
+    """Verify JDH_Downloader directory is properly set up.
+    Returns (ok, message).
+    """
+    if not os.path.isdir(JDH_DOWNLOADER_DIR):
+        return False, (f"JDH_Downloader not found at {JDH_DOWNLOADER_DIR}\n"
+                       "  Ensure the tools/JDH_Downloader/ directory exists.")
+
+    config_path = os.path.join(JDH_DOWNLOADER_DIR, "config.json")
+    if not os.path.isfile(config_path):
+        example = os.path.join(JDH_DOWNLOADER_DIR, "config.example.json")
+        return False, (f"config.json not found in {JDH_DOWNLOADER_DIR}\n"
+                       f"  Copy {example} to {config_path} and fill in your "
+                       "Discord channel URL.")
+
+    # Check if node_modules exists; if not, run npm install
+    node_modules = os.path.join(JDH_DOWNLOADER_DIR, "node_modules")
+    if not os.path.isdir(node_modules):
+        print("  JDH_Downloader dependencies not installed. Running npm install...")
+        try:
+            result = subprocess.run(
+                ["npm", "install"],
+                cwd=JDH_DOWNLOADER_DIR,
+                timeout=120
+            )
+            if result.returncode != 0:
+                return False, "npm install failed (see output above)"
+            print("  npm install complete.")
+        except FileNotFoundError:
+            return False, ("npm not found on PATH. Install Node.js from "
+                           "https://nodejs.org/")
+        except subprocess.TimeoutExpired:
+            return False, "npm install timed out"
+
+    return True, "JDH_Downloader ready"
+
+
+def fetch_html_via_downloader(codename, output_dir):
+    """Run JDH_Downloader to fetch assets.html and nohud.html for a codename.
+
+    Args:
+        codename: The map codename (e.g. "TemperatureALT").
+        output_dir: Directory where <codename>/ folder will be created
+                    (typically MapDownloads/).
+
+    Returns:
+        (asset_html_path, nohud_html_path) on success.
+
+    Raises:
+        RuntimeError on any failure.
+    """
+    # Pre-flight: check Node.js
+    ok, msg = _check_node_available()
+    if not ok:
+        raise RuntimeError(f"Node.js check failed: {msg}")
+    print(f"  [OK] {msg}")
+
+    # Pre-flight: check downloader setup
+    ok, msg = _check_downloader_setup()
+    if not ok:
+        raise RuntimeError(f"JDH_Downloader setup failed: {msg}")
+    print(f"  [OK] {msg}")
+
+    fetch_script = os.path.join(JDH_DOWNLOADER_DIR, "fetch.mjs")
+    abs_output_dir = os.path.abspath(output_dir)
+
+    print(f"  Fetching HTML for '{codename}' via JDH_Downloader...")
+    print(f"  Output directory: {abs_output_dir}")
+    print(f"  (A Chromium window will open. If not logged in, log in manually.)")
+
+    try:
+        result = subprocess.run(
+            ["node", fetch_script, codename, "--output-dir", abs_output_dir],
+            timeout=600,  # 10 min: allows 5 min login wait + command timeouts
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            "JDH_Downloader timed out after 10 minutes.\n"
+            "  The bot may be offline, or Discord login may have stalled."
+        )
+    except FileNotFoundError:
+        raise RuntimeError("Could not run 'node'. Is Node.js installed?")
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"JDH_Downloader exited with code {result.returncode}.\n"
+            "  Check the output above for details. Common causes:\n"
+            "  - Bot is offline or not in the server\n"
+            "  - Discord login session expired (delete .browser-profile and retry)\n"
+            "  - Invalid codename"
+        )
+
+    # Verify output files exist
+    codename_dir = os.path.join(abs_output_dir, codename)
+    asset_html = os.path.join(codename_dir, "assets.html")
+    nohud_html = os.path.join(codename_dir, "nohud.html")
+
+    if not os.path.isfile(asset_html):
+        raise RuntimeError(
+            f"Expected assets.html not found at {asset_html}\n"
+            "  JDH_Downloader reported success but output is missing."
+        )
+    if not os.path.isfile(nohud_html):
+        raise RuntimeError(
+            f"Expected nohud.html not found at {nohud_html}\n"
+            "  JDH_Downloader reported success but output is missing."
+        )
+
+    print(f"  Fetch complete: {codename_dir}")
+    return asset_html, nohud_html
+
+
 def _prompt_install(tool_name):
     """Ask user if they want to auto-install a missing dependency. Returns True if yes."""
     try:
@@ -1887,7 +2032,33 @@ def main():
     parser.add_argument("--readjust", metavar="DOWNLOAD_DIR", default=None,
                         help="Re-adjust offset on an already-installed map. "
                              "Point to the map's download directory (must contain .ogg and .webm files).")
+    parser.add_argument("--codename", default=None,
+                        help="Fetch HTML from Discord via JDH_Downloader, then install. "
+                             "Requires Node.js 18+ and tools/JDH_Downloader/config.json.")
     args = parser.parse_args()
+
+    # --- FETCH-AND-INSTALL MODE (--codename) ---
+    if args.codename:
+        if args.asset_html or args.nohud_html:
+            parser.error("--codename cannot be used with --asset-html / --nohud-html")
+        if args.readjust:
+            parser.error("--codename cannot be used with --readjust")
+
+        print("--- JDH_Downloader: Fetching HTML from Discord ---")
+        maps_dir = os.path.join(SCRIPT_DIR, "MapDownloads")
+        try:
+            asset_html, nohud_html = fetch_html_via_downloader(
+                args.codename, maps_dir)
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
+        print("--- Fetch complete, starting installation ---\n")
+
+        # Inject into args so the normal install path works unchanged
+        args.asset_html = asset_html
+        args.nohud_html = nohud_html
+        if not args.map_name:
+            args.map_name = args.codename
 
     # --- READJUST MODE: skip pipeline, go straight to sync refinement ---
     if args.readjust:
@@ -1913,7 +2084,8 @@ def main():
         # --- NORMAL INSTALL MODE ---
         if not args.asset_html or not args.nohud_html:
             parser.error("--asset-html and --nohud-html are required for installation "
-                         "(use --readjust for offset-only adjustment)")
+                         "(or use --codename to fetch from Discord, "
+                         "--readjust for offset-only adjustment)")
 
         # Derive map name from JDU asset URLs first (most reliable), fallback to folder name
         map_name = args.map_name
