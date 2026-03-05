@@ -159,12 +159,22 @@ def main():
         "--only", nargs="+", metavar="MAP",
         help="Only install these specific map names")
     parser.add_argument(
-        "--exclude", nargs="+", metavar="MAP",
+        "--exclude", "--ignore", nargs="+", metavar="MAP",
         help="Skip these specific map names")
+    parser.add_argument(
+        "--ignore-non-ascii", action="store_true",
+        help="Skip maps that contain non-ASCII characters in their name")
     parser.add_argument(
         "--codename", nargs="+", metavar="CODENAME",
         help="Fetch HTML for these codenames via JDH_Downloader before batch install. "
              "Each codename runs a separate browser session.")
+    parser.add_argument(
+        "--interactive", action="store_true", default=True,
+        help="Prompt for action when non-ASCII metadata is found (default: True). "
+             "Use --auto-strip to forcefully auto-strip instead.")
+    parser.add_argument(
+        "--auto-strip", action="store_true",
+        help="Silently auto-strip non-ASCII metadata instead of prompting.")
     args = parser.parse_args()
 
     # Default maps directory
@@ -243,6 +253,9 @@ def main():
         if args.skip_existing and is_map_installed(name, jd21_dir):
             skipped.append((name, "already installed"))
             continue
+        if args.ignore_non_ascii and any(ord(c) > 127 for c in name):
+            skipped.append((name, "contains non-ASCII characters"))
+            continue
         to_install.append((name, asset, nohud))
 
     # Summary before starting
@@ -284,6 +297,7 @@ def main():
         try:
             state = create_state(name, asset, nohud, jd_dir,
                                  quality=args.quality)
+            state._interactive = not args.auto_strip
 
             run_steps(state, DOWNLOAD_STEPS)
             elapsed = time.time() - start_time

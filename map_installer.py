@@ -1596,8 +1596,11 @@ def step_06_generate_configs(state):
             if getattr(state, '_interactive', True):
                 print(f"\n    These characters may cause game engine errors.")
                 for field, val in non_ascii_fields.items():
-                    replacement = input(f"    Replace {field}? Enter new value (or Enter to auto-strip): ").strip()
-                    if replacement:
+                    replacement = input(f"    Replace {field}? Enter new value [or leave blank to auto-strip, type 'ignore' to keep original]: ").strip()
+                    if replacement.lower() == 'ignore':
+                        state.metadata_overrides[field] = val
+                        print(f"      Kept original: '{val}'")
+                    elif replacement:
                         state.metadata_overrides[field] = replacement
                     else:
                         safe = ''.join(c for c in val if ord(c) < 128)
