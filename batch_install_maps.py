@@ -38,9 +38,38 @@ def collect_map_folders(root_dir):
         folder = os.path.join(root_dir, entry)
         if not os.path.isdir(folder):
             continue
-        asset = os.path.join(folder, "assets.html")
-        nohud = os.path.join(folder, "nohud.html")
-        if os.path.isfile(asset) and os.path.isfile(nohud):
+
+        # Accept common filename variants to reduce setup friction:
+        # assets.html / asset.html / ASSETS.HTML, etc.
+        asset = None
+        nohud = None
+        try:
+            htmls = [os.path.join(folder, n) for n in os.listdir(folder)
+                     if os.path.isfile(os.path.join(folder, n)) and n.lower().endswith('.html')]
+        except OSError:
+            htmls = []
+
+        for h in htmls:
+            name = os.path.basename(h).lower()
+            if "nohud" in name and not nohud:
+                nohud = h
+            elif "asset" in name and not asset:
+                asset = h
+
+        # Fallback: if names are unusual, use two HTML files and infer by exclusion.
+        if len(htmls) >= 2:
+            if not nohud:
+                for h in htmls:
+                    if "nohud" in os.path.basename(h).lower():
+                        nohud = h
+                        break
+            if not asset:
+                for h in htmls:
+                    if h != nohud:
+                        asset = h
+                        break
+
+        if asset and nohud:
             out.append((entry, asset, nohud))
     return out
 
@@ -224,8 +253,32 @@ def main():
     found = collect_map_folders(maps_root)
     if not found:
         print(f"No valid map folders found under {maps_root}.")
-        print("Each map folder must contain assets.html and nohud.html.")
-        sys.exit(1)
+        print("Expected each map folder to contain asset/nohud HTML files.")
+
+        # Interactive recovery path for users who skipped docs.
+        if sys.stdin.isatty():
+            print("\nQuick recovery:")
+            print("  Enter codenames to fetch now (space-separated),")
+            print("  or press Enter to abort.")
+            raw_codes = input("Codenames: ").strip()
+            if raw_codes:
+                codes = [c for c in raw_codes.split() if c]
+                if codes:
+                    ok = 0
+                    for cn in codes:
+                        print(f"\n--- Fetching: {cn} ---")
+                        try:
+                            map_installer.fetch_html_via_downloader(cn, maps_root)
+                            ok += 1
+                        except RuntimeError as e:
+                            print(f"  FAILED: {e}")
+                    if ok > 0:
+                        found = collect_map_folders(maps_root)
+                        print(f"\nRecovered {ok} map folder(s). Continuing...")
+
+        if not found:
+            print("Nothing to install. Tip: use --codename MAP1 MAP2 to auto-fetch HTML first.")
+            sys.exit(1)
 
     # Preflight using first map's HTMLs
     if settings["skip_preflight"]:

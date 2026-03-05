@@ -155,6 +155,8 @@ class MapInstallerGUI:
         self._file_handler = None
         self._closing = False
         self._pipeline_running = False
+        self._fetch_mode_lock = False
+        self._last_run_from_fetch = False
 
         # Tkinter variables for sync refinement
         self.v_override_var = tk.DoubleVar(value=0.0)
@@ -178,6 +180,8 @@ class MapInstallerGUI:
         if self._settings["skip_preflight"]:
             self._preflight_passed = True
             self.install_btn.configure(state="normal")
+
+        self._show_quickstart_if_needed()
 
         # Clean up on close
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -208,60 +212,67 @@ class MapInstallerGUI:
             row=1, column=0, sticky="e", padx=(0, 4))
         self.codename_entry = ttk.Entry(cfg, width=64)
         self.codename_entry.grid(row=1, column=1, sticky="ew", pady=1)
+        self.codename_entry.bind("<KeyRelease>", lambda _e: self._on_html_inputs_changed())
         ToolTip(self.codename_entry, "Enter a map codename (e.g. TemperatureALT) to fetch HTML from Discord and install automatically.")
         self.fetch_install_btn = ttk.Button(
-            cfg, text="Fetch && Install", width=14, command=self._on_fetch_install)
+            cfg, text="Fetch & Install", width=14, command=self._on_fetch_install)
         self.fetch_install_btn.grid(row=1, column=2, padx=(4, 0))
         ToolTip(self.fetch_install_btn, "Fetch asset/nohud HTML from Discord via JDH_Downloader, then run the full install pipeline.\nRequires Node.js 18+ and tools/JDH_Downloader/config.json.")
 
         ttk.Separator(cfg, orient="horizontal").grid(
             row=2, column=0, columnspan=3, sticky="ew", pady=6)
 
-        for i, (label_text, attr_name, browse_type) in enumerate([
-            ("Map Name:", "map_name_entry", None),
-            ("Asset HTML:", "asset_html_entry", "html"),
-            ("NOHUD HTML:", "nohud_html_entry", "html"),
-            ("Game Directory:", "jd_dir_entry", "dir"),
-        ]):
-            ttk.Label(cfg, text=label_text, width=16, anchor="e").grid(
-                row=i+3, column=0, sticky="e", padx=(0, 4))
-            entry = ttk.Entry(cfg, width=64)
-            entry.grid(row=i+3, column=1, sticky="ew", pady=1)
-            setattr(self, attr_name, entry)
+        ttk.Label(cfg, text="Asset HTML:", width=16, anchor="e").grid(
+            row=3, column=0, sticky="e", padx=(0, 4))
+        self.asset_html_entry = ttk.Entry(cfg, width=64)
+        self.asset_html_entry.grid(row=3, column=1, sticky="ew", pady=1)
+        ToolTip(self.asset_html_entry, "Path to the downloaded map asset HTML file containing texture/audio links. Editable manually.")
+        self.asset_browse_btn = ttk.Button(
+            cfg, text="Browse", width=8,
+            command=lambda e=self.asset_html_entry: self._browse(e, "html"))
+        self.asset_browse_btn.grid(row=3, column=2, padx=(4, 0))
 
-            # Tooltips for configuration entries
-            if attr_name == "map_name_entry":
-                ToolTip(entry, "Auto-filled from Asset HTML. Only edit if detection fails.")
-            elif attr_name == "asset_html_entry":
-                ToolTip(entry, "Click 'Browse' to select the downloaded map asset HTML file containing texture/audio links.")
-            elif attr_name == "nohud_html_entry":
-                ToolTip(entry, "Click 'Browse' to select the downloaded NoHUD HTML file containing the map video link.")
-            elif attr_name == "jd_dir_entry":
-                ToolTip(entry, "Path to the Just Dance 2021 installation folder.")
-            if browse_type:
-                if attr_name == "asset_html_entry":
-                    cmd = (lambda e=entry, bt=browse_type: self._browse(e, bt, self.map_name_entry))
-                else:
-                    cmd = (lambda e=entry, bt=browse_type: self._browse(e, bt))
-                ttk.Button(cfg, text="Browse", width=8, command=cmd).grid(
-                    row=i+3, column=2, padx=(4, 0))
+        ttk.Label(cfg, text="NOHUD HTML:", width=16, anchor="e").grid(
+            row=4, column=0, sticky="e", padx=(0, 4))
+        self.nohud_html_entry = ttk.Entry(cfg, width=64)
+        self.nohud_html_entry.grid(row=4, column=1, sticky="ew", pady=1)
+        ToolTip(self.nohud_html_entry, "Path to the downloaded NoHUD HTML file containing the map video link. Editable manually.")
+        self.nohud_browse_btn = ttk.Button(
+            cfg, text="Browse", width=8,
+            command=lambda e=self.nohud_html_entry: self._browse(e, "html"))
+        self.nohud_browse_btn.grid(row=4, column=2, padx=(4, 0))
 
-        # Map name is auto-derived from Asset HTML; readonly unless detection fails
-        self.map_name_entry.configure(state="readonly")
+        ttk.Label(cfg, text="Game Directory:", width=16, anchor="e").grid(
+            row=5, column=0, sticky="e", padx=(0, 4))
+        self.jd_dir_entry = ttk.Entry(cfg, width=64)
+        self.jd_dir_entry.grid(row=5, column=1, sticky="ew", pady=1)
+        ToolTip(self.jd_dir_entry, "Path to the Just Dance 2021 installation folder.")
+        self.jd_browse_btn = ttk.Button(
+            cfg, text="Browse", width=8,
+            command=lambda e=self.jd_dir_entry: self._browse(e, "dir"))
+        self.jd_browse_btn.grid(row=5, column=2, padx=(4, 0))
 
         cfg.columnconfigure(1, weight=1)
 
         # Video quality selector
         ttk.Label(cfg, text="Video Quality:", width=16, anchor="e").grid(
-            row=7, column=0, sticky="e", padx=(0, 4))
+            row=6, column=0, sticky="e", padx=(0, 4))
         self.quality_var = tk.StringVar(value="ultra_hd")
         quality_combo = ttk.Combobox(cfg, textvariable=self.quality_var,
                                      values=["ultra_hd", "ultra", "high_hd", "high", "mid_hd", "mid", "low_hd", "low"],
                                      state="readonly", width=12)
-        quality_combo.grid(row=7, column=1, sticky="w", pady=1)
+        quality_combo.grid(row=6, column=1, sticky="w", pady=1)
+
+        # Route selection behavior: manual HTML inputs disable fetch mode, and
+        # fetch mode locks manual HTML entries while running.
+        self.asset_html_entry.bind("<KeyRelease>", lambda _e: self._on_html_inputs_changed())
+        self.nohud_html_entry.bind("<KeyRelease>", lambda _e: self._on_html_inputs_changed())
+        self.asset_html_entry.bind("<FocusOut>", lambda _e: self._on_html_inputs_changed())
+        self.nohud_html_entry.bind("<FocusOut>", lambda _e: self._on_html_inputs_changed())
+        self._on_html_inputs_changed()
 
         btn_row = ttk.Frame(cfg)
-        btn_row.grid(row=8, column=0, columnspan=3, pady=(6, 0))
+        btn_row.grid(row=7, column=0, columnspan=3, pady=(6, 0))
         self.preflight_btn = ttk.Button(
             btn_row, text="Pre-flight Check", command=self._on_preflight)
         self.preflight_btn.pack(side="left", padx=(0, 12))
@@ -286,6 +297,11 @@ class MapInstallerGUI:
             btn_row, text="Settings", command=self._on_settings)
         self.settings_btn.pack(side="left", padx=(12, 0))
         ToolTip(self.settings_btn, "Open installer settings (preflight, notifications, cleanup, quality defaults).")
+
+        self.reset_btn = ttk.Button(
+            btn_row, text="Reset State", command=self._on_reset_state)
+        self.reset_btn.pack(side="left", padx=(12, 0))
+        ToolTip(self.reset_btn, "Clear current HTML inputs/progress and unlock Fetch mode without restarting the app.")
 
         # ===================== MIDDLE: PROGRESS + PREVIEW =====================
         middle = ttk.Frame(container)
@@ -494,7 +510,97 @@ class MapInstallerGUI:
         except AttributeError:
             pass
 
-    def _browse(self, entry, browse_type, autofill_entry=None):
+    def _derive_codename(self, asset_html, nohud_html, fallback=None):
+        """Best-effort codename detection from selected HTML files."""
+        for candidate in (asset_html, nohud_html):
+            if candidate and os.path.isfile(candidate):
+                try:
+                    urls = map_downloader.extract_urls(candidate)
+                    derived = map_downloader.extract_codename_from_urls(urls)
+                    if derived:
+                        return derived
+                except Exception:
+                    pass
+
+        for candidate in (asset_html, nohud_html):
+            if candidate:
+                folder_name = os.path.basename(os.path.dirname(os.path.abspath(candidate)))
+                if folder_name:
+                    return folder_name
+        return fallback
+
+    def _set_html_inputs_state(self, enabled):
+        state = "normal" if enabled else "disabled"
+        self.asset_html_entry.configure(state=state)
+        self.nohud_html_entry.configure(state=state)
+        self.asset_browse_btn.configure(state=state)
+        self.nohud_browse_btn.configure(state=state)
+
+    def _on_html_inputs_changed(self):
+        """Switch between manual HTML route and codename fetch route automatically."""
+        if self._fetch_mode_lock:
+            return
+
+        asset_html = self.asset_html_entry.get().strip()
+        nohud_html = self.nohud_html_entry.get().strip()
+        has_manual_html = bool(asset_html or nohud_html)
+
+        if has_manual_html:
+            self.codename_entry.configure(state="disabled")
+            self.fetch_install_btn.configure(state="disabled")
+        else:
+            if not self._pipeline_running:
+                self.codename_entry.configure(state="normal")
+                self.fetch_install_btn.configure(state="normal")
+
+    def _reset_ui_state(self, clear_html=True):
+        """Return the installer UI to an idle state without restarting the app."""
+        self._pipeline_running = False
+        self._fetch_mode_lock = False
+        self._last_run_from_fetch = False
+
+        self._kill_current_preview()
+        self.pipeline_state = None
+
+        # Reset progress and refinement controls.
+        for i in range(len(self.STEP_NAMES)):
+            self._update_step_status(i, "pending")
+        self.v_override_var.set(0.0)
+        self.a_offset_var.set(0.0)
+        self._refresh_value_displays()
+        self._set_sync_state("disabled")
+        self._set_preview_state("disabled")
+        self._preview_position = 0.0
+        self._preview_duration = 0.0
+        self._preview_playing = False
+        self.seek_var.set(0.0)
+        self.time_lbl.configure(text="0:00")
+        self.dur_lbl.configure(text="0:00")
+
+        # Restore top-level controls.
+        self.preflight_btn.configure(state="normal", text="Pre-flight Check")
+        self.install_btn.configure(state="disabled")
+        self.fetch_install_btn.configure(state="normal")
+        self.codename_entry.configure(state="normal")
+        self._set_html_inputs_state(True)
+
+        if clear_html:
+            self.asset_html_entry.delete(0, tk.END)
+            self.nohud_html_entry.delete(0, tk.END)
+
+        self._on_html_inputs_changed()
+
+    def _on_reset_state(self):
+        if self._pipeline_running:
+            messagebox.showwarning(
+                "Busy",
+                "An install is currently running. Wait for it to finish before resetting state.")
+            return
+
+        self._reset_ui_state(clear_html=True)
+        print("    UI state reset. You can run Fetch & Install again.")
+
+    def _browse(self, entry, browse_type):
         if browse_type == "html":
             path = filedialog.askopenfilename(
                 filetypes=[("HTML files", "*.html"), ("All files", "*.*")])
@@ -525,30 +631,10 @@ class MapInstallerGUI:
                             asset_path = os.path.join(dir_path, asset_files[0])
                             self.asset_html_entry.delete(0, tk.END)
                             self.asset_html_entry.insert(0, asset_path)
-                            
-                            # Auto-extract Map Name from the newly detected Asset HTML
-                            if getattr(self, "map_name_entry", None):
-                                autofill_entry = self.map_name_entry
-                                path = asset_path
                 except Exception as e:
                     print(f"Error during complementary HTML auto-detect: {e}")
-            # ----------------------------------------
-            
-            if autofill_entry is not None:
-                derived = None
-                try:
-                    urls = map_downloader.extract_urls(path)
-                    derived = map_downloader.extract_codename_from_urls(urls)
-                except Exception:
-                    pass
-                if not derived:
-                    derived = os.path.basename(os.path.dirname(os.path.abspath(path)))
-                autofill_entry.configure(state="normal")
-                autofill_entry.delete(0, tk.END)
-                if derived:
-                    autofill_entry.insert(0, derived)
-                    autofill_entry.configure(state="readonly")
-                # else: leave editable so user can type manually
+
+            self._on_html_inputs_changed()
 
     def _redirect_stdout(self):
         handler = TextWidgetHandler(self.log_text, self.root)
@@ -698,7 +784,8 @@ class MapInstallerGUI:
         self.preflight_btn.configure(state="normal", text="Pre-flight Check")
         if passed:
             self.install_btn.configure(state="normal")
-            messagebox.showinfo("Pre-flight", "All checks passed!")
+            if self._settings.get("show_preflight_success_popup", True):
+                messagebox.showinfo("Pre-flight", "All checks passed!")
         else:
             self.install_btn.configure(state="disabled")
             messagebox.showwarning(
@@ -708,6 +795,24 @@ class MapInstallerGUI:
                 "  - Install FFmpeg (or click Yes when prompted)\n"
                 "  - Verify the Game Directory path is correct\n"
                 "  - Ensure bundled tools are in the script directory")
+
+    def _show_quickstart_if_needed(self):
+        """Display a short beginner hint once (or until disabled in settings)."""
+        if not self._settings.get("show_quickstart_on_launch", True):
+            return
+        if self._settings.get("quickstart_seen", False):
+            return
+
+        messagebox.showinfo(
+            "Quick Start",
+            "Fastest path for first-time users:\n\n"
+            "1) Enter Codename\n"
+            "2) Click Fetch & Install\n"
+            "3) Use Apply & Finish at the end\n\n"
+            "No manual HTML browsing is required for this flow."
+        )
+        self._settings["quickstart_seen"] = True
+        map_installer.save_settings(self._settings)
 
     def _on_clear_cache(self):
         cleared = map_installer.clear_paths_cache()
@@ -750,12 +855,6 @@ class MapInstallerGUI:
         self.readjust_btn.configure(state="normal", text="Re-adjust Offset")
         self.pipeline_state = state
 
-        # Update map name display
-        self.map_name_entry.configure(state="normal")
-        self.map_name_entry.delete(0, tk.END)
-        self.map_name_entry.insert(0, state.map_name)
-        self.map_name_entry.configure(state="readonly")
-
         # Populate sync values
         self.v_override_var.set(
             state.v_override if state.v_override is not None else 0.0)
@@ -789,7 +888,7 @@ class MapInstallerGUI:
 
         dlg = tk.Toplevel(self.root)
         dlg.title("Installer Settings")
-        dlg.geometry("420x280")
+        dlg.geometry("520x360")
         dlg.resizable(False, False)
         dlg.transient(self.root)
         dlg.grab_set()
@@ -820,15 +919,46 @@ class MapInstallerGUI:
                 "Don't show the 'offset refinement is needed' popup\n"
                 "after the installation pipeline completes.")
 
-        # Auto cleanup
-        cleanup_var = tk.BooleanVar(value=settings["auto_cleanup_downloads"])
-        cleanup_cb = ttk.Checkbutton(
-            frame, text="Auto-cleanup downloads after Apply & Finish",
-            variable=cleanup_var)
-        cleanup_cb.pack(anchor="w", pady=2)
-        ToolTip(cleanup_cb,
-                "Automatically delete intermediate download files\n"
-                "after applying sync changes, without prompting.")
+        # Cleanup behavior
+        cleanup_frame = ttk.Frame(frame)
+        cleanup_frame.pack(anchor="w", pady=(4, 2), fill="x")
+        ttk.Label(cleanup_frame, text="After Apply & Finish:").pack(side="left", padx=(0, 8))
+
+        cleanup_mode_var = tk.StringVar(value=settings.get("cleanup_behavior", "ask"))
+        cleanup_mode_combo = ttk.Combobox(
+            cleanup_frame,
+            textvariable=cleanup_mode_var,
+            values=["ask", "delete", "keep"],
+            state="readonly",
+            width=12)
+        cleanup_mode_combo.pack(side="left")
+        ToolTip(
+            cleanup_mode_combo,
+            "ask: show prompt after apply\n"
+            "delete: auto-delete intermediate files immediately\n"
+            "keep: keep files and never show cleanup prompt"
+        )
+
+        # Notification preference: preflight success popup
+        preflight_popup_var = tk.BooleanVar(
+            value=settings.get("show_preflight_success_popup", True))
+        preflight_popup_cb = ttk.Checkbutton(
+            frame, text="Show 'Pre-flight passed' popup",
+            variable=preflight_popup_var)
+        preflight_popup_cb.pack(anchor="w", pady=2)
+        ToolTip(preflight_popup_cb,
+                "If disabled, passing pre-flight will only enable the Install button\n"
+                "without opening a popup.")
+
+        # Notification preference: quick-start hint
+        quickstart_var = tk.BooleanVar(value=settings.get("show_quickstart_on_launch", True))
+        quickstart_cb = ttk.Checkbutton(
+            frame, text="Show quick-start hint on launch",
+            variable=quickstart_var)
+        quickstart_cb.pack(anchor="w", pady=2)
+        ToolTip(quickstart_cb,
+                "Shows a short beginner guide at startup.\n"
+                "Helpful for users who skip documentation.")
 
         # Default quality
         quality_frame = ttk.Frame(frame)
@@ -847,12 +977,22 @@ class MapInstallerGUI:
         btn_frame.pack(side="bottom", pady=(16, 0))
 
         def _save():
+            old_quickstart = settings.get("show_quickstart_on_launch", True)
+            new_quickstart = quickstart_var.get()
             new_settings = {
                 "skip_preflight": skip_pf_var.get(),
                 "suppress_offset_notification": suppress_var.get(),
-                "auto_cleanup_downloads": cleanup_var.get(),
+                "cleanup_behavior": cleanup_mode_var.get(),
                 "default_quality": quality_var.get(),
+                "show_preflight_success_popup": preflight_popup_var.get(),
+                "show_quickstart_on_launch": new_quickstart,
+                "quickstart_seen": settings.get("quickstart_seen", False),
             }
+
+            # If quick-start hints were re-enabled, show them again next launch.
+            if new_quickstart and not old_quickstart:
+                new_settings["quickstart_seen"] = False
+
             map_installer.save_settings(new_settings)
             self._settings = new_settings
             # Apply quality default to current session
@@ -878,6 +1018,8 @@ class MapInstallerGUI:
         if self._pipeline_running:
             return
 
+        self._last_run_from_fetch = True
+
         codename = self.codename_entry.get().strip().strip('"').strip("'")
         if not codename:
             messagebox.showerror(
@@ -899,10 +1041,13 @@ class MapInstallerGUI:
             self.codename_entry.insert(0, codename)
 
         # Disable controls during fetch
+        self._fetch_mode_lock = True
         self._pipeline_running = True
         self.fetch_install_btn.configure(state="disabled")
         self.install_btn.configure(state="disabled")
         self.preflight_btn.configure(state="disabled")
+        self.codename_entry.configure(state="disabled")
+        self._set_html_inputs_state(False)
 
         # Reset progress
         for i in range(len(self.STEP_NAMES)):
@@ -922,6 +1067,10 @@ class MapInstallerGUI:
                 def _proceed():
                     self._pipeline_running = False
 
+                    # Entries may still be disabled from fetch-mode lock.
+                    # Temporarily enable so fetched paths can be injected.
+                    self._set_html_inputs_state(True)
+
                     # Fill Asset HTML
                     self.asset_html_entry.delete(0, tk.END)
                     self.asset_html_entry.insert(0, asset_html)
@@ -930,17 +1079,11 @@ class MapInstallerGUI:
                     self.nohud_html_entry.delete(0, tk.END)
                     self.nohud_html_entry.insert(0, nohud_html)
 
-                    # Fill Map Name
-                    self.map_name_entry.configure(state="normal")
-                    self.map_name_entry.delete(0, tk.END)
-                    self.map_name_entry.insert(0, codename)
-                    self.map_name_entry.configure(state="readonly")
-
                     # Re-enable and trigger install
                     self.fetch_install_btn.configure(state="normal")
                     self.install_btn.configure(state="normal")
                     self.preflight_btn.configure(state="normal")
-                    self._on_install()
+                    self._on_install(started_from_fetch=True)
 
                 self.root.after(0, _proceed)
 
@@ -953,6 +1096,10 @@ class MapInstallerGUI:
                     self.install_btn.configure(
                         state="normal" if self._preflight_passed else "disabled")
                     self.preflight_btn.configure(state="normal")
+                    self.codename_entry.configure(state="normal")
+                    self._set_html_inputs_state(True)
+                    self._fetch_mode_lock = False
+                    self._on_html_inputs_changed()
                     messagebox.showerror(
                         "Fetch Failed",
                         f"JDH_Downloader failed for '{codename}':\n\n{err_msg}")
@@ -960,10 +1107,12 @@ class MapInstallerGUI:
 
         threading.Thread(target=_fetch, daemon=True).start()
 
-    def _on_install(self):
+    def _on_install(self, started_from_fetch=False):
         if self._pipeline_running:
             return
-        map_name = self.map_name_entry.get().strip()
+
+        self._last_run_from_fetch = bool(started_from_fetch)
+
         asset_html = self.asset_html_entry.get().strip()
         nohud_html = self.nohud_html_entry.get().strip()
         jd_dir = self.jd_dir_entry.get().strip()
@@ -1018,6 +1167,9 @@ class MapInstallerGUI:
                     if not passed:
                         self._preflight_passed = False
                         self.install_btn.configure(state="disabled")
+                        self._set_html_inputs_state(True)
+                        self._fetch_mode_lock = False
+                        self._on_html_inputs_changed()
                         messagebox.showwarning(
                             "Pre-flight Failed",
                             "Automatic pre-flight failed.\n\n"
@@ -1026,33 +1178,20 @@ class MapInstallerGUI:
 
                     self._preflight_passed = True
                     self.install_btn.configure(state="normal")
-                    self._on_install()
+                    self._on_install(started_from_fetch=started_from_fetch)
 
                 self.root.after(0, _after)
 
             threading.Thread(target=_auto_preflight_then_install, daemon=True).start()
             return
 
+        map_name = self._derive_codename(asset_html, nohud_html, fallback=None)
         if not map_name:
-            if os.path.exists(asset_html):
-                try:
-                    urls = map_downloader.extract_urls(asset_html)
-                    map_name = map_downloader.extract_codename_from_urls(urls)
-                except Exception as e:
-                    print(f"    WARNING: Could not parse Asset HTML for codename: {e}")
-            if not map_name:
-                map_name = os.path.basename(os.path.dirname(os.path.abspath(asset_html)))
-            self.map_name_entry.configure(state="normal")
-            self.map_name_entry.delete(0, tk.END)
-            if map_name:
-                self.map_name_entry.insert(0, map_name)
-                self.map_name_entry.configure(state="readonly")
-            else:
-                messagebox.showerror(
-                    "Missing Input",
-                    "Could not detect map name. Please enter it manually.")
-                return
-
+            messagebox.showerror(
+                "Missing Input",
+                "Could not detect map codename from the selected files.\n"
+                "Try selecting valid HTML files from a map folder.")
+            return
         # Check for non-ASCII characters and prompt for replacement
         original_map_name = map_name
         if any(ord(c) > 127 for c in map_name):
@@ -1067,16 +1206,13 @@ class MapInstallerGUI:
             )
             if replacement and replacement.strip():
                 map_name = replacement.strip()
-                self.map_name_entry.configure(state="normal")
-                self.map_name_entry.delete(0, tk.END)
-                self.map_name_entry.insert(0, map_name)
-                self.map_name_entry.configure(state="readonly")
 
         # Disable controls during pipeline
         self._pipeline_running = True
         self.install_btn.configure(state="disabled")
         self.preflight_btn.configure(state="disabled")
         self.fetch_install_btn.configure(state="disabled")
+        self._set_html_inputs_state(False)
 
         # Reset progress
         for i in range(len(self.STEP_NAMES)):
@@ -1253,7 +1389,20 @@ class MapInstallerGUI:
         self._pipeline_running = False
         self.install_btn.configure(state="normal")
         self.preflight_btn.configure(state="normal")
+        self._fetch_mode_lock = False
+        self._set_html_inputs_state(True)
         self.fetch_install_btn.configure(state="normal")
+        self.codename_entry.configure(state="normal")
+
+        # If this run came from Fetch mode, clear stale HTML inputs so
+        # the user can immediately retry Fetch & Install.
+        if self._last_run_from_fetch:
+            self.asset_html_entry.delete(0, tk.END)
+            self.nohud_html_entry.delete(0, tk.END)
+            print("    Cleared stale HTML inputs after fetch-based failure. Retry Fetch & Install.")
+
+        self._last_run_from_fetch = False
+        self._on_html_inputs_changed()
 
     def _on_pipeline_complete(self):
         self._pipeline_running = False
@@ -1270,7 +1419,14 @@ class MapInstallerGUI:
         self._set_preview_state("normal")
         # Keep install disabled until user finishes sync refinement via Apply
         self.preflight_btn.configure(state="normal")
+        self._fetch_mode_lock = False
+        self._set_html_inputs_state(True)
         self.fetch_install_btn.configure(state="normal")
+        self.codename_entry.configure(state="normal")
+        self._on_html_inputs_changed()
+
+        # Auto-start preview so users can validate sync immediately.
+        self._launch_preview()
 
         if not self._settings.get("suppress_offset_notification", False):
             messagebox.showinfo(
@@ -1710,8 +1866,12 @@ class MapInstallerGUI:
         if not dl_dir or not os.path.isdir(dl_dir):
             return
 
-        if self._settings.get("auto_cleanup_downloads", False):
+        cleanup_behavior = self._settings.get("cleanup_behavior", "ask")
+
+        if cleanup_behavior == "delete":
             answer = True
+        elif cleanup_behavior == "keep":
+            return
         else:
             answer = messagebox.askyesno(
                 "Clean Up Downloads",
