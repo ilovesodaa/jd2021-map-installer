@@ -65,7 +65,10 @@ Options 1 through 3 call `reprocess_audio()` and then launch the preview.
 | `--quality` | No | `ultra_hd` | Video quality for all maps (same choices as single CLI) |
 | `--skip-existing` | No | Off | Skip maps that already have an installed folder in `MAPS/` |
 | `--only MAP [MAP ...]` | No | None | Only install these specific map names |
-| `--exclude MAP [MAP ...]` | No | None | Skip these specific map names |
+| `--exclude`, `--ignore MAP [MAP ...]` | No | None | Skip these specific map names |
+| `--ignore-non-ascii` | No | Off | Skip maps that contain non-ASCII characters in their name |
+| `--interactive` | No | On | Prompt for string replacement when non-ASCII metadata is found |
+| `--auto-strip` | No | Off | Silently auto-strip non-ASCII metadata instead of prompting |
 
 ### Folder Structure Expected
 

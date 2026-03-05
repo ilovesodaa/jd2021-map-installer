@@ -29,7 +29,7 @@ An automated pipeline for extracting, building, and installing JDU (Just Dance U
 - `ubiart_lua.py`: UbiArt-aware Lua converter for tapes and game data. Handles MotionClip color encoding, MotionPlatformSpecifics KEY/VAL conversion, cinematic curve processing with `vector2dNew()`, ActorIndices-to-ActorPaths resolution, `Tracks` array generation, and ambient sound template processing.
 - `json_to_lua.py`: Generic JSON-to-Lua converter used for non-tape files (autodance templates, stape data). For tape conversion, see `ubiart_lua.py`.
 - `ckd_decode.py`: Decodes compressed CKD textures (strips 44-byte UbiArt header, handles DDS and XTX/Nintendo Switch formats).
-- `batch_install_maps.py`: Two-phase batch installer. Downloads all maps first (while CDN links are fresh), then processes them locally. Supports `--skip-existing`, `--only`, and `--exclude` filters.
+- `batch_install_maps.py`: Two-phase batch installer. Downloads all maps first (while CDN links are fresh), then processes them locally. Supports `--skip-existing`, `--only`, `--exclude`/`--ignore`, `--ignore-non-ascii`, and `--auto-strip` filters.
 
 ## Documentation
 
