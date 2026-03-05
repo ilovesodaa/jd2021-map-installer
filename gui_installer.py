@@ -878,12 +878,25 @@ class MapInstallerGUI:
         if self._pipeline_running:
             return
 
-        codename = self.codename_entry.get().strip()
+        codename = self.codename_entry.get().strip().strip('"').strip("'")
         if not codename:
             messagebox.showerror(
                 "Missing Input",
                 "Enter a map codename (e.g. TemperatureALT) in the Codename field.")
             return
+
+        if any(ch.isspace() for ch in codename):
+            compact = "".join(c for c in codename if not c.isspace())
+            use_compact = messagebox.askyesno(
+                "Codename Contains Spaces",
+                "The codename contains spaces, which usually means it was pasted with extra characters.\n\n"
+                f"Use '{compact}' instead?"
+            )
+            if not use_compact:
+                return
+            codename = compact
+            self.codename_entry.delete(0, tk.END)
+            self.codename_entry.insert(0, codename)
 
         # Disable controls during fetch
         self._pipeline_running = True
@@ -955,6 +968,13 @@ class MapInstallerGUI:
         nohud_html = self.nohud_html_entry.get().strip()
         jd_dir = self.jd_dir_entry.get().strip()
 
+        if not jd_dir:
+            messagebox.showerror(
+                "Missing Input",
+                "Game Directory is required.\n\n"
+                "Set it in the Configuration section, then retry.")
+            return
+
         if not asset_html or not nohud_html:
             messagebox.showerror(
                 "Missing Input",
@@ -963,10 +983,63 @@ class MapInstallerGUI:
                 "or enter a codename and click 'Fetch & Install' to automate it.")
             return
 
+        if not os.path.isfile(asset_html):
+            messagebox.showerror(
+                "Missing File",
+                f"Asset HTML file was not found:\n{asset_html}\n\n"
+                "Select a valid file and retry.")
+            return
+
+        if not os.path.isfile(nohud_html):
+            messagebox.showerror(
+                "Missing File",
+                f"NOHUD HTML file was not found:\n{nohud_html}\n\n"
+                "Select a valid file and retry.")
+            return
+
+        # Make Install resilient even if the user skips the explicit preflight button.
+        if not self._settings.get("skip_preflight", False) and not self._preflight_passed:
+            self._pipeline_running = True
+            self.install_btn.configure(state="disabled")
+            self.fetch_install_btn.configure(state="disabled")
+            self.preflight_btn.configure(state="disabled", text="Auto-checking...")
+            print("    Pre-flight was not run manually. Running automatic pre-flight now...")
+
+            def _auto_preflight_then_install():
+                result = map_installer.preflight_check(
+                    jd_dir, asset_html, nohud_html,
+                    auto_install=True, interactive=False)
+                passed = result if not isinstance(result, tuple) else result[0]
+
+                def _after():
+                    self._pipeline_running = False
+                    self.preflight_btn.configure(state="normal", text="Pre-flight Check")
+                    self.fetch_install_btn.configure(state="normal")
+                    if not passed:
+                        self._preflight_passed = False
+                        self.install_btn.configure(state="disabled")
+                        messagebox.showwarning(
+                            "Pre-flight Failed",
+                            "Automatic pre-flight failed.\n\n"
+                            "Review Log Output for details, then fix the issue and retry.")
+                        return
+
+                    self._preflight_passed = True
+                    self.install_btn.configure(state="normal")
+                    self._on_install()
+
+                self.root.after(0, _after)
+
+            threading.Thread(target=_auto_preflight_then_install, daemon=True).start()
+            return
+
         if not map_name:
             if os.path.exists(asset_html):
-                urls = map_downloader.extract_urls(asset_html)
-                map_name = map_downloader.extract_codename_from_urls(urls)
+                try:
+                    urls = map_downloader.extract_urls(asset_html)
+                    map_name = map_downloader.extract_codename_from_urls(urls)
+                except Exception as e:
+                    print(f"    WARNING: Could not parse Asset HTML for codename: {e}")
             if not map_name:
                 map_name = os.path.basename(os.path.dirname(os.path.abspath(asset_html)))
             self.map_name_entry.configure(state="normal")

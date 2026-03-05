@@ -12,6 +12,7 @@ import datetime
 import time
 import json
 import platform
+from pathlib import Path
 from log_config import get_logger, setup_cli_logging
 from helpers import DISK_SPACE_MIN_MB
 
@@ -362,20 +363,104 @@ DEFAULT_SETTINGS = {
     "default_quality": "ultra_hd",
 }
 
+_VALID_QUALITYS = {
+    "ultra_hd", "ultra", "high_hd", "high", "mid_hd", "mid", "low_hd", "low"
+}
+
+
+def _coerce_bool(value, default=False):
+    """Best-effort bool coercion for settings loaded from JSON.
+
+    Accepts native bools, common int/string values, and falls back to default.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off"}:
+            return False
+    return default
+
+
+def _normalize_settings(saved):
+    """Return a sanitized settings dict plus whether any value changed."""
+    normalized = dict(DEFAULT_SETTINGS)
+    changed = False
+
+    if not isinstance(saved, dict):
+        return normalized, True
+
+    normalized["skip_preflight"] = _coerce_bool(
+        saved.get("skip_preflight"), DEFAULT_SETTINGS["skip_preflight"])
+    normalized["suppress_offset_notification"] = _coerce_bool(
+        saved.get("suppress_offset_notification"),
+        DEFAULT_SETTINGS["suppress_offset_notification"])
+    normalized["auto_cleanup_downloads"] = _coerce_bool(
+        saved.get("auto_cleanup_downloads"), DEFAULT_SETTINGS["auto_cleanup_downloads"])
+
+    quality = saved.get("default_quality", DEFAULT_SETTINGS["default_quality"])
+    if isinstance(quality, str):
+        quality = quality.strip().lower()
+    else:
+        quality = DEFAULT_SETTINGS["default_quality"]
+
+    if quality not in _VALID_QUALITYS:
+        quality = DEFAULT_SETTINGS["default_quality"]
+    normalized["default_quality"] = quality
+
+    for key, default_value in DEFAULT_SETTINGS.items():
+        if normalized.get(key) != default_value and key not in saved:
+            changed = True
+
+    # Any mismatch between saved and normalized means the file should be healed.
+    for key in DEFAULT_SETTINGS:
+        if saved.get(key) != normalized.get(key):
+            changed = True
+            break
+
+    return normalized, changed
+
+
+def _backup_corrupt_settings(raw_text):
+    """Keep a timestamped backup of unreadable settings for debugging."""
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = f"{SETTINGS_FILE}.broken_{timestamp}"
+    try:
+        with open(backup_path, 'w', encoding='utf-8') as f:
+            f.write(raw_text)
+        logger.warning("Corrupt settings were backed up to %s", backup_path)
+    except OSError:
+        logger.warning("Could not back up corrupt settings file")
+
 
 def load_settings():
     """Load user settings, returning defaults merged with saved values."""
     settings = dict(DEFAULT_SETTINGS)
-    if os.path.isfile(SETTINGS_FILE):
-        try:
-            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                saved = json.load(f)
-            # Only merge known keys to avoid stale/invalid entries
-            for key in DEFAULT_SETTINGS:
-                if key in saved:
-                    settings[key] = saved[key]
-        except (json.JSONDecodeError, OSError):
-            pass
+    if not os.path.isfile(SETTINGS_FILE):
+        return settings
+
+    try:
+        with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+            raw_text = f.read()
+    except OSError:
+        return settings
+
+    try:
+        saved = json.loads(raw_text)
+    except json.JSONDecodeError:
+        logger.warning("Settings file is invalid JSON, resetting to defaults: %s", SETTINGS_FILE)
+        _backup_corrupt_settings(raw_text)
+        save_settings(settings)
+        return settings
+
+    settings, changed = _normalize_settings(saved)
+    if changed:
+        logger.info("Normalized installer settings values in %s", SETTINGS_FILE)
+        save_settings(settings)
     return settings
 
 
@@ -531,24 +616,147 @@ def _check_downloader_setup():
                        f"  Copy {example} to {config_path} and fill in your "
                        "Discord channel URL.")
 
+    # Validate config shape early to fail with a clear message.
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            cfg = json.load(f)
+        if not isinstance(cfg, dict):
+            return False, "config.json is invalid (expected a JSON object)"
+        if not cfg.get("channelUrl"):
+            return False, "config.json is missing 'channelUrl'"
+        if not cfg.get("profileDir"):
+            return False, "config.json is missing 'profileDir'"
+    except (json.JSONDecodeError, OSError) as e:
+        return False, f"Could not read config.json: {e}"
+
+    def _resolve_npm_install_cmd():
+        """Return a command list for `npm install`, even when npm.cmd is missing on PATH."""
+        npm_cmd = shutil.which("npm") or shutil.which("npm.cmd")
+        if npm_cmd:
+            return [npm_cmd, "install"]
+
+        # Fallback: invoke npm-cli.js directly through the discovered node executable.
+        node_cmd = shutil.which("node")
+        if not node_cmd:
+            return None
+
+        node_dir = os.path.dirname(node_cmd)
+        candidates = [
+            os.path.join(node_dir, "node_modules", "npm", "bin", "npm-cli.js"),
+            os.path.join(node_dir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+        ]
+        for candidate in candidates:
+            candidate = os.path.abspath(candidate)
+            if os.path.isfile(candidate):
+                return [node_cmd, candidate, "install"]
+        return None
+
+    def _resolve_playwright_install_cmd():
+        """Return a command list to install Playwright Chromium browser binaries."""
+        npx_cmd = shutil.which("npx") or shutil.which("npx.cmd")
+        if npx_cmd:
+            return [npx_cmd, "playwright", "install", "chromium"]
+
+        npm_cmd = shutil.which("npm") or shutil.which("npm.cmd")
+        if npm_cmd:
+            return [npm_cmd, "exec", "playwright", "install", "chromium"]
+
+        # Fallback through npm-cli.js when npx/npm shims are missing from PATH.
+        node_cmd = shutil.which("node")
+        if not node_cmd:
+            return None
+        node_dir = os.path.dirname(node_cmd)
+        candidates = [
+            os.path.join(node_dir, "node_modules", "npm", "bin", "npm-cli.js"),
+            os.path.join(node_dir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+        ]
+        for candidate in candidates:
+            candidate = os.path.abspath(candidate)
+            if os.path.isfile(candidate):
+                return [node_cmd, candidate, "exec", "playwright", "install", "chromium"]
+        return None
+
+    def _is_playwright_chromium_ready():
+        """Return True only if Playwright is importable and Chromium binary exists."""
+        check_script = (
+            "const fs=require('fs');"
+            "let pw;"
+            "try{pw=require('playwright');}catch(e){process.exit(2);}"
+            "const p=pw.chromium.executablePath();"
+            "if(!p||!fs.existsSync(p)){process.exit(3);}"
+            "process.exit(0);"
+        )
+        try:
+            result = subprocess.run(
+                ["node", "-e", check_script],
+                cwd=JDH_DOWNLOADER_DIR,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            return result.returncode == 0
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return False
+
     # Check if node_modules exists; if not, run npm install
     node_modules = os.path.join(JDH_DOWNLOADER_DIR, "node_modules")
     if not os.path.isdir(node_modules):
         print("  JDH_Downloader dependencies not installed. Running npm install...")
+        install_cmd = _resolve_npm_install_cmd()
+        if not install_cmd:
+            return False, (
+                "npm not found on PATH and npm-cli.js fallback was not found.\n"
+                "  Node.js seems installed, but npm is missing from this environment.\n"
+                "  Reinstall Node.js LTS from https://nodejs.org/ and ensure npm is included."
+            )
         try:
             result = subprocess.run(
-                ["npm", "install"],
+                install_cmd,
                 cwd=JDH_DOWNLOADER_DIR,
                 timeout=120
             )
             if result.returncode != 0:
-                return False, "npm install failed (see output above)"
+                return False, f"npm install failed (exit code {result.returncode}; see output above)"
             print("  npm install complete.")
         except FileNotFoundError:
-            return False, ("npm not found on PATH. Install Node.js from "
-                           "https://nodejs.org/")
+            return False, ("npm invocation failed unexpectedly.\n"
+                           "  Reinstall Node.js LTS from https://nodejs.org/")
         except subprocess.TimeoutExpired:
             return False, "npm install timed out"
+
+    # Ensure Playwright Chromium browser binary is available even if node_modules
+    # already existed (common after partial copies or cache cleanup).
+    if not _is_playwright_chromium_ready():
+        print("  Playwright Chromium is missing or incomplete. Installing browser binaries...")
+        playwright_cmd = _resolve_playwright_install_cmd()
+        if not playwright_cmd:
+            return False, (
+                "Could not find a command to run Playwright install.\n"
+                "  Ensure Node.js/npm is installed correctly, then run:\n"
+                "  npx playwright install chromium"
+            )
+        try:
+            result = subprocess.run(
+                playwright_cmd,
+                cwd=JDH_DOWNLOADER_DIR,
+                timeout=300,
+            )
+            if result.returncode != 0:
+                return False, (
+                    "Playwright Chromium install failed "
+                    f"(exit code {result.returncode}; see output above)"
+                )
+        except FileNotFoundError:
+            return False, "Failed to launch Playwright install command"
+        except subprocess.TimeoutExpired:
+            return False, "Playwright Chromium install timed out"
+
+        if not _is_playwright_chromium_ready():
+            return False, (
+                "Playwright install completed but Chromium is still unavailable.\n"
+                "  Try running manually in tools/JDH_Downloader:\n"
+                "  npx playwright install chromium"
+            )
 
     return True, "JDH_Downloader ready"
 
@@ -579,8 +787,13 @@ def fetch_html_via_downloader(codename, output_dir):
         raise RuntimeError(f"JDH_Downloader setup failed: {msg}")
     print(f"  [OK] {msg}")
 
+    codename = codename.strip().strip('"').strip("'")
+    if not codename:
+        raise RuntimeError("Codename is empty after trimming quotes/whitespace")
+
     fetch_script = os.path.join(JDH_DOWNLOADER_DIR, "fetch.mjs")
     abs_output_dir = os.path.abspath(output_dir)
+    os.makedirs(abs_output_dir, exist_ok=True)
 
     print(f"  Fetching HTML for '{codename}' via JDH_Downloader...")
     print(f"  Output directory: {abs_output_dir}")
@@ -608,24 +821,88 @@ def fetch_html_via_downloader(codename, output_dir):
             "  - Invalid codename"
         )
 
-    # Verify output files exist
-    codename_dir = os.path.join(abs_output_dir, codename)
-    asset_html = os.path.join(codename_dir, "assets.html")
-    nohud_html = os.path.join(codename_dir, "nohud.html")
+    # Verify output files exist. Some environments may place output in a
+    # nearby folder (different cwd/base), so discover the freshest valid pair.
+    expected_dir = os.path.join(abs_output_dir, codename)
+    expected_asset = os.path.join(expected_dir, "assets.html")
+    expected_nohud = os.path.join(expected_dir, "nohud.html")
+    if os.path.isfile(expected_asset) and os.path.isfile(expected_nohud):
+        print(f"  Fetch complete: {expected_dir}")
+        return expected_asset, expected_nohud
 
-    if not os.path.isfile(asset_html):
-        raise RuntimeError(
-            f"Expected assets.html not found at {asset_html}\n"
-            "  JDH_Downloader reported success but output is missing."
-        )
-    if not os.path.isfile(nohud_html):
-        raise RuntimeError(
-            f"Expected nohud.html not found at {nohud_html}\n"
-            "  JDH_Downloader reported success but output is missing."
-        )
+    candidates = []
+    seen_dirs = set()
 
-    print(f"  Fetch complete: {codename_dir}")
-    return asset_html, nohud_html
+    search_roots = [
+        abs_output_dir,
+        os.path.dirname(abs_output_dir),
+        JDH_DOWNLOADER_DIR,
+        SCRIPT_DIR,
+    ]
+
+    def _consider_pair(folder):
+        folder_norm = os.path.normcase(os.path.normpath(folder))
+        if folder_norm in seen_dirs:
+            return
+        seen_dirs.add(folder_norm)
+        asset = os.path.join(folder, "assets.html")
+        nohud = os.path.join(folder, "nohud.html")
+        if os.path.isfile(asset) and os.path.isfile(nohud):
+            try:
+                score = max(os.path.getmtime(asset), os.path.getmtime(nohud))
+            except OSError:
+                score = 0
+            name_match = (os.path.basename(folder).strip().lower() == codename.lower())
+            candidates.append((1 if name_match else 0, score, asset, nohud))
+
+    for root in search_roots:
+        if not root or not os.path.isdir(root):
+            continue
+
+        # Direct codename folder checks (exact and case-insensitive)
+        exact = os.path.join(root, codename)
+        _consider_pair(exact)
+        try:
+            for child in os.listdir(root):
+                child_path = os.path.join(root, child)
+                if os.path.isdir(child_path) and child.strip().lower() == codename.lower():
+                    _consider_pair(child_path)
+        except OSError:
+            pass
+
+        # Shallow recursive scan for fallback pair discovery
+        try:
+            root_path = Path(root)
+            for asset in root_path.rglob("assets.html"):
+                rel_depth = len(asset.relative_to(root_path).parts)
+                if rel_depth > 4:
+                    continue
+                folder = str(asset.parent)
+                _consider_pair(folder)
+        except OSError:
+            pass
+
+    if candidates:
+        # Prefer folder name match, then latest modification time.
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        _, _, asset_html, nohud_html = candidates[0]
+        actual_dir = os.path.dirname(asset_html)
+        if os.path.normcase(os.path.normpath(actual_dir)) != os.path.normcase(os.path.normpath(expected_dir)):
+            print("  [WARN] Downloader output directory differed from expected path.")
+            print(f"         Expected: {expected_dir}")
+            print(f"         Found:    {actual_dir}")
+        print(f"  Fetch complete: {actual_dir}")
+        return asset_html, nohud_html
+
+    raise RuntimeError(
+        "JDH_Downloader reported success but no assets.html/nohud.html pair was found.\n"
+        f"  Expected: {expected_dir}\n"
+        "  Checked fallback roots:\n"
+        f"    - {abs_output_dir}\n"
+        f"    - {os.path.dirname(abs_output_dir)}\n"
+        f"    - {JDH_DOWNLOADER_DIR}\n"
+        f"    - {SCRIPT_DIR}"
+    )
 
 
 def _prompt_install(tool_name):
