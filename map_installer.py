@@ -12,6 +12,7 @@ import datetime
 import time
 import json
 import platform
+import struct
 from pathlib import Path
 from log_config import get_logger, setup_cli_logging
 from helpers import DISK_SPACE_MIN_MB
@@ -359,13 +360,18 @@ SETTINGS_FILE = os.path.join(SCRIPT_DIR, "installer_settings.json")
 DEFAULT_SETTINGS = {
     "skip_preflight": False,
     "suppress_offset_notification": False,
-    "auto_cleanup_downloads": False,
+    "cleanup_behavior": "ask",  # ask | delete | keep
     "default_quality": "ultra_hd",
+    "show_preflight_success_popup": True,
+    "show_quickstart_on_launch": True,
+    "quickstart_seen": False,
 }
 
 _VALID_QUALITYS = {
     "ultra_hd", "ultra", "high_hd", "high", "mid_hd", "mid", "low_hd", "low"
 }
+
+_VALID_CLEANUP_BEHAVIORS = {"ask", "delete", "keep"}
 
 
 def _coerce_bool(value, default=False):
@@ -399,8 +405,15 @@ def _normalize_settings(saved):
     normalized["suppress_offset_notification"] = _coerce_bool(
         saved.get("suppress_offset_notification"),
         DEFAULT_SETTINGS["suppress_offset_notification"])
-    normalized["auto_cleanup_downloads"] = _coerce_bool(
-        saved.get("auto_cleanup_downloads"), DEFAULT_SETTINGS["auto_cleanup_downloads"])
+
+    # Migrate legacy boolean auto_cleanup_downloads -> cleanup_behavior.
+    cleanup_behavior = saved.get("cleanup_behavior")
+    if isinstance(cleanup_behavior, str):
+        cleanup_behavior = cleanup_behavior.strip().lower()
+    if cleanup_behavior not in _VALID_CLEANUP_BEHAVIORS:
+        legacy_auto_cleanup = _coerce_bool(saved.get("auto_cleanup_downloads"), False)
+        cleanup_behavior = "delete" if legacy_auto_cleanup else DEFAULT_SETTINGS["cleanup_behavior"]
+    normalized["cleanup_behavior"] = cleanup_behavior
 
     quality = saved.get("default_quality", DEFAULT_SETTINGS["default_quality"])
     if isinstance(quality, str):
@@ -411,6 +424,15 @@ def _normalize_settings(saved):
     if quality not in _VALID_QUALITYS:
         quality = DEFAULT_SETTINGS["default_quality"]
     normalized["default_quality"] = quality
+
+    normalized["show_preflight_success_popup"] = _coerce_bool(
+        saved.get("show_preflight_success_popup"),
+        DEFAULT_SETTINGS["show_preflight_success_popup"])
+    normalized["show_quickstart_on_launch"] = _coerce_bool(
+        saved.get("show_quickstart_on_launch"),
+        DEFAULT_SETTINGS["show_quickstart_on_launch"])
+    normalized["quickstart_seen"] = _coerce_bool(
+        saved.get("quickstart_seen"), DEFAULT_SETTINGS["quickstart_seen"])
 
     for key, default_value in DEFAULT_SETTINGS.items():
         if normalized.get(key) != default_value and key not in saved:
@@ -2317,6 +2339,186 @@ def main():
                              "Requires Node.js 18+ and tools/JDH_Downloader/config.json.")
     args = parser.parse_args()
 
+    def _expand_and_clean_path(raw):
+        if not raw:
+            return None
+        cleaned = clean_path(raw)
+        return os.path.abspath(cleaned) if cleaned else None
+
+    def _find_html_pair_in_dir(folder):
+        """Return (asset_html, nohud_html) from a folder, or (None, None)."""
+        if not folder or not os.path.isdir(folder):
+            return None, None
+        asset = None
+        nohud = None
+        try:
+            for name in os.listdir(folder):
+                lower = name.lower()
+                full = os.path.join(folder, name)
+                if not os.path.isfile(full) or not lower.endswith('.html'):
+                    continue
+                if "nohud" in lower and not nohud:
+                    nohud = full
+                elif "asset" in lower and not asset:
+                    asset = full
+        except OSError:
+            return None, None
+
+        # Fallback when names are unusual: pick two html files, prefer non-nohud as asset.
+        if not (asset and nohud):
+            htmls = []
+            try:
+                htmls = [os.path.join(folder, n) for n in os.listdir(folder)
+                         if os.path.isfile(os.path.join(folder, n)) and n.lower().endswith('.html')]
+            except OSError:
+                pass
+            if len(htmls) >= 2 and not nohud:
+                for h in htmls:
+                    if "nohud" in os.path.basename(h).lower():
+                        nohud = h
+                        break
+            if len(htmls) >= 2 and not asset:
+                for h in htmls:
+                    if h != nohud:
+                        asset = h
+                        break
+        return asset, nohud
+
+    def _infer_missing_html_pair(asset_html, nohud_html):
+        """Fill missing/supplied-as-directory HTML values with best-effort inference."""
+        asset_html = _expand_and_clean_path(asset_html)
+        nohud_html = _expand_and_clean_path(nohud_html)
+
+        # If user passed a folder to either arg, use it as a map folder hint.
+        for maybe_dir in (asset_html, nohud_html):
+            if maybe_dir and os.path.isdir(maybe_dir):
+                a2, n2 = _find_html_pair_in_dir(maybe_dir)
+                if a2 and not asset_html:
+                    asset_html = a2
+                if n2 and not nohud_html:
+                    nohud_html = n2
+                if a2 and n2:
+                    return a2, n2
+
+        # If one file is provided, try to locate sibling counterpart.
+        known = asset_html or nohud_html
+        if known and os.path.isfile(known):
+            sibling_dir = os.path.dirname(known)
+            a2, n2 = _find_html_pair_in_dir(sibling_dir)
+            if not asset_html:
+                asset_html = a2
+            if not nohud_html:
+                nohud_html = n2
+
+        return asset_html, nohud_html
+
+    def _prompt_nonempty(prompt_text, default=None):
+        while True:
+            suffix = f" [{default}]" if default else ""
+            raw = input(f"{prompt_text}{suffix}: ").strip()
+            if not raw and default is not None:
+                return default
+            if raw:
+                return raw
+            print("    Please enter a value.")
+
+    def _interactive_cli_wizard():
+        """Guided mode for first-time CLI users who run without arguments."""
+        print("\nNo arguments provided. Starting guided setup mode.")
+        print("Choose an action:")
+        print("  1) Fetch from Discord codename and install")
+        print("  2) Install from existing assets.html + nohud.html")
+        print("  3) Re-adjust offset for an already-installed map")
+        print("  4) Exit")
+
+        while True:
+            choice = input("Choice [1-4]: ").strip()
+            if choice in {"1", "2", "3", "4"}:
+                break
+            print("    Invalid choice. Enter 1, 2, 3, or 4.")
+
+        if choice == "4":
+            print("Exiting.")
+            sys.exit(0)
+
+        if choice == "1":
+            args.codename = _prompt_nonempty("Enter codename (example: TemperatureALT)")
+            default_jd = detect_jd_dir()
+            jd_input = input(f"Game directory/search root [{default_jd}]: ").strip()
+            args.jd_dir = _expand_and_clean_path(jd_input) if jd_input else default_jd
+            q_default = settings.get("default_quality", "ultra_hd")
+            q_input = input(f"Video quality [{q_default}] (ultra_hd/ultra/high_hd/high/mid_hd/mid/low_hd/low): ").strip().lower()
+            if q_input in {"ultra_hd", "ultra", "high_hd", "high", "mid_hd", "mid", "low_hd", "low"}:
+                args.quality = q_input
+            return
+
+        if choice == "2":
+            map_folder = input("Map folder containing assets/nohud HTML (press Enter to provide files manually): ").strip()
+            if map_folder:
+                map_folder = _expand_and_clean_path(map_folder)
+                a2, n2 = _find_html_pair_in_dir(map_folder)
+                if a2 and n2:
+                    args.asset_html, args.nohud_html = a2, n2
+                    print(f"    Auto-detected HTML files in {map_folder}")
+                else:
+                    print("    Could not find both HTML files in that folder. Switching to manual file entry.")
+
+            if not args.asset_html:
+                args.asset_html = _expand_and_clean_path(_prompt_nonempty("Path to Asset HTML"))
+            if not args.nohud_html:
+                args.nohud_html = _expand_and_clean_path(_prompt_nonempty("Path to NOHUD HTML"))
+
+            default_jd = detect_jd_dir()
+            jd_input = input(f"Game directory/search root [{default_jd}]: ").strip()
+            args.jd_dir = _expand_and_clean_path(jd_input) if jd_input else default_jd
+
+            q_default = settings.get("default_quality", "ultra_hd")
+            q_input = input(f"Video quality [{q_default}] (ultra_hd/ultra/high_hd/high/mid_hd/mid/low_hd/low): ").strip().lower()
+            if q_input in {"ultra_hd", "ultra", "high_hd", "high", "mid_hd", "mid", "low_hd", "low"}:
+                args.quality = q_input
+            return
+
+        # choice == "3"
+        args.readjust = _expand_and_clean_path(
+            _prompt_nonempty("Download folder containing .ogg and .webm"))
+        default_jd = detect_jd_dir()
+        jd_input = input(f"Game directory/search root [{default_jd}]: ").strip()
+        args.jd_dir = _expand_and_clean_path(jd_input) if jd_input else default_jd
+
+    def _prompt_install_inputs_only():
+        """Prompt only for install-mode inputs (asset/nohud html + jd path)."""
+        map_folder = input("Map folder containing assets/nohud HTML (press Enter to provide files manually): ").strip()
+        if map_folder:
+            map_folder = _expand_and_clean_path(map_folder)
+            a2, n2 = _find_html_pair_in_dir(map_folder)
+            if a2 and n2:
+                args.asset_html, args.nohud_html = a2, n2
+                print(f"    Auto-detected HTML files in {map_folder}")
+            else:
+                print("    Could not find both HTML files in that folder.")
+
+        if not args.asset_html:
+            args.asset_html = _expand_and_clean_path(_prompt_nonempty("Path to Asset HTML"))
+        if not args.nohud_html:
+            args.nohud_html = _expand_and_clean_path(_prompt_nonempty("Path to NOHUD HTML"))
+
+        if not args.jd_dir:
+            default_jd = detect_jd_dir()
+            jd_input = input(f"Game directory/search root [{default_jd}]: ").strip()
+            args.jd_dir = _expand_and_clean_path(jd_input) if jd_input else default_jd
+
+    # Enter guided mode when run with no actionable args.
+    has_action_args = any([
+        args.codename, args.readjust, args.asset_html, args.nohud_html,
+        args.map_name, args.sync_config, args.video_override is not None,
+        args.audio_offset is not None,
+    ])
+    if not has_action_args and sys.stdin.isatty():
+        _interactive_cli_wizard()
+
+    # Infer missing HTMLs from sibling files/folders where possible.
+    args.asset_html, args.nohud_html = _infer_missing_html_pair(args.asset_html, args.nohud_html)
+
     # --- FETCH-AND-INSTALL MODE (--codename) ---
     if args.codename:
         if args.asset_html or args.nohud_html:
@@ -2363,9 +2565,29 @@ def main():
     else:
         # --- NORMAL INSTALL MODE ---
         if not args.asset_html or not args.nohud_html:
-            parser.error("--asset-html and --nohud-html are required for installation "
-                         "(or use --codename to fetch from Discord, "
-                         "--readjust for offset-only adjustment)")
+            if sys.stdin.isatty():
+                print("\nMissing HTML arguments. Trying interactive recovery...")
+                _prompt_install_inputs_only()
+                args.asset_html, args.nohud_html = _infer_missing_html_pair(args.asset_html, args.nohud_html)
+
+            if not args.asset_html or not args.nohud_html:
+                parser.error("--asset-html and --nohud-html are required for installation "
+                             "(or use --codename to fetch from Discord, "
+                             "--readjust for offset-only adjustment)")
+
+        if not os.path.isfile(args.asset_html):
+            print(f"ERROR: Asset HTML file not found: {args.asset_html}")
+            sys.exit(1)
+        if not os.path.isfile(args.nohud_html):
+            print(f"ERROR: NOHUD HTML file not found: {args.nohud_html}")
+            sys.exit(1)
+
+        # Common user mistake: swapped asset/nohud inputs.
+        a_name = os.path.basename(args.asset_html).lower()
+        n_name = os.path.basename(args.nohud_html).lower()
+        if "nohud" in a_name and "nohud" not in n_name:
+            print("    Detected likely swapped HTML paths. Swapping automatically.")
+            args.asset_html, args.nohud_html = args.nohud_html, args.asset_html
 
         # Derive map name from JDU asset URLs first (most reliable), fallback to folder name
         map_name = args.map_name
