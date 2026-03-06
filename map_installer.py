@@ -268,6 +268,14 @@ def reconstruct_state_for_readjust(download_dir, jd_dir=None):
             state.musictrack_start_beat = mt_meta["start_beat"]
             marker_preroll_ms = compute_marker_preroll(
                 mt_meta["markers"], mt_meta["start_beat"])
+            # For IPK maps with pre-roll, synthesize from markers rather than
+            # trusting the raw CKD value (X360 binary CKDs store 0.0).
+            if (v_override == 0.0
+                    and mt_meta["start_beat"] < 0
+                    and mt_meta["markers"]):
+                idx = abs(mt_meta["start_beat"])
+                if idx < len(mt_meta["markers"]):
+                    v_override = -(mt_meta["markers"][idx] / 48.0 / 1000.0)
 
     # --- Fallback: parse videoStartTime from installed .trk file ---
     if v_override is None:
@@ -284,7 +292,7 @@ def reconstruct_state_for_readjust(download_dir, jd_dir=None):
             except (OSError, ValueError) as e:
                 logger.warning("    Could not read .trk file: %s", e)
 
-    state.v_override = v_override if v_override is not None else 0.0
+    state.v_override = v_override  # may be None; step_06 will synthesize if needed
     state.marker_preroll_ms = marker_preroll_ms
 
     # --- Compute a_offset from marker data ---
@@ -1178,8 +1186,13 @@ def convert_audio(audio_path, map_name, target_dir, a_offset=0.0):
     ogg_out = os.path.join(target_dir, f"Audio/{map_name}.ogg")
 
     if not os.path.exists(ogg_out):
-        print(f"    Copying menu preview OGG...")
-        shutil.copy2(audio_path, ogg_out)
+        if audio_path.lower().endswith(".ogg"):
+            print(f"    Copying menu preview OGG...")
+            shutil.copy2(audio_path, ogg_out)
+        else:
+            print(f"    Converting to menu preview OGG...")
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
+                            "-i", audio_path, ogg_out], check=True)
 
     if a_offset == 0.0:
         print(f"    Converting to 48kHz WAV (no offset)...")
@@ -1215,7 +1228,7 @@ def generate_intro_amb(ogg_path, map_name, target_dir, a_offset, v_override=None
     map_lower = map_name.lower()
     amb_dir = os.path.join(target_dir, "Audio", "AMB")
 
-    if a_offset >= 0:
+    if a_offset >= 0 and (v_override is None or v_override >= 0):
         # No pre-roll silence. If an intro WAV exists from a previous run, silence it.
         if os.path.exists(amb_dir):
             for wav in glob.glob(os.path.join(amb_dir, "*_intro.wav")):
@@ -1699,18 +1712,16 @@ def step_02_download(state):
         if not state.codename:
             state.codename = state.map_name
 
-        # Best-effort media auto-detection if caller did not pre-fill paths.
-        if not state.audio_path:
-            preferred_audio = os.path.join(state.download_dir, f"{state.codename}.ogg")
-            if os.path.exists(preferred_audio):
-                state.audio_path = preferred_audio
-            else:
-                oggs = [f for f in glob.glob(os.path.join(state.download_dir, "*.ogg"))
-                        if "AudioPreview" not in os.path.basename(f)]
-                if oggs:
-                    state.audio_path = oggs[0]
+        # Best-effort media auto-detection if caller did not pre-fill paths
+        # or if the pre-filled paths no longer exist (stale from a previous run).
+        if not state.audio_path or not os.path.isfile(state.audio_path):
+            from source_analysis import _pick_audio
+            state.audio_path = _pick_audio(state.download_dir, state.codename)
+            # Also search inside ipk_extracted/ (IPK audio may be nested)
+            if not state.audio_path and hasattr(state, 'ipk_extracted') and os.path.isdir(state.ipk_extracted):
+                state.audio_path = _pick_audio(state.ipk_extracted, state.codename)
 
-        if not state.video_path:
+        if not state.video_path or not os.path.isfile(state.video_path):
             preferred_video, _actual = map_downloader.find_best_video_file(
                 state.download_dir, state.codename or state.map_name, state.quality)
             if preferred_video:
@@ -1721,10 +1732,21 @@ def step_02_download(state):
                          and "VideoPreview" not in os.path.basename(f)]
                 if webms:
                     state.video_path = webms[0]
+            # Also search inside ipk_extracted/ for video
+            if not state.video_path and hasattr(state, 'ipk_extracted') and os.path.isdir(state.ipk_extracted):
+                webms = glob.glob(os.path.join(state.ipk_extracted, "**", "*.webm"), recursive=True)
+                webms = [f for f in webms
+                         if "mappreview" not in os.path.basename(f).lower()
+                         and "videopreview" not in os.path.basename(f).lower()]
+                if webms:
+                    state.video_path = webms[0]
 
-        if not state.audio_path:
-            raise RuntimeError("Audio file is required for manual/IPK install mode.")
-        if not state.video_path:
+        # For IPK mode with a file to unpack, audio/video may not exist yet
+        # (they'll be extracted in step_04).  Defer the requirement check.
+        has_pending_ipk = getattr(state, "manual_ipk_file", None) and not getattr(state, "skip_ipk_unpack", False)
+        if not state.audio_path and not has_pending_ipk:
+            raise RuntimeError("Audio file (.ogg/.wav/.wav.ckd) is required for manual/IPK install mode.")
+        if not state.video_path and not has_pending_ipk:
             raise RuntimeError("Gameplay video (.webm) is required for manual/IPK install mode.")
         return
 
@@ -1814,9 +1836,19 @@ def step_03_extract_scenes(state):
 
 def step_04_unpack_ipk(state):
     """Unpack IPK archives."""
-    if getattr(state, "skip_ipk_unpack", False) and os.path.isdir(state.ipk_extracted):
+    has_manual_ipk = getattr(state, "manual_ipk_file", None) and os.path.isfile(state.manual_ipk_file)
+
+    # When a specific IPK file is provided, always re-extract to avoid using
+    # stale content from a previous IPK that shared the same extraction dir.
+    if getattr(state, "skip_ipk_unpack", False) and os.path.isdir(state.ipk_extracted) and not has_manual_ipk:
         print("[4] Skipping IPK unpack (already prepared)...")
         return
+
+    # Clear previous extraction if it exists and we're not skipping
+    if os.path.isdir(state.ipk_extracted):
+        print(f"[4] Clearing previous IPK extraction at {os.path.basename(state.ipk_extracted)}...")
+        _safe_rmtree(state.ipk_extracted)
+    os.makedirs(state.ipk_extracted, exist_ok=True)
 
     if getattr(state, "manual_ipk_file", None) and os.path.isfile(state.manual_ipk_file):
         print("[4] Unpacking selected IPK file...")
@@ -1824,32 +1856,76 @@ def step_04_unpack_ipk(state):
             ipk_unpack.extract(state.manual_ipk_file, state.ipk_extracted)
         except (AssertionError, OSError, struct.error) as e:
             logger.warning("    Warning: IPK extraction issue: %s", e)
-        return
+    else:
+        print("[4] Unpacking IPK archives...")
+        ipk_files = glob.glob(os.path.join(state.extracted_zip_dir, "*.ipk"))
+        for ipk in ipk_files:
+            print(f"    Unpacking {os.path.basename(ipk)}...")
+            try:
+                ipk_unpack.extract(ipk, state.ipk_extracted)
+            except (AssertionError, OSError, struct.error) as e:
+                logger.warning("    Warning: IPK extraction issue: %s", e)
 
-    print("[4] Unpacking IPK archives...")
-    ipk_files = glob.glob(os.path.join(state.extracted_zip_dir, "*.ipk"))
-    for ipk in ipk_files:
-        print(f"    Unpacking {os.path.basename(ipk)}...")
-        try:
-            ipk_unpack.extract(ipk, state.ipk_extracted)
-        except (AssertionError, OSError, struct.error) as e:
-            logger.warning("    Warning: IPK extraction issue: %s", e)
+    # Re-detect audio/video after extraction if not yet set (IPK mode defers
+    # detection until the files are actually extracted).
+    if not state.audio_path or not os.path.isfile(state.audio_path):
+        from source_analysis import _pick_audio
+        state.audio_path = _pick_audio(state.ipk_extracted, state.codename)
+        if not state.audio_path:
+            state.audio_path = _pick_audio(state.download_dir, state.codename)
+        if state.audio_path:
+            print(f"    Detected audio: {os.path.basename(state.audio_path)}")
+        else:
+            raise RuntimeError(
+                "No audio file found after IPK extraction. "
+                "Ensure the IPK contains .ogg, .wav, or .wav.ckd audio.")
+
+    if not state.video_path or not os.path.isfile(state.video_path):
+        webms = glob.glob(os.path.join(state.ipk_extracted, "**", "*.webm"), recursive=True)
+        webms = [f for f in webms
+                 if "mappreview" not in os.path.basename(f).lower()
+                 and "videopreview" not in os.path.basename(f).lower()]
+        if webms:
+            state.video_path = webms[0]
+        if not state.video_path:
+            preferred_video, _ = map_downloader.find_best_video_file(
+                state.download_dir, state.codename or state.map_name, state.quality)
+            if preferred_video:
+                state.video_path = preferred_video
+        if state.video_path:
+            print(f"    Detected video: {os.path.basename(state.video_path)}")
+        else:
+            raise RuntimeError(
+                "No gameplay video (.webm) found after IPK extraction. "
+                "Ensure a .webm file is in the source directory.")
 
 
 def step_05_decode_menuart(state):
     """Decode MenuArt CKDs and copy raw PNG/JPGs."""
     print("[5] Decoding menu art textures...")
-    for file in os.listdir(state.download_dir):
-        src = os.path.join(state.download_dir, file)
-        dst = None
-        if file.endswith(".tga.ckd") or file.endswith(".jpg") or file.endswith(".png"):
-            if "Phone" in file or "1024" in file or state.codename.lower() in file.lower() or state.map_name.lower() in file.lower():
+    if os.path.exists(state.download_dir):
+        for file in os.listdir(state.download_dir):
+            src = os.path.join(state.download_dir, file)
+            dst = None
+            if file.endswith(".tga.ckd") or file.endswith(".jpg") or file.endswith(".png") or file.endswith(".png.ckd"):
+                if "Phone" in file or "1024" in file or state.codename.lower() in file.lower() or state.map_name.lower() in file.lower():
+                    new_name = re.sub(re.escape(state.codename), state.map_name, file, flags=re.IGNORECASE) if state.codename.lower() in file.lower() else file
+                    dst = os.path.join(state.target_dir, f"MenuArt/textures/{new_name}")
+
+            if dst:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src, dst)
+
+    if hasattr(state, "ipk_extracted") and state.ipk_extracted and os.path.exists(state.ipk_extracted):
+        import glob
+        for src in glob.glob(os.path.join(state.ipk_extracted, "**", "menuart", "textures", "*.*"), recursive=True):
+            file = os.path.basename(src)
+            if file.endswith(".ckd") or file.endswith(".png") or file.endswith(".jpg"):
                 new_name = re.sub(re.escape(state.codename), state.map_name, file, flags=re.IGNORECASE) if state.codename.lower() in file.lower() else file
                 dst = os.path.join(state.target_dir, f"MenuArt/textures/{new_name}")
-
-        if dst:
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.copy2(src, dst)
+                if not os.path.exists(dst):
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    shutil.copy2(src, dst)
 
     # Decode CKDs to actual TGAs/PNGs
     subprocess.run([sys.executable, os.path.join(SCRIPT_DIR, "ckd_decode.py"), "--batch", "--quiet",
@@ -1974,17 +2050,8 @@ def step_06_generate_configs(state):
                     state.metadata_overrides[field] = safe
                     print(f"      Auto-stripped {field} to: '{safe}'")
 
-    video_start_time = map_builder.generate_text_files(
-        state.map_name, state.ipk_extracted, state.target_dir, state.v_override,
-        metadata_overrides=state.metadata_overrides or None)
-
-    if video_start_time is None:
-        raise RuntimeError("Could not fetch video start time.")
-
-    state.video_start_time = video_start_time
-    print(f"    Video Start Time is: {video_start_time}")
-
-    # Extract musictrack marker data for marker-based pre-roll calculations
+    # Extract musictrack marker data early (needed for IPK v_override synthesis
+    # and marker-based pre-roll calculations later)
     mt_meta = map_builder.extract_musictrack_metadata(state.ipk_extracted)
     if mt_meta:
         state.musictrack_start_beat = mt_meta["start_beat"]
@@ -1998,6 +2065,48 @@ def step_06_generate_configs(state):
     else:
         print(f"    Warning: Could not extract musictrack metadata; "
               f"using fallbacks for AMB duration")
+
+    # IPK maps: the binary audio already contains the full preroll
+    # (beats startBeat..0..endBeat) and the markers array maps beat indices
+    # to tick positions within that audio -- so audio must NOT be trimmed.
+    #
+    # However, the VIDEO needs a negative videoStartTime to tell the engine
+    # where beat 0 falls within the video file.  X360 binary CKDs typically
+    # store videoStartTime=0.0 because the console engine handled sync
+    # differently.  We ALWAYS synthesise from markers for IPK sources when
+    # the user has not manually overridden the value, to prevent the
+    # "adding a brick in the past" assertion in the PC engine.
+    if (state.source_type == "ipk_file"
+            and state.v_override is None
+            and mt_meta
+            and mt_meta["start_beat"] < 0
+            and mt_meta["markers"]):
+        idx = abs(mt_meta["start_beat"])
+        if idx < len(mt_meta["markers"]):
+            synthesized = -(mt_meta["markers"][idx] / 48.0 / 1000.0)
+            raw_vst = mt_meta.get("video_start_time", 0.0)
+            state.v_override = synthesized
+            print(f"    Synthesized video offset from markers: {state.v_override:.5f}s "
+                  f"(IPK CKD videoStartTime was {raw_vst}, startBeat={mt_meta['start_beat']})")
+        else:
+            print(f"    Warning: startBeat index {idx} out of range for markers "
+                  f"(len={len(mt_meta['markers'])}). Cannot synthesize v_override.")
+    elif (state.source_type == "ipk_file"
+            and state.v_override is None
+            and mt_meta
+            and mt_meta["start_beat"] >= 0):
+        print(f"    IPK map has startBeat={mt_meta['start_beat']} (no pre-roll). "
+              f"videoStartTime=0.0 is correct.")
+
+    video_start_time = map_builder.generate_text_files(
+        state.map_name, state.ipk_extracted, state.target_dir, state.v_override,
+        metadata_overrides=state.metadata_overrides or None)
+
+    if video_start_time is None:
+        raise RuntimeError("Could not fetch video start time.")
+
+    state.video_start_time = video_start_time
+    print(f"    Video Start Time is: {video_start_time}")
 
 
 def step_07_convert_tapes(state):
@@ -2081,6 +2190,54 @@ def step_09_process_amb(state):
                             wf.writeframes(b'\x00\x00' * 4800)  # 0.1s silence
                         print(f"    Created silent placeholder: {os.path.basename(abs_path)}")
 
+            # Handle orphan WAV CKDs without matching TPL CKDs (e.g., Koi has
+            # amb_koi_intro.wav.ckd but no amb_koi_intro.tpl.ckd).  Generate
+            # synthetic TPL+ILU so the engine can reference the AMB actor.
+            tpl_bases = {os.path.basename(f).replace('.tpl.ckd', '')
+                         for f in glob.glob(os.path.join(amb_dir_path, "*.tpl.ckd"))}
+            for wav_ckd in glob.glob(os.path.join(amb_dir_path, "*.wav.ckd")):
+                base = os.path.basename(wav_ckd).replace('.wav.ckd', '')
+                if base not in tpl_bases:
+                    map_lower = state.map_name.lower()
+                    wav_rel = f"world/maps/{map_lower}/audio/amb/{base}.wav"
+                    # Generate synthetic ILU
+                    ilu_content = (
+                        f'DESCRIPTOR =\n{{\n'
+                        f'\t{{\n\t\tNAME = "SoundDescriptor_Template",\n'
+                        f'\t\tSoundDescriptor_Template =\n\t\t{{\n'
+                        f'\t\t\tname = "{base}",\n\t\t\tvolume = 0,\n'
+                        f'\t\t\tcategory = "amb",\n\t\t\tlimitCategory = "",\n'
+                        f'\t\t\tlimitMode = 0,\n\t\t\tmaxInstances = 4294967295,\n'
+                        f'\t\t\tfiles =\n\t\t\t{{\n\t\t\t\t{{\n'
+                        f'\t\t\t\t\tVAL = "{wav_rel}",\n'
+                        f'\t\t\t\t}},\n\t\t\t}},\n'
+                        f'\t\t\tserialPlayingMode = 0,\n\t\t\tserialStoppingMode = 0,\n'
+                        f'\t\t}},\n\t}},\n}}\n'
+                    )
+                    # Generate synthetic TPL
+                    tpl_content = (
+                        f'params =\n{{\n\tNAME = "Actor_Template",\n'
+                        f'\tActor_Template =\n\t{{\n\t\tCOMPONENTS =\n\t\t{{\n'
+                        f'\t\t\t{{\n\t\t\t\tNAME = "SoundComponent_Template",\n'
+                        f'\t\t\t\tSoundComponent_Template =\n\t\t\t\t{{\n'
+                        f'\t\t\t\t\tsoundList = {{}},\n'
+                        f'\t\t\t\t\tSoundwichEvent = "",\n'
+                        f'\t\t\t\t}},\n\t\t\t}},\n\t\t}},\n\t}},\n}}\n'
+                    )
+                    with open(os.path.join(dest_amb, f"{base}.ilu"), 'w', encoding='utf-8') as f:
+                        f.write(ilu_content)
+                    with open(os.path.join(dest_amb, f"{base}.tpl"), 'w', encoding='utf-8') as f:
+                        f.write(tpl_content)
+                    # Create silent WAV placeholder
+                    wav_abs = os.path.join(dest_amb, f"{base}.wav")
+                    if not os.path.exists(wav_abs):
+                        with wave.open(wav_abs, 'w') as wf:
+                            wf.setnchannels(1)
+                            wf.setsampwidth(2)
+                            wf.setframerate(48000)
+                            wf.writeframes(b'\x00\x00' * 4800)
+                    print(f"    Generated synthetic AMB (no TPL CKD): {base}.ilu + {base}.tpl")
+
         # Inject AMB actors into the audio ISC so the engine actually loads them
         audio_isc_path = os.path.join(state.target_dir, f"Audio/{state.map_name}_audio.isc")
         if os.path.exists(audio_isc_path):
@@ -2131,7 +2288,7 @@ def step_10_decode_pictos(state):
 def step_11_extract_moves(state):
     """Extract move files and autodance data."""
     print("[11] Extracting move files and autodance data...")
-    for plat in ["nx", "wii", "durango", "scarlett", "orbis", "prospero", "wiiu"]:
+    for plat in ["nx", "wii", "durango", "scarlett", "orbis", "prospero", "wiiu", "x360"]:
         moves_src = glob.glob(os.path.join(state.ipk_extracted, f"**/moves/{plat}"), recursive=True)
         for folder in moves_src:
             dest_moves = os.path.join(state.target_dir, f"Timeline/Moves/{plat.upper()}")
@@ -2152,7 +2309,7 @@ def step_11_extract_moves(state):
     #      it with the base Kinect gesture (strip trailing digits) so the file loads.
     pc_moves_dir = os.path.join(state.target_dir, "Timeline", "Moves", "PC")
     moves_root = os.path.join(state.target_dir, "Timeline", "Moves")
-    KINECT_PLATFORMS = {"DURANGO", "SCARLETT"}
+    KINECT_PLATFORMS = {"DURANGO", "SCARLETT", "X360"}
     total_copied = 0
     if os.path.isdir(moves_root):
         for plat_name in os.listdir(moves_root):
@@ -2242,11 +2399,15 @@ def step_12_convert_audio(state):
     if state.v_override is None:
         state.v_override = state.video_start_time
     if state.a_offset is None:
-        # Use marker-based pre-roll as default a_offset when available.
-        # This is significantly more accurate than v_override for maps where
-        # videoStartTime differs from the audio pre-roll (e.g. BadHabits:
-        # v_override=-11.666 but actual audio pre-roll is ~2.86s).
-        if state.marker_preroll_ms is not None:
+        # For IPK maps, audio already contains full preroll -- no trimming
+        # needed.  For HTML/fetch maps, use marker-based pre-roll as default
+        # a_offset (more accurate than v_override for maps where
+        # videoStartTime differs from the audio pre-roll).
+        if state.source_type == "ipk_file":
+            state.a_offset = 0.0
+            print(f"    IPK map: no audio trim needed "
+                  f"(markers encode preroll naturally)")
+        elif state.marker_preroll_ms is not None:
             state.a_offset = -(state.marker_preroll_ms / 1000.0)
             print(f"    Using marker-based default a_offset: {state.a_offset:.3f}s "
                   f"(vs v_override: {state.v_override}s)")
@@ -2298,7 +2459,7 @@ def step_14_register_sku(state):
         f'                      <JD_SongDescComponent />\n'
         f'                  </COMPONENTS>\n'
         f'              </Actor>\n'
-        f'          </ACTORS>\n'
+        f'           </ACTORS>\n'
     )
 
     # Use regex to find <sceneConfigs> with any leading whitespace
@@ -2373,7 +2534,11 @@ def configure_manual_source(
 
     state.skip_download = True
     state.skip_scene_extract = True
-    state.skip_ipk_unpack = bool(ipk_extracted and os.path.isdir(state.ipk_extracted))
+    # Only skip IPK unpack if the extracted dir was explicitly provided AND
+    # we don't have a new IPK file to unpack (avoid reusing stale extraction).
+    state.skip_ipk_unpack = bool(
+        ipk_extracted and os.path.isdir(state.ipk_extracted)
+        and not manual_ipk_file)
     state.preserve_source_dirs = True
 
 
@@ -2702,6 +2867,7 @@ def main():
             video_override=args.video_override,
             audio_offset=args.audio_offset,
             quality=args.quality,
+            original_map_name=map_name # Assuming map_name is the original name here
         )
 
         # Load sync config from explicit path if provided (overrides pipeline-calculated values)

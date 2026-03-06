@@ -45,7 +45,7 @@ def load_ckd_json(file_path):
     Raises:
         FileNotFoundError: If the file does not exist.
         json.JSONDecodeError: If the content is not valid JSON.
-        UnicodeDecodeError: If the content cannot be decoded as UTF-8.
+        ValueError: If it's an unsupported binary format.
     """
     if not os.path.isfile(file_path):
         raise FileNotFoundError(f"CKD file not found: {file_path}")
@@ -59,5 +59,13 @@ def load_ckd_json(file_path):
     try:
         return json.loads(cleaned.decode('utf-8'))
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        logger.error("Failed to parse CKD JSON from %s: %s", file_path, e)
-        raise
+        logger.debug("Failed to parse as text JSON, attempting binary parse: %s", e)
+        import binary_ckd_parser
+        import importlib
+        importlib.reload(binary_ckd_parser)
+        try:
+            return binary_ckd_parser.parse_binary_ckd(file_path)
+        except Exception as bin_err:
+            logger.error("Failed to parse CKD JSON (both text and binary) from %s: %s | %s", file_path, e, bin_err)
+            raise
+

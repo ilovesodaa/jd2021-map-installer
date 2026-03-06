@@ -7,6 +7,9 @@ from typing import List, Optional
 import map_downloader
 
 
+CKD_HEADER_SIZE = 44  # Standard UbiArt CKD header length
+
+
 SUPPORTED_QUALITIES = [
     "ULTRA_HD",
     "ULTRA",
@@ -92,6 +95,136 @@ def _find_html_pair(folder: str):
     return asset, nohud
 
 
+def _extract_ckd_audio(ckd_path: str, output_dir: str) -> Optional[str]:
+    """Strip the 44-byte CKD header from a cooked audio file and write raw audio.
+
+    Returns the path of the extracted file, or *None* on failure.
+    """
+    try:
+        with open(ckd_path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return None
+
+    if len(data) <= CKD_HEADER_SIZE:
+        return None
+
+    payload = data[CKD_HEADER_SIZE:]
+
+    if payload[:4] == b"OggS":
+        ext = ".ogg"
+    elif payload[:4] == b"RIFF":
+        ext = ".wav"
+    else:
+        # Fallback to vgmstream for X360/other proprietary formats
+        vgm_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "3rdPartyTools", "jd2021pc tools", "JDTools - 1.9.0", "bin", "vgmstream.exe")
+        if not os.path.isfile(vgm_path):
+            vgm_path = r"D:\jd2021pc\3rdPartyTools\jd2021pc tools\JDTools - 1.9.0\bin\vgmstream.exe"
+        
+        if os.path.isfile(vgm_path):
+            os.makedirs(output_dir, exist_ok=True)
+            base = os.path.splitext(os.path.basename(ckd_path))[0]
+            if base.lower().endswith(".wav") or base.lower().endswith(".ogg"):
+                base = base[:-4]
+            out_path = os.path.join(output_dir, base + ".wav")
+            
+            import subprocess
+            try:
+                res = subprocess.run([vgm_path, "-o", out_path, ckd_path], capture_output=True)
+                if res.returncode == 0 and os.path.exists(out_path):
+                    return out_path
+            except Exception as e:
+                print(f"Warning: vgmstream fallback failed: {e}")
+        return None  # unknown format – skip
+
+    os.makedirs(output_dir, exist_ok=True)
+    base = os.path.splitext(os.path.basename(ckd_path))[0]
+    # Strip embedded extension (e.g. "SongName.wav.ckd" -> "SongName")
+    if base.lower().endswith(".wav"):
+        base = base[:-4]
+    elif base.lower().endswith(".ogg"):
+        base = base[:-4]
+    out_path = os.path.join(output_dir, base + ext)
+
+    with open(out_path, "wb") as f:
+        f.write(payload)
+    return out_path
+
+
+def _pick_audio(folder: str, codename: Optional[str] = None) -> Optional[str]:
+    """Find the best audio file in *folder*, checking .ogg, .wav, and .wav.ckd.
+
+    Prefers .ogg over .wav over .wav.ckd.  When a .wav.ckd is the only
+    option it is automatically extracted in-place and the resulting raw path
+    is returned.  Searches top-level first, then recursively for IPK-style
+    nested directory structures.
+    """
+    # 1. Try exact codename match at top level (.ogg then .wav)
+    if codename:
+        for ext in (".ogg", ".wav"):
+            candidate = os.path.join(folder, f"{codename}{ext}")
+            if os.path.isfile(candidate):
+                return candidate
+
+    # 2. Glob for any .ogg at top level (excluding previews)
+    oggs = [
+        f for f in glob.glob(os.path.join(folder, "*.ogg"))
+        if "AudioPreview" not in os.path.basename(f)
+    ]
+    if oggs:
+        if codename:
+            lower = codename.lower()
+            matches = [p for p in oggs if os.path.basename(p).lower().startswith(lower)]
+            if matches:
+                return matches[0]
+        return oggs[0]
+
+    # 3. Glob for any .wav at top level (excluding previews)
+    wavs = [
+        f for f in glob.glob(os.path.join(folder, "*.wav"))
+        if "AudioPreview" not in os.path.basename(f)
+    ]
+    if wavs:
+        if codename:
+            lower = codename.lower()
+            matches = [p for p in wavs if os.path.basename(p).lower().startswith(lower)]
+            if matches:
+                return matches[0]
+        return wavs[0]
+
+    # 4. Recursive search (for extracted IPK structures with nested dirs)
+    #    Try .ogg first, then .wav, then .wav.ckd
+    for pattern, is_ckd in [("**/*.ogg", False), ("**/*.wav", False), ("**/*.wav.ckd", True)]:
+        hits = glob.glob(os.path.join(folder, pattern), recursive=True)
+        # Filter out preview / ambient / autodance files for non-CKD
+        if not is_ckd:
+            hits = [h for h in hits if "AudioPreview" not in os.path.basename(h)
+                    and os.sep + "amb" + os.sep not in h.lower()
+                    and "/amb/" not in h.lower()
+                    and os.sep + "autodance" + os.sep not in h.lower()
+                    and "/autodance/" not in h.lower()]
+        else:
+            # For CKD, skip ambient CKDs (amb_*.wav.ckd) and autodance
+            hits = [h for h in hits if not os.path.basename(h).lower().startswith("amb_")
+                    and os.sep + "autodance" + os.sep not in h.lower()
+                    and "/autodance/" not in h.lower()]
+        if not hits:
+            continue
+        if codename:
+            lower = codename.lower()
+            matches = [p for p in hits if os.path.basename(p).lower().startswith(lower)]
+            if matches:
+                hits = matches
+        if is_ckd:
+            extracted = _extract_ckd_audio(hits[0], folder)
+            if extracted:
+                return extracted
+        else:
+            return hits[0]
+
+    return None
+
+
 def analyze_html_mode(asset_html: str, nohud_html: str) -> SourceSpec:
     asset_html = _normalize(asset_html)
     nohud_html = _normalize(nohud_html)
@@ -124,9 +257,11 @@ def analyze_ipk_file_mode(ipk_file: str, audio_path: str = "", video_path: str =
 
     source_dir = os.path.dirname(ipk_file)
     if not audio_path:
-        guessed = os.path.join(source_dir, f"{spec.codename}.ogg")
-        if os.path.isfile(guessed):
-            audio_path = guessed
+        audio_path = _pick_audio(source_dir, spec.codename)
+        # Also check inside ipk_extracted/ if it already exists
+        ipk_ext_dir = os.path.join(source_dir, "ipk_extracted")
+        if not audio_path and os.path.isdir(ipk_ext_dir):
+            audio_path = _pick_audio(ipk_ext_dir, spec.codename)
     if not video_path:
         video_path = _pick_webm(source_dir, spec.codename)
 
@@ -135,12 +270,7 @@ def analyze_ipk_file_mode(ipk_file: str, audio_path: str = "", video_path: str =
     spec.ipk_extracted = os.path.join(source_dir, "ipk_extracted")
     spec.ready_for_prepare = True
 
-    if not spec.audio_path:
-        spec.errors.append("Audio (.ogg) is required for install.")
-    if not spec.video_path:
-        spec.errors.append("Gameplay video (.webm) is required for install.")
-
-    spec.ready_for_install = len(spec.errors) == 0 and os.path.isdir(spec.ipk_extracted)
+    spec.ready_for_install = os.path.isdir(spec.ipk_extracted)
     return spec
 
 
@@ -171,15 +301,13 @@ def analyze_manual_mode(folder: str, submode: str = "auto") -> SourceSpec:
         spec.codename = _extract_codename_from_ipk_name(spec.ipk_file) if spec.ipk_file else os.path.basename(folder)
 
         spec.ipk_extracted = folder
-        spec.audio_path = os.path.join(folder, f"{spec.codename}.ogg")
-        if not os.path.isfile(spec.audio_path):
-            spec.audio_path = None
+        spec.audio_path = _pick_audio(folder, spec.codename)
         spec.video_path = _pick_webm(folder, spec.codename)
 
         if not os.path.isdir(os.path.join(folder, "world", "maps")):
             spec.errors.append("Unpacked IPK folder must contain world/maps/.")
         if not spec.audio_path:
-            spec.errors.append("Audio (.ogg) not found in unpacked source folder.")
+            spec.errors.append("Audio (.ogg/.wav/.wav.ckd) not found in unpacked source folder.")
         if not spec.video_path:
             spec.errors.append("Gameplay video (.webm) not found in unpacked source folder.")
 
