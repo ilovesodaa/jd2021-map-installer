@@ -183,186 +183,269 @@ class MapInstallerGUI:
         container = ttk.Frame(self.root)
         container.pack(fill="both", expand=True, padx=8, pady=4)
 
-        # ===================== SOURCE MODES =====================
-        mode_cfg = ttk.LabelFrame(container, text="Install Modes", padding=6)
-        mode_cfg.pack(fill="x", pady=(0, 4))
+        # ===================== UNIFIED INSTALL PANEL =====================
+        install_panel = ttk.LabelFrame(container, text="Install", padding=6)
+        install_panel.pack(fill="x", pady=(0, 4))
 
-        ttk.Label(mode_cfg, text="Mode:", width=16, anchor="e").grid(
-            row=0, column=0, sticky="e", padx=(0, 4))
+        # --- Row 0: Mode selector ---
+        mode_row = ttk.Frame(install_panel)
+        mode_row.pack(fill="x", pady=(0, 4))
+
+        ttk.Label(mode_row, text="Mode:", width=16, anchor="e").pack(
+            side="left", padx=(0, 4))
         self.source_mode_var = tk.StringVar(value="fetch")
         self.source_mode_combo = ttk.Combobox(
-            mode_cfg,
+            mode_row,
             textvariable=self.source_mode_var,
             values=["fetch", "html", "ipk", "manual", "batch"],
             state="readonly",
             width=18,
         )
-        self.source_mode_combo.grid(row=0, column=1, sticky="w", pady=1)
-        self.source_mode_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_source_mode_changed())
+        self.source_mode_combo.pack(side="left")
+        self.source_mode_combo.bind(
+            "<<ComboboxSelected>>", lambda _e: self._on_source_mode_changed())
 
-        ttk.Label(mode_cfg, text="Manual Submode:", width=16, anchor="e").grid(
-            row=0, column=2, sticky="e", padx=(12, 4))
+        # Manual submode (shown only in manual mode, handled by _on_source_mode_changed)
+        self._submode_label = ttk.Label(mode_row, text="Submode:")
         self.manual_submode_var = tk.StringVar(value="auto")
         self.manual_submode_combo = ttk.Combobox(
-            mode_cfg,
+            mode_row,
             textvariable=self.manual_submode_var,
             values=["auto", "unpacked_ipk", "downloaded_assets"],
             state="readonly",
             width=18,
         )
-        self.manual_submode_combo.grid(row=0, column=3, sticky="w", pady=1)
 
-        ttk.Label(mode_cfg, text="Source File/Folder:", width=16, anchor="e").grid(
-            row=1, column=0, sticky="e", padx=(0, 4))
-        self.source_path_entry = ttk.Entry(mode_cfg, width=64)
-        self.source_path_entry.grid(row=1, column=1, columnspan=2, sticky="ew", pady=1)
-        self.source_browse_btn = ttk.Button(
-            mode_cfg, text="Browse", width=8, command=self._browse_mode_source)
-        self.source_browse_btn.grid(row=1, column=3, sticky="w", padx=(4, 0))
+        # --- Mode-specific frames (swapped by _on_source_mode_changed) ---
+        self._mode_frames = {}
+        self._mode_frame_parent = ttk.Frame(install_panel)
+        self._mode_frame_parent.pack(fill="x", pady=(0, 4))
 
-        ttk.Label(mode_cfg, text="Audio (.ogg):", width=16, anchor="e").grid(
-            row=2, column=0, sticky="e", padx=(0, 4))
-        self.mode_audio_entry = ttk.Entry(mode_cfg, width=64)
-        self.mode_audio_entry.grid(row=2, column=1, columnspan=2, sticky="ew", pady=1)
-        self.mode_audio_browse_btn = ttk.Button(
-            mode_cfg, text="Browse", width=8,
-            command=lambda: self._browse_specific_file(self.mode_audio_entry, [("OGG files", "*.ogg"), ("All files", "*.*")]))
-        self.mode_audio_browse_btn.grid(row=2, column=3, sticky="w", padx=(4, 0))
+        # FETCH frame: Codename entry
+        f_fetch = ttk.Frame(self._mode_frame_parent)
+        ttk.Label(f_fetch, text="Codename:", width=16, anchor="e").pack(
+            side="left", padx=(0, 4))
+        self.codename_entry = ttk.Entry(f_fetch, width=64)
+        self.codename_entry.pack(side="left", fill="x", expand=True)
+        ToolTip(self.codename_entry,
+                "Enter a map codename (e.g. TemperatureALT) to fetch HTML "
+                "from Discord and install automatically.")
+        self._mode_frames["fetch"] = f_fetch
 
-        ttk.Label(mode_cfg, text="Video (.webm):", width=16, anchor="e").grid(
-            row=3, column=0, sticky="e", padx=(0, 4))
-        self.mode_video_entry = ttk.Entry(mode_cfg, width=64)
-        self.mode_video_entry.grid(row=3, column=1, columnspan=2, sticky="ew", pady=1)
-        self.mode_video_browse_btn = ttk.Button(
-            mode_cfg, text="Browse", width=8,
-            command=lambda: self._browse_specific_file(self.mode_video_entry, [("WEBM files", "*.webm"), ("All files", "*.*")]))
-        self.mode_video_browse_btn.grid(row=3, column=3, sticky="w", padx=(4, 0))
-
-        mode_btns = ttk.Frame(mode_cfg)
-        mode_btns.grid(row=4, column=0, columnspan=4, sticky="w", pady=(6, 0))
-
-        self.mode_analyze_btn = ttk.Button(mode_btns, text="Analyze", command=self._analyze_mode_source)
-        self.mode_analyze_btn.pack(side="left")
-        self.mode_prepare_btn = ttk.Button(mode_btns, text="Prepare", command=self._prepare_mode_source)
-        self.mode_prepare_btn.pack(side="left", padx=(8, 0))
-        self.mode_install_btn = ttk.Button(mode_btns, text="Install From Mode", command=self._install_from_mode)
-        self.mode_install_btn.pack(side="left", padx=(8, 0))
-
-        self.mode_status_var = tk.StringVar(value="Mode panel ready. Select mode and source, then Analyze.")
-        ttk.Label(mode_cfg, textvariable=self.mode_status_var, foreground="#555555").grid(
-            row=5, column=0, columnspan=4, sticky="w", pady=(4, 0))
-
-        mode_cfg.columnconfigure(1, weight=1)
-        mode_cfg.columnconfigure(2, weight=1)
-
-        # ===================== CONFIGURATION =====================
-        cfg = ttk.LabelFrame(container, text="Configuration", padding=6)
-        cfg.pack(fill="x", pady=(0, 4))
-
-        # Warning Label (Asset expiration)
-        warning_lbl = tk.Label(
-            cfg, 
-            text="⚠ Asset/NoHUD links expire after ~30 minutes! Fetch fresh links if download fails.",
-            fg="#856404", # Darker warning gold
-            font=("Consolas", 9, "bold")
-        )
-        warning_lbl.grid(row=0, column=0, columnspan=3, pady=(0, 6), sticky="w")
-
-        # --- Codename quick-install row ---
-        ttk.Label(cfg, text="Codename:", width=16, anchor="e").grid(
-            row=1, column=0, sticky="e", padx=(0, 4))
-        self.codename_entry = ttk.Entry(cfg, width=64)
-        self.codename_entry.grid(row=1, column=1, sticky="ew", pady=1)
-        self.codename_entry.bind("<KeyRelease>", lambda _e: self._on_html_inputs_changed())
-        ToolTip(self.codename_entry, "Enter a map codename (e.g. TemperatureALT) to fetch HTML from Discord and install automatically.")
-        self.fetch_install_btn = ttk.Button(
-            cfg, text="Fetch & Install", width=14, command=self._on_fetch_install)
-        self.fetch_install_btn.grid(row=1, column=2, padx=(4, 0))
-        ToolTip(self.fetch_install_btn, "Fetch asset/nohud HTML from Discord via JDH_Downloader, then run the full install pipeline.\nRequires Node.js 18+ and tools/JDH_Downloader/config.json.")
-
-        ttk.Separator(cfg, orient="horizontal").grid(
-            row=2, column=0, columnspan=3, sticky="ew", pady=6)
-
-        ttk.Label(cfg, text="Asset HTML:", width=16, anchor="e").grid(
-            row=3, column=0, sticky="e", padx=(0, 4))
-        self.asset_html_entry = ttk.Entry(cfg, width=64)
-        self.asset_html_entry.grid(row=3, column=1, sticky="ew", pady=1)
-        ToolTip(self.asset_html_entry, "Path to the downloaded map asset HTML file containing texture/audio links. Editable manually.")
+        # HTML frame: Asset HTML + NoHUD HTML
+        f_html = ttk.Frame(self._mode_frame_parent)
+        # Warning label
+        tk.Label(
+            f_html,
+            text="\u26a0 Asset/NoHUD links expire after ~30 minutes! "
+                 "Fetch fresh links if download fails.",
+            fg="#856404",
+            font=("Consolas", 9, "bold"),
+        ).pack(anchor="w", pady=(0, 4))
+        # Asset HTML row
+        html_r1 = ttk.Frame(f_html)
+        html_r1.pack(fill="x", pady=1)
+        ttk.Label(html_r1, text="Asset HTML:", width=16, anchor="e").pack(
+            side="left", padx=(0, 4))
+        self.asset_html_entry = ttk.Entry(html_r1, width=64)
+        self.asset_html_entry.pack(side="left", fill="x", expand=True)
+        ToolTip(self.asset_html_entry,
+                "Path to the downloaded map asset HTML file containing "
+                "texture/audio links.")
         self.asset_browse_btn = ttk.Button(
-            cfg, text="Browse", width=8,
-            command=lambda e=self.asset_html_entry: self._browse(e, "html"))
-        self.asset_browse_btn.grid(row=3, column=2, padx=(4, 0))
-
-        ttk.Label(cfg, text="NOHUD HTML:", width=16, anchor="e").grid(
-            row=4, column=0, sticky="e", padx=(0, 4))
-        self.nohud_html_entry = ttk.Entry(cfg, width=64)
-        self.nohud_html_entry.grid(row=4, column=1, sticky="ew", pady=1)
-        ToolTip(self.nohud_html_entry, "Path to the downloaded NoHUD HTML file containing the map video link. Editable manually.")
+            html_r1, text="Browse", width=8,
+            command=lambda e=None: self._browse(self.asset_html_entry, "html"))
+        self.asset_browse_btn.pack(side="left", padx=(4, 0))
+        # NoHUD HTML row
+        html_r2 = ttk.Frame(f_html)
+        html_r2.pack(fill="x", pady=1)
+        ttk.Label(html_r2, text="NOHUD HTML:", width=16, anchor="e").pack(
+            side="left", padx=(0, 4))
+        self.nohud_html_entry = ttk.Entry(html_r2, width=64)
+        self.nohud_html_entry.pack(side="left", fill="x", expand=True)
+        ToolTip(self.nohud_html_entry,
+                "Path to the downloaded NoHUD HTML file containing "
+                "the map video link.")
         self.nohud_browse_btn = ttk.Button(
-            cfg, text="Browse", width=8,
-            command=lambda e=self.nohud_html_entry: self._browse(e, "html"))
-        self.nohud_browse_btn.grid(row=4, column=2, padx=(4, 0))
+            html_r2, text="Browse", width=8,
+            command=lambda e=None: self._browse(self.nohud_html_entry, "html"))
+        self.nohud_browse_btn.pack(side="left", padx=(4, 0))
+        self._mode_frames["html"] = f_html
 
-        ttk.Label(cfg, text="Game Directory:", width=16, anchor="e").grid(
-            row=5, column=0, sticky="e", padx=(0, 4))
-        self.jd_dir_entry = ttk.Entry(cfg, width=64)
-        self.jd_dir_entry.grid(row=5, column=1, sticky="ew", pady=1)
-        ToolTip(self.jd_dir_entry, "Path to the Just Dance 2021 installation folder.")
+        # IPK frame: IPK file + Audio + Video
+        f_ipk = ttk.Frame(self._mode_frame_parent)
+        for row_label, attr_name, filetypes in [
+            ("IPK File:", "source_path_entry",
+             [("IPK files", "*.ipk"), ("All files", "*.*")]),
+            ("Audio (.ogg):", "mode_audio_entry",
+             [("OGG files", "*.ogg"), ("All files", "*.*")]),
+            ("Video (.webm):", "mode_video_entry",
+             [("WEBM files", "*.webm"), ("All files", "*.*")]),
+        ]:
+            r = ttk.Frame(f_ipk)
+            r.pack(fill="x", pady=1)
+            ttk.Label(r, text=row_label, width=16, anchor="e").pack(
+                side="left", padx=(0, 4))
+            entry = ttk.Entry(r, width=64)
+            entry.pack(side="left", fill="x", expand=True)
+            # source_path_entry is created fresh here; audio/video reuse existing attrs
+            if attr_name == "source_path_entry":
+                self.source_path_entry = entry
+            elif attr_name == "mode_audio_entry":
+                self.mode_audio_entry = entry
+            elif attr_name == "mode_video_entry":
+                self.mode_video_entry = entry
+            btn = ttk.Button(
+                r, text="Browse", width=8,
+                command=lambda e=entry, ft=filetypes: self._browse_specific_file(e, ft))
+            btn.pack(side="left", padx=(4, 0))
+        self._mode_frames["ipk"] = f_ipk
+
+        # MANUAL frame: Folder + Audio + Video (reuses ipk entries via shared refs)
+        f_manual = ttk.Frame(self._mode_frame_parent)
+        man_r1 = ttk.Frame(f_manual)
+        man_r1.pack(fill="x", pady=1)
+        ttk.Label(man_r1, text="Source Folder:", width=16, anchor="e").pack(
+            side="left", padx=(0, 4))
+        self._manual_source_entry = ttk.Entry(man_r1, width=64)
+        self._manual_source_entry.pack(side="left", fill="x", expand=True)
+        ttk.Button(
+            man_r1, text="Browse", width=8,
+            command=self._browse_mode_source).pack(side="left", padx=(4, 0))
+        # Audio/video rows for manual mode use the same entries as IPK
+        # (they're read from mode_audio_entry / mode_video_entry)
+        for row_label, entry_ref, filetypes in [
+            ("Audio (.ogg):", self.mode_audio_entry,
+             [("OGG files", "*.ogg"), ("All files", "*.*")]),
+            ("Video (.webm):", self.mode_video_entry,
+             [("WEBM files", "*.webm"), ("All files", "*.*")]),
+        ]:
+            r = ttk.Frame(f_manual)
+            r.pack(fill="x", pady=1)
+            ttk.Label(r, text=row_label, width=16, anchor="e").pack(
+                side="left", padx=(0, 4))
+            # Create a separate entry for manual mode so widgets aren't shared
+            man_entry = ttk.Entry(r, width=64)
+            man_entry.pack(side="left", fill="x", expand=True)
+            if "Audio" in row_label:
+                self._manual_audio_entry = man_entry
+            else:
+                self._manual_video_entry = man_entry
+            ttk.Button(
+                r, text="Browse", width=8,
+                command=lambda e=man_entry, ft=filetypes: self._browse_specific_file(e, ft)
+            ).pack(side="left", padx=(4, 0))
+        self._mode_frames["manual"] = f_manual
+
+        # BATCH frame: Folder only
+        f_batch = ttk.Frame(self._mode_frame_parent)
+        batch_r1 = ttk.Frame(f_batch)
+        batch_r1.pack(fill="x", pady=1)
+        ttk.Label(batch_r1, text="Maps Folder:", width=16, anchor="e").pack(
+            side="left", padx=(0, 4))
+        self._batch_folder_entry = ttk.Entry(batch_r1, width=64)
+        self._batch_folder_entry.pack(side="left", fill="x", expand=True)
+        ttk.Button(
+            batch_r1, text="Browse", width=8,
+            command=lambda: self._browse(self._batch_folder_entry, "dir")
+        ).pack(side="left", padx=(4, 0))
+        self._mode_frames["batch"] = f_batch
+
+        # --- Mode action row: Analyze / Prepare / Status ---
+        mode_action_row = ttk.Frame(install_panel)
+        mode_action_row.pack(fill="x", pady=(0, 4))
+
+        self.mode_analyze_btn = ttk.Button(
+            mode_action_row, text="Analyze", command=self._analyze_mode_source)
+        self.mode_analyze_btn.pack(side="left")
+        self.mode_prepare_btn = ttk.Button(
+            mode_action_row, text="Prepare", command=self._prepare_mode_source)
+        self.mode_prepare_btn.pack(side="left", padx=(8, 0))
+
+        self.mode_status_var = tk.StringVar(value="Select a mode and source, then Analyze.")
+        ttk.Label(mode_action_row, textvariable=self.mode_status_var,
+                  foreground="#555555").pack(side="left", padx=(12, 0))
+
+        ttk.Separator(install_panel, orient="horizontal").pack(
+            fill="x", pady=4)
+
+        # --- Common bottom: Game Directory + Quality ---
+        common = ttk.Frame(install_panel)
+        common.pack(fill="x", pady=(0, 4))
+
+        gd_row = ttk.Frame(common)
+        gd_row.pack(fill="x", pady=1)
+        ttk.Label(gd_row, text="Game Directory:", width=16, anchor="e").pack(
+            side="left", padx=(0, 4))
+        self.jd_dir_entry = ttk.Entry(gd_row, width=64)
+        self.jd_dir_entry.pack(side="left", fill="x", expand=True)
+        ToolTip(self.jd_dir_entry,
+                "Path to the Just Dance 2021 installation folder.")
         self.jd_browse_btn = ttk.Button(
-            cfg, text="Browse", width=8,
-            command=lambda e=self.jd_dir_entry: self._browse(e, "dir"))
-        self.jd_browse_btn.grid(row=5, column=2, padx=(4, 0))
+            gd_row, text="Browse", width=8,
+            command=lambda e=None: self._browse(self.jd_dir_entry, "dir"))
+        self.jd_browse_btn.pack(side="left", padx=(4, 0))
 
-        cfg.columnconfigure(1, weight=1)
-
-        # Video quality selector
-        ttk.Label(cfg, text="Video Quality:", width=16, anchor="e").grid(
-            row=6, column=0, sticky="e", padx=(0, 4))
+        q_row = ttk.Frame(common)
+        q_row.pack(fill="x", pady=1)
+        ttk.Label(q_row, text="Video Quality:", width=16, anchor="e").pack(
+            side="left", padx=(0, 4))
         self.quality_var = tk.StringVar(value="ultra_hd")
-        quality_combo = ttk.Combobox(cfg, textvariable=self.quality_var,
-                                     values=["ultra_hd", "ultra", "high_hd", "high", "mid_hd", "mid", "low_hd", "low"],
-                                     state="readonly", width=12)
-        quality_combo.grid(row=6, column=1, sticky="w", pady=1)
+        ttk.Combobox(
+            q_row, textvariable=self.quality_var,
+            values=["ultra_hd", "ultra", "high_hd", "high",
+                    "mid_hd", "mid", "low_hd", "low"],
+            state="readonly", width=12).pack(side="left")
 
-        # Route selection behavior: manual HTML inputs disable fetch mode, and
-        # fetch mode locks manual HTML entries while running.
-        self.asset_html_entry.bind("<KeyRelease>", lambda _e: self._on_html_inputs_changed())
-        self.nohud_html_entry.bind("<KeyRelease>", lambda _e: self._on_html_inputs_changed())
-        self.asset_html_entry.bind("<FocusOut>", lambda _e: self._on_html_inputs_changed())
-        self.nohud_html_entry.bind("<FocusOut>", lambda _e: self._on_html_inputs_changed())
-        self._on_html_inputs_changed()
-
-        btn_row = ttk.Frame(cfg)
-        btn_row.grid(row=7, column=0, columnspan=3, pady=(6, 0))
-        self.preflight_btn = ttk.Button(
-            btn_row, text="Pre-flight Check", command=self._on_preflight)
-        self.preflight_btn.pack(side="left", padx=(0, 12))
-        ToolTip(self.preflight_btn, "Validates file paths and necessary tools (ffmpeg, ffplay) before installing.")
+        # --- Button row ---
+        btn_row = ttk.Frame(install_panel)
+        btn_row.pack(fill="x", pady=(4, 0))
 
         self.install_btn = ttk.Button(
-            btn_row, text="Install Map", command=self._on_install, state="disabled")
+            btn_row, text="Install", command=self._on_unified_install)
         self.install_btn.pack(side="left")
-        ToolTip(self.install_btn, "Starts the download and installation pipeline.")
+        ToolTip(self.install_btn,
+                "Run the install pipeline for the currently selected mode.")
+
+        # Aliases so existing control-toggle code keeps working
+        self.fetch_install_btn = self.install_btn
+        self.mode_install_btn = self.install_btn
+
+        self.preflight_btn = ttk.Button(
+            btn_row, text="Pre-flight Check", command=self._on_preflight)
+        self.preflight_btn.pack(side="left", padx=(12, 0))
+        ToolTip(self.preflight_btn,
+                "Validates file paths and necessary tools (ffmpeg, ffplay) "
+                "before installing.")
 
         self.clear_cache_btn = ttk.Button(
             btn_row, text="Clear Path Cache", command=self._on_clear_cache)
         self.clear_cache_btn.pack(side="left", padx=(12, 0))
-        ToolTip(self.clear_cache_btn, "Deletes the saved Just Dance 2021 game data paths. The next Pre-flight Check or Install will re-scan your system for the game files.")
+        ToolTip(self.clear_cache_btn,
+                "Deletes the saved Just Dance 2021 game data paths. "
+                "The next Pre-flight Check or Install will re-scan.")
 
         self.readjust_btn = ttk.Button(
             btn_row, text="Re-adjust Offset", command=self._on_readjust)
         self.readjust_btn.pack(side="left", padx=(12, 0))
-        ToolTip(self.readjust_btn, "Re-adjust audio/video offset on an already-installed map.\nSelect the map's download folder (must contain .ogg and .webm files).")
+        ToolTip(self.readjust_btn,
+                "Re-adjust audio/video offset on an already-installed map.\n"
+                "Select the map's download folder "
+                "(must contain .ogg and .webm files).")
 
         self.settings_btn = ttk.Button(
             btn_row, text="Settings", command=self._on_settings)
         self.settings_btn.pack(side="left", padx=(12, 0))
-        ToolTip(self.settings_btn, "Open installer settings (preflight, notifications, cleanup, quality defaults).")
+        ToolTip(self.settings_btn,
+                "Open installer settings (preflight, notifications, "
+                "cleanup, quality defaults).")
 
         self.reset_btn = ttk.Button(
             btn_row, text="Reset State", command=self._on_reset_state)
         self.reset_btn.pack(side="left", padx=(12, 0))
-        ToolTip(self.reset_btn, "Clear current HTML inputs/progress and unlock Fetch mode without restarting the app.")
+        ToolTip(self.reset_btn,
+                "Clear current inputs/progress and unlock all controls "
+                "without restarting the app.")
 
         # ===================== MIDDLE: PROGRESS + PREVIEW =====================
         middle = ttk.Frame(container)
@@ -384,18 +467,20 @@ class MapInstallerGUI:
         prev_frame.pack(side="right", fill="both", expand=True)
 
         # Black container for embedded video preview
-        self.preview_container = tk.Frame(prev_frame, bg="black", width=480, height=270)
+        self.preview_container = tk.Frame(
+            prev_frame, bg="black", width=480, height=270)
         self.preview_container.pack(fill="both", expand=True)
         self.preview_container.pack_propagate(False)
 
-        # "No Preview" overlay label (centered on the black frame)
+        # "No Preview" overlay label
         self.preview_label = tk.Label(
             self.preview_container, text="No Preview",
             fg="#555555", bg="black", font=("Consolas", 14))
         self.preview_label.place(relx=0.5, rely=0.5, anchor="center")
 
         # Create PreviewManager and let it build the media controls
-        self.preview = PreviewManager(self.root, self.preview_container, self.preview_label)
+        self.preview = PreviewManager(
+            self.root, self.preview_container, self.preview_label)
         self.media_ctrls = self.preview.build_controls(prev_frame)
 
         # ===================== LOG OUTPUT =====================
@@ -409,8 +494,8 @@ class MapInstallerGUI:
             log_inner, height=6, state="disabled", wrap="word",
             font=("Consolas", 8), bg="#1e1e1e", fg="#cccccc",
             insertbackground="#cccccc")
-        log_sb = ttk.Scrollbar(log_inner, orient="vertical",
-                               command=self.log_text.yview)
+        log_sb = ttk.Scrollbar(
+            log_inner, orient="vertical", command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=log_sb.set)
         self.log_text.pack(side="left", fill="both", expand=True)
         log_sb.pack(side="right", fill="y")
@@ -420,8 +505,12 @@ class MapInstallerGUI:
             container, text="Sync Refinement", padding=6)
         self.sync_frame.pack(fill="x", pady=(0, 4))
 
-        tk.Label(self.sync_frame, text="Fine-tune audio/video timing. Hover over buttons for more details.",
-                 font=("Consolas", 8, "italic"), fg="#888888").pack(anchor="w", pady=(0, 4))
+        tk.Label(
+            self.sync_frame,
+            text="Fine-tune audio/video timing. "
+                 "Hover over buttons for more details.",
+            font=("Consolas", 8, "italic"), fg="#888888").pack(
+                anchor="w", pady=(0, 4))
 
         deltas = [1, 0.1, 0.01, 0.001]
 
@@ -433,18 +522,23 @@ class MapInstallerGUI:
         ]):
             row = ttk.Frame(self.sync_frame)
             row.pack(fill="x", pady=2)
-            
+
             if row_idx == 0:
                 cb = ttk.Checkbutton(
                     row, text=label, variable=self.v_override_enabled_var,
                     command=self._on_v_override_toggle, width=18)
                 cb.pack(side="left")
-                ToolTip(cb, "Checking this forces the map to use a custom video start time. Use if you know what you are doing.")
+                ToolTip(cb,
+                        "Checking this forces the map to use a custom "
+                        "video start time. Use if you know what you are doing.")
             else:
                 lbl = ttk.Label(row, text=label, width=18, anchor="e",
-                          font=("Consolas", 9, "bold"))
+                                font=("Consolas", 9, "bold"))
                 lbl.pack(side="left")
-                ToolTip(lbl, "Positive values pad the audio with silence at the start. Negative values trim the audio from the beginning.")
+                ToolTip(lbl,
+                        "Positive values pad the audio with silence at the "
+                        "start. Negative values trim the audio from the "
+                        "beginning.")
 
             # Decrement buttons (largest delta first)
             for d in deltas:
@@ -456,8 +550,8 @@ class MapInstallerGUI:
                     self._vo_row_widgets.append(btn)
 
             # Value display
-            val_entry = ttk.Entry(row, width=14, justify="center",
-                                  font=("Consolas", 10))
+            val_entry = ttk.Entry(
+                row, width=14, justify="center", font=("Consolas", 10))
             val_entry.pack(side="left", padx=6)
             val_entry.insert(0, f"{var.get():.5f}")
             val_entry.configure(state="readonly")
@@ -482,22 +576,30 @@ class MapInstallerGUI:
         self.sync_beatgrid_btn = ttk.Button(
             actions, text="Sync Beatgrid", command=self._on_sync_beatgrid)
         self.sync_beatgrid_btn.pack(side="left", padx=(0, 6))
-        ToolTip(self.sync_beatgrid_btn, "Copies the Video Override value to the Audio Offset (aligning them 1:1).")
+        ToolTip(self.sync_beatgrid_btn,
+                "Copies the Video Override value to the Audio Offset "
+                "(aligning them 1:1).")
 
         self.pad_audio_btn = ttk.Button(
             actions, text="Pad Audio", command=self._on_pad_audio)
         self.pad_audio_btn.pack(side="left", padx=(0, 6))
-        ToolTip(self.pad_audio_btn, "Calculates the difference in length between the video and audio, then auto-fills the Audio Offset to pad the audio with silence so they end at the same time.")
+        ToolTip(self.pad_audio_btn,
+                "Calculates the difference in length between the video "
+                "and audio, then auto-fills the Audio Offset to pad the "
+                "audio with silence so they end at the same time.")
 
         self.preview_btn = ttk.Button(
             actions, text="Preview", command=self._on_preview)
         self.preview_btn.pack(side="left", padx=(0, 6))
-        ToolTip(self.preview_btn, "Starts the embedded video and audio preview to test the current synchronization offsets.")
+        ToolTip(self.preview_btn,
+                "Starts the embedded video and audio preview to test the "
+                "current synchronization offsets.")
 
         self.stop_preview_btn = ttk.Button(
             actions, text="Stop Preview", command=self._on_stop_preview)
         self.stop_preview_btn.pack(side="left", padx=(0, 6))
-        ToolTip(self.stop_preview_btn, "Stops the embedded video and audio preview.")
+        ToolTip(self.stop_preview_btn,
+                "Stops the embedded video and audio preview.")
         self.apply_btn = ttk.Button(
             actions, text="Apply & Finish", command=self._on_apply)
         self.apply_btn.pack(side="left")
@@ -560,6 +662,7 @@ class MapInstallerGUI:
         return fallback
 
     def _set_html_inputs_state(self, enabled):
+        """Enable/disable HTML input entries (only visible in html mode)."""
         state = "normal" if enabled else "disabled"
         self.asset_html_entry.configure(state=state)
         self.nohud_html_entry.configure(state=state)
@@ -567,21 +670,8 @@ class MapInstallerGUI:
         self.nohud_browse_btn.configure(state=state)
 
     def _on_html_inputs_changed(self):
-        """Switch between manual HTML route and codename fetch route automatically."""
-        if self._fetch_mode_lock:
-            return
-
-        asset_html = self.asset_html_entry.get().strip()
-        nohud_html = self.nohud_html_entry.get().strip()
-        has_manual_html = bool(asset_html or nohud_html)
-
-        if has_manual_html:
-            self.codename_entry.configure(state="disabled")
-            self.fetch_install_btn.configure(state="disabled")
-        else:
-            if not self._pipeline_running:
-                self.codename_entry.configure(state="normal")
-                self.fetch_install_btn.configure(state="normal")
+        """No-op -- mode routing is handled by the mode combobox now."""
+        pass
 
     def _reset_ui_state(self, clear_html=True):
         """Return the installer UI to an idle state without restarting the app."""
@@ -605,9 +695,7 @@ class MapInstallerGUI:
 
         # Restore top-level controls.
         self.preflight_btn.configure(state="normal", text="Pre-flight Check")
-        self.install_btn.configure(state="disabled")
-        self.mode_install_btn.configure(state="normal")
-        self.fetch_install_btn.configure(state="normal")
+        self.install_btn.configure(state="normal")
         self.codename_entry.configure(state="normal")
         self._set_html_inputs_state(True)
 
@@ -615,7 +703,7 @@ class MapInstallerGUI:
             self.asset_html_entry.delete(0, tk.END)
             self.nohud_html_entry.delete(0, tk.END)
 
-        self.mode_status_var.set("Mode panel ready. Select mode and source, then Analyze.")
+        self.mode_status_var.set("Select a mode and source, then Analyze.")
 
         self._on_html_inputs_changed()
 
@@ -677,33 +765,91 @@ class MapInstallerGUI:
             path = filedialog.askopenfilename(
                 filetypes=[("IPK files", "*.ipk"), ("All files", "*.*")])
         else:
-            # Allow selecting either an anchor file (assets/nohud/ogg/webm)
-            # or a full folder; if file selection is canceled, fallback to folder.
-            path = filedialog.askopenfilename(filetypes=[("All supported", "*.html *.ogg *.webm *.ipk"), ("All files", "*.*")])
+            path = filedialog.askopenfilename(
+                filetypes=[("All supported", "*.html *.ogg *.webm *.ipk"),
+                           ("All files", "*.*")])
             if not path:
                 path = filedialog.askdirectory(mustexist=True)
 
         if not path:
             return
 
-        self.source_path_entry.delete(0, tk.END)
-        self.source_path_entry.insert(0, path)
+        # Write to the correct entry based on mode
+        if mode == "manual":
+            target = self._manual_source_entry
+        elif mode == "ipk":
+            target = self.source_path_entry
+        elif mode == "batch":
+            target = self._batch_folder_entry
+        else:
+            target = self.source_path_entry
+        target.delete(0, tk.END)
+        target.insert(0, path)
         self._analyze_mode_source()
 
     def _on_source_mode_changed(self):
         mode = self.source_mode_var.get()
-        manual_enabled = "readonly" if mode == "manual" else "disabled"
-        self.manual_submode_combo.configure(state=manual_enabled)
+
+        # Swap mode-specific frame
+        for key, frame in self._mode_frames.items():
+            if key == mode:
+                frame.pack(fill="x")
+            else:
+                frame.pack_forget()
+
+        # Show/hide manual submode selector
+        if mode == "manual":
+            self._submode_label.pack(side="left", padx=(12, 4))
+            self.manual_submode_combo.pack(side="left")
+            self.manual_submode_combo.configure(state="readonly")
+        else:
+            self._submode_label.pack_forget()
+            self.manual_submode_combo.pack_forget()
+
+        # Show/hide Analyze/Prepare buttons (not needed for fetch mode)
+        if mode == "fetch":
+            self.mode_analyze_btn.pack_forget()
+            self.mode_prepare_btn.pack_forget()
+        else:
+            self.mode_analyze_btn.pack(side="left")
+            self.mode_prepare_btn.pack(side="left", padx=(8, 0))
 
         source_hint = "file" if mode == "ipk" else "folder"
         self.mode_status_var.set(
-            f"Mode: {mode}. Select a source {source_hint} and click Analyze.")
+            f"Mode: {mode}. Select a source {source_hint} and click Analyze."
+            if mode not in ("fetch",)
+            else "Mode: fetch. Enter a codename and click Install.")
+
+    def _get_source_path(self):
+        """Return the source path from the appropriate entry for the current mode."""
+        mode = self.source_mode_var.get()
+        if mode == "ipk":
+            return self.source_path_entry.get().strip()
+        if mode == "manual":
+            return self._manual_source_entry.get().strip()
+        if mode == "batch":
+            return self._batch_folder_entry.get().strip()
+        return ""
+
+    def _get_audio_path(self):
+        """Return the audio path from the appropriate entry for the current mode."""
+        mode = self.source_mode_var.get()
+        if mode == "manual":
+            return self._manual_audio_entry.get().strip()
+        return self.mode_audio_entry.get().strip()
+
+    def _get_video_path(self):
+        """Return the video path from the appropriate entry for the current mode."""
+        mode = self.source_mode_var.get()
+        if mode == "manual":
+            return self._manual_video_entry.get().strip()
+        return self.mode_video_entry.get().strip()
 
     def _analyze_mode_source(self):
         mode = self.source_mode_var.get()
-        source_path = self.source_path_entry.get().strip()
-        audio_path = self.mode_audio_entry.get().strip()
-        video_path = self.mode_video_entry.get().strip()
+        source_path = self._get_source_path()
+        audio_path = self._get_audio_path()
+        video_path = self._get_video_path()
 
         if source_path and os.path.isfile(source_path) and mode in {"manual", "batch", "html"}:
             source_folder = os.path.dirname(source_path)
@@ -712,7 +858,7 @@ class MapInstallerGUI:
 
         if mode == "fetch":
             self._source_spec = source_analysis.SourceSpec(mode="fetch", ready_for_prepare=True, ready_for_install=True)
-            self.mode_status_var.set("Fetch mode is ready. Use codename then Install From Mode.")
+            self.mode_status_var.set("Fetch mode is ready. Enter a codename and click Install.")
             return
 
         if mode == "html":
@@ -751,10 +897,16 @@ class MapInstallerGUI:
 
         self._source_spec = spec
 
-        if spec.audio_path and not self.mode_audio_entry.get().strip():
-            self.mode_audio_entry.insert(0, spec.audio_path)
-        if spec.video_path and not self.mode_video_entry.get().strip():
-            self.mode_video_entry.insert(0, spec.video_path)
+        if spec.audio_path and not self._get_audio_path():
+            if mode == "manual":
+                self._manual_audio_entry.insert(0, spec.audio_path)
+            else:
+                self.mode_audio_entry.insert(0, spec.audio_path)
+        if spec.video_path and not self._get_video_path():
+            if mode == "manual":
+                self._manual_video_entry.insert(0, spec.video_path)
+            else:
+                self.mode_video_entry.insert(0, spec.video_path)
 
         # Auto-populate legacy HTML inputs so existing flow stays usable.
         if spec.asset_html:
@@ -810,6 +962,10 @@ class MapInstallerGUI:
 
         self.mode_status_var.set("Prepare complete.")
 
+    def _on_unified_install(self):
+        """Single Install button dispatch based on current mode."""
+        self._install_from_mode()
+
     def _install_from_mode(self):
         mode = self.source_mode_var.get()
         if mode == "fetch":
@@ -821,7 +977,7 @@ class MapInstallerGUI:
             return
 
         if mode == "batch":
-            source_root = self.source_path_entry.get().strip()
+            source_root = self._batch_folder_entry.get().strip()
             if source_root and os.path.isfile(source_root):
                 source_root = os.path.dirname(source_root)
             if not source_root or not os.path.isdir(source_root):
@@ -914,8 +1070,8 @@ class MapInstallerGUI:
                 source_type=source_type,
                 source_dir=spec.source_path,
                 ipk_extracted=spec.ipk_extracted,
-                audio_path=self.mode_audio_entry.get().strip() or spec.audio_path,
-                video_path=self.mode_video_entry.get().strip() or spec.video_path,
+                audio_path=self._get_audio_path() or spec.audio_path,
+                video_path=self._get_video_path() or spec.video_path,
                 codename=spec.codename,
                 manual_ipk_file=spec.ipk_file,
             )
@@ -1229,12 +1385,7 @@ class MapInstallerGUI:
 
         # Disable controls during fetch
         self._fetch_mode_lock = True
-        self._pipeline_running = True
-        self.fetch_install_btn.configure(state="disabled")
-        self.install_btn.configure(state="disabled")
-        self.preflight_btn.configure(state="disabled")
-        self.codename_entry.configure(state="disabled")
-        self._set_html_inputs_state(False)
+        self._disable_all_install_controls()
 
         # Reset progress
         for i in range(len(self.STEP_NAMES)):
@@ -1254,8 +1405,7 @@ class MapInstallerGUI:
                 def _proceed():
                     self._pipeline_running = False
 
-                    # Entries may still be disabled from fetch-mode lock.
-                    # Temporarily enable so fetched paths can be injected.
+                    # Temporarily enable HTML inputs so fetched paths can be injected.
                     self._set_html_inputs_state(True)
 
                     # Fill Asset HTML
@@ -1267,7 +1417,6 @@ class MapInstallerGUI:
                     self.nohud_html_entry.insert(0, nohud_html)
 
                     # Re-enable and trigger install
-                    self.fetch_install_btn.configure(state="normal")
                     self.install_btn.configure(state="normal")
                     self.preflight_btn.configure(state="normal")
                     self._on_install(started_from_fetch=True)
@@ -1278,15 +1427,7 @@ class MapInstallerGUI:
                 err_msg = str(e)
                 print(f"ERROR: {err_msg}")
                 def _error():
-                    self._pipeline_running = False
-                    self.fetch_install_btn.configure(state="normal")
-                    self.install_btn.configure(
-                        state="normal" if self._preflight_passed else "disabled")
-                    self.preflight_btn.configure(state="normal")
-                    self.codename_entry.configure(state="normal")
-                    self._set_html_inputs_state(True)
-                    self._fetch_mode_lock = False
-                    self._on_html_inputs_changed()
+                    self._restore_install_controls()
                     messagebox.showerror(
                         "Fetch Failed",
                         f"JDH_Downloader failed for '{codename}':\n\n{err_msg}")
@@ -1745,7 +1886,6 @@ class MapInstallerGUI:
                         f"AUDIO_OFFSET: {a_offset:.5f}\n\n"
                         f"Map '{state.map_name}' is ready to use.")
                     self.install_btn.configure(state="normal")
-                    self.fetch_install_btn.configure(state="normal")
 
                 self.root.after(0, _done)
                 self.root.after(100, lambda: self._prompt_cleanup(state))
