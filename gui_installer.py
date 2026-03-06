@@ -272,33 +272,23 @@ class MapInstallerGUI:
         self.nohud_browse_btn.pack(side="left", padx=(4, 0))
         self._mode_frames["html"] = f_html
 
-        # IPK frame: IPK file + Audio + Video
+        # IPK frame: IPK file only (audio/video are inside the IPK)
         f_ipk = ttk.Frame(self._mode_frame_parent)
-        for row_label, attr_name, filetypes in [
-            ("IPK File:", "source_path_entry",
-             [("IPK files", "*.ipk"), ("All files", "*.*")]),
-            ("Audio (.ogg):", "mode_audio_entry",
-             [("OGG files", "*.ogg"), ("All files", "*.*")]),
-            ("Video (.webm):", "mode_video_entry",
-             [("WEBM files", "*.webm"), ("All files", "*.*")]),
-        ]:
-            r = ttk.Frame(f_ipk)
-            r.pack(fill="x", pady=1)
-            ttk.Label(r, text=row_label, width=16, anchor="e").pack(
-                side="left", padx=(0, 4))
-            entry = ttk.Entry(r, width=64)
-            entry.pack(side="left", fill="x", expand=True)
-            # source_path_entry is created fresh here; audio/video reuse existing attrs
-            if attr_name == "source_path_entry":
-                self.source_path_entry = entry
-            elif attr_name == "mode_audio_entry":
-                self.mode_audio_entry = entry
-            elif attr_name == "mode_video_entry":
-                self.mode_video_entry = entry
-            btn = ttk.Button(
-                r, text="Browse", width=8,
-                command=lambda e=entry, ft=filetypes: self._browse_specific_file(e, ft))
-            btn.pack(side="left", padx=(4, 0))
+        r = ttk.Frame(f_ipk)
+        r.pack(fill="x", pady=1)
+        ttk.Label(r, text="IPK File:", width=16, anchor="e").pack(
+            side="left", padx=(0, 4))
+        self.source_path_entry = ttk.Entry(r, width=64)
+        self.source_path_entry.pack(side="left", fill="x", expand=True)
+        ttk.Button(
+            r, text="Browse", width=8,
+            command=lambda: self._browse_specific_file(
+                self.source_path_entry,
+                [("IPK files", "*.ipk"), ("All files", "*.*")])
+        ).pack(side="left", padx=(4, 0))
+        # Hidden entries so _get_audio_path / _get_video_path don't error for IPK mode
+        self.mode_audio_entry = ttk.Entry(f_ipk)
+        self.mode_video_entry = ttk.Entry(f_ipk)
         self._mode_frames["ipk"] = f_ipk
 
         # MANUAL frame: Folder + Audio + Video (reuses ipk entries via shared refs)
@@ -386,13 +376,13 @@ class MapInstallerGUI:
             command=lambda e=None: self._browse(self.jd_dir_entry, "dir"))
         self.jd_browse_btn.pack(side="left", padx=(4, 0))
 
-        q_row = ttk.Frame(common)
-        q_row.pack(fill="x", pady=1)
-        ttk.Label(q_row, text="Video Quality:", width=16, anchor="e").pack(
+        self._quality_row = ttk.Frame(common)
+        self._quality_row.pack(fill="x", pady=1)
+        ttk.Label(self._quality_row, text="Video Quality:", width=16, anchor="e").pack(
             side="left", padx=(0, 4))
         self.quality_var = tk.StringVar(value="ultra_hd")
         ttk.Combobox(
-            q_row, textvariable=self.quality_var,
+            self._quality_row, textvariable=self.quality_var,
             values=["ultra_hd", "ultra", "high_hd", "high",
                     "mid_hd", "mid", "low_hd", "low"],
             state="readonly", width=12).pack(side="left")
@@ -512,27 +502,49 @@ class MapInstallerGUI:
             font=("Consolas", 8, "italic"), fg="#888888").pack(
                 anchor="w", pady=(0, 4))
 
+        # IPK-specific warning (hidden by default, shown after IPK install)
+        self._ipk_sync_warning = tk.Label(
+            self.sync_frame,
+            text="IPK maps require manual Video Offset adjustment. "
+                 "X360 binaries do not store video timing data, so the "
+                 "calculated offset is an approximation. "
+                 "Audio Offset is disabled because IPK audio is already "
+                 "pre-trimmed. Adjust VIDEO_OFFSET until the video matches "
+                 "the beat.",
+            font=("Consolas", 8, "bold"), fg="#CC6600",
+            wraplength=900, justify="left")
+        # Not packed yet -- shown dynamically by _on_pipeline_complete
+
         deltas = [1, 0.1, 0.01, 0.001]
 
-        # Keep track of Video Override row widgets to toggle them
+        # Keep track of Video/Audio Override row widgets to toggle them
         self._vo_row_widgets = []
+        self._ao_row_widgets = []
         for row_idx, (label, var) in enumerate([
-            ("VIDEO_OVERRIDE", self.v_override_var),
+            ("VIDEO_OFFSET", self.v_override_var),
             ("AUDIO_OFFSET", self.a_offset_var),
         ]):
             row = ttk.Frame(self.sync_frame)
             row.pack(fill="x", pady=2)
 
             if row_idx == 0:
+                # Checkbutton + right-aligned label so it aligns with AUDIO_OFFSET
                 cb = ttk.Checkbutton(
-                    row, text=label, variable=self.v_override_enabled_var,
-                    command=self._on_v_override_toggle, width=18)
+                    row, variable=self.v_override_enabled_var,
+                    command=self._on_v_override_toggle)
                 cb.pack(side="left")
+                vo_lbl = ttk.Label(row, text=label, width=16, anchor="e",
+                                   font=("Consolas", 9, "bold"))
+                vo_lbl.pack(side="left")
                 ToolTip(cb,
                         "Checking this forces the map to use a custom "
                         "video start time. Use if you know what you are doing.")
             else:
-                lbl = ttk.Label(row, text=label, width=18, anchor="e",
+                # Spacer to match checkbutton width, then right-aligned label
+                spacer = ttk.Frame(row, width=20)
+                spacer.pack(side="left")
+                spacer.pack_propagate(False)
+                lbl = ttk.Label(row, text=label, width=16, anchor="e",
                                 font=("Consolas", 9, "bold"))
                 lbl.pack(side="left")
                 ToolTip(lbl,
@@ -548,6 +560,8 @@ class MapInstallerGUI:
                 btn.pack(side="left", padx=1)
                 if row_idx == 0:
                     self._vo_row_widgets.append(btn)
+                else:
+                    self._ao_row_widgets.append(btn)
 
             # Value display
             val_entry = ttk.Entry(
@@ -560,6 +574,7 @@ class MapInstallerGUI:
                 self._vo_row_widgets.append(val_entry)
             else:
                 self._ao_display = val_entry
+                self._ao_row_widgets.append(val_entry)
 
             # Increment buttons (smallest delta first)
             for d in reversed(deltas):
@@ -569,6 +584,8 @@ class MapInstallerGUI:
                 btn.pack(side="left", padx=1)
                 if row_idx == 0:
                     self._vo_row_widgets.append(btn)
+                else:
+                    self._ao_row_widgets.append(btn)
 
         # Action buttons
         actions = ttk.Frame(self.sync_frame)
@@ -577,7 +594,7 @@ class MapInstallerGUI:
             actions, text="Sync Beatgrid", command=self._on_sync_beatgrid)
         self.sync_beatgrid_btn.pack(side="left", padx=(0, 6))
         ToolTip(self.sync_beatgrid_btn,
-                "Copies the Video Override value to the Audio Offset "
+                "Copies the Video Offset value to the Audio Offset "
                 "(aligning them 1:1).")
 
         self.pad_audio_btn = ttk.Button(
@@ -613,20 +630,22 @@ class MapInstallerGUI:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _on_v_override_toggle(self):
+    def _on_v_override_toggle(self, suppress_popup=False):
         enabled = self.v_override_enabled_var.get()
-        if enabled:
+        if enabled and not suppress_popup:
             messagebox.showwarning(
-                "Video Override",
+                "Video Offset",
                 "Audio offsets are mostly enough.\n\n"
-                "Be sure to test it out first before enabling video override."
+                "Be sure to test it out first before enabling video offset."
             )
+
+        if enabled:
             state = "normal"
             ro_state = "readonly"
         else:
             state = "disabled"
             ro_state = "disabled"
-            
+
         for w in self._vo_row_widgets:
             if w == self._vo_display:
                 w.configure(state=ro_state)
@@ -683,6 +702,10 @@ class MapInstallerGUI:
         self.preview.kill()
         self.pipeline_state = None
 
+        # Clear stale hidden audio/video entries (IPK mode)
+        self.mode_audio_entry.delete(0, tk.END)
+        self.mode_video_entry.delete(0, tk.END)
+
         # Reset progress and refinement controls.
         for i in range(len(self.STEP_NAMES)):
             self._update_step_status(i, "pending")
@@ -715,7 +738,7 @@ class MapInstallerGUI:
             return
 
         self._reset_ui_state(clear_html=True)
-        print("    UI state reset. You can run Fetch & Install again.")
+        print("    UI state reset.")
 
     def _browse(self, entry, browse_type):
         if browse_type == "html":
@@ -758,6 +781,13 @@ class MapInstallerGUI:
         if path:
             entry.delete(0, tk.END)
             entry.insert(0, path)
+            # When a new IPK file is selected, clear stale analysis and
+            # audio/video entries so the next Analyze/Install picks up the
+            # new file's contents instead of reusing old paths.
+            if entry is self.source_path_entry:
+                self._source_spec = None
+                self.mode_audio_entry.delete(0, tk.END)
+                self.mode_video_entry.delete(0, tk.END)
 
     def _browse_mode_source(self):
         mode = self.source_mode_var.get()
@@ -765,11 +795,7 @@ class MapInstallerGUI:
             path = filedialog.askopenfilename(
                 filetypes=[("IPK files", "*.ipk"), ("All files", "*.*")])
         else:
-            path = filedialog.askopenfilename(
-                filetypes=[("All supported", "*.html *.ogg *.webm *.ipk"),
-                           ("All files", "*.*")])
-            if not path:
-                path = filedialog.askdirectory(mustexist=True)
+            path = filedialog.askdirectory(mustexist=True)
 
         if not path:
             return
@@ -814,6 +840,12 @@ class MapInstallerGUI:
             self.mode_analyze_btn.pack(side="left")
             self.mode_prepare_btn.pack(side="left", padx=(8, 0))
 
+        # Hide quality dropdown for IPK mode (video has only one quality)
+        if mode == "ipk":
+            self._quality_row.pack_forget()
+        else:
+            self._quality_row.pack(fill="x", pady=1)
+
         source_hint = "file" if mode == "ipk" else "folder"
         self.mode_status_var.set(
             f"Mode: {mode}. Select a source {source_hint} and click Analyze."
@@ -848,8 +880,15 @@ class MapInstallerGUI:
     def _analyze_mode_source(self):
         mode = self.source_mode_var.get()
         source_path = self._get_source_path()
-        audio_path = self._get_audio_path()
-        video_path = self._get_video_path()
+
+        # For IPK mode, always let the analyzer auto-detect audio/video from
+        # the IPK extraction rather than re-using stale GUI entry values.
+        if mode == "ipk":
+            audio_path = ""
+            video_path = ""
+        else:
+            audio_path = self._get_audio_path()
+            video_path = self._get_video_path()
 
         if source_path and os.path.isfile(source_path) and mode in {"manual", "batch", "html"}:
             source_folder = os.path.dirname(source_path)
@@ -883,7 +922,9 @@ class MapInstallerGUI:
                 self.nohud_html_entry.get().strip(),
             )
         elif mode == "ipk":
-            spec = source_analysis.analyze_ipk_file_mode(source_path, audio_path, video_path)
+            # Always re-detect audio/video from the IPK directory to avoid
+            # stale paths from a previous installation.
+            spec = source_analysis.analyze_ipk_file_mode(source_path)
         elif mode == "manual":
             spec = source_analysis.analyze_manual_mode(source_folder, self.manual_submode_var.get())
         elif mode == "batch":
@@ -897,16 +938,25 @@ class MapInstallerGUI:
 
         self._source_spec = spec
 
-        if spec.audio_path and not self._get_audio_path():
+        if spec.audio_path:
             if mode == "manual":
+                self._manual_audio_entry.delete(0, tk.END)
                 self._manual_audio_entry.insert(0, spec.audio_path)
             else:
+                self.mode_audio_entry.delete(0, tk.END)
                 self.mode_audio_entry.insert(0, spec.audio_path)
-        if spec.video_path and not self._get_video_path():
+        elif mode == "ipk":
+            # No audio detected yet (IPK not extracted); clear stale entry
+            self.mode_audio_entry.delete(0, tk.END)
+        if spec.video_path:
             if mode == "manual":
+                self._manual_video_entry.delete(0, tk.END)
                 self._manual_video_entry.insert(0, spec.video_path)
             else:
+                self.mode_video_entry.delete(0, tk.END)
                 self.mode_video_entry.insert(0, spec.video_path)
+        elif mode == "ipk":
+            self.mode_video_entry.delete(0, tk.END)
 
         # Auto-populate legacy HTML inputs so existing flow stays usable.
         if spec.asset_html:
@@ -949,6 +999,12 @@ class MapInstallerGUI:
             except Exception as e:
                 messagebox.showerror("Prepare Failed", f"Could not unpack IPK:\n{e}")
                 return
+            # Re-detect audio after extraction (may find .wav.ckd inside IPK)
+            if not spec.audio_path:
+                from source_analysis import _pick_audio
+                spec.audio_path = _pick_audio(os.path.dirname(spec.ipk_file), spec.codename)
+                if not spec.audio_path:
+                    spec.audio_path = _pick_audio(spec.ipk_extracted, spec.codename)
             spec.ready_for_install = bool(spec.audio_path and spec.video_path)
             self.mode_status_var.set(f"Prepared IPK source at {spec.ipk_extracted}")
             return
@@ -986,8 +1042,8 @@ class MapInstallerGUI:
             self._run_batch_mode(source_root)
             return
 
-        if not self._source_spec:
-            self._analyze_mode_source()
+        # Always re-analyze to pick up changes (e.g. new IPK file selected)
+        self._analyze_mode_source()
         spec = self._source_spec
         if not spec:
             return
@@ -1134,7 +1190,11 @@ class MapInstallerGUI:
         """Enable or disable all widgets inside the sync refinement frame."""
         for child in self.sync_frame.winfo_children():
             self._set_widget_state_recursive(child, state)
-            
+
+        # Hide IPK warning when sync is disabled
+        if state == "disabled":
+            self._ipk_sync_warning.pack_forget()
+
         # Re-apply video override specific state if sync frame is enabled
         if state == "normal" and not self.v_override_enabled_var.get():
             for w in self._vo_row_widgets:
@@ -1326,7 +1386,7 @@ class MapInstallerGUI:
         messagebox.showinfo(
             "Readjust Mode",
             f"Loaded '{state.map_name}' for offset readjustment.\n\n"
-            f"VIDEO_OVERRIDE: {state.v_override}\n"
+            f"VIDEO_OFFSET: {state.v_override}\n"
             f"AUDIO_OFFSET: {state.a_offset}\n\n"
             "Use the Sync Refinement panel to adjust, then click 'Apply & Finish'.")
 
@@ -1764,18 +1824,52 @@ class MapInstallerGUI:
         self._set_sync_state("normal")
         self._set_preview_state("normal")
 
+        # Show IPK-specific sync warning and auto-enable VIDEO_OFFSET
+        is_ipk = getattr(state, 'source_type', '') == 'ipk_file'
+        if is_ipk:
+            self._ipk_sync_warning.pack(anchor="w", pady=(0, 4))
+            # Move it to the top of the sync frame (after the info label)
+            children = self.sync_frame.winfo_children()
+            if len(children) > 1:
+                self._ipk_sync_warning.pack_configure(after=children[0])
+            if not self.v_override_enabled_var.get():
+                self.v_override_enabled_var.set(True)
+                self._on_v_override_toggle(suppress_popup=True)
+            # Disable AUDIO_OFFSET for IPK maps (binary audio is pre-trimmed)
+            for w in self._ao_row_widgets:
+                if w == self._ao_display:
+                    w.configure(state="disabled")
+                else:
+                    w.configure(state="disabled")
+            self.pad_audio_btn.configure(state="disabled")
+            self.sync_beatgrid_btn.configure(state="disabled")
+        else:
+            self._ipk_sync_warning.pack_forget()
+
         # Auto-start preview so users can validate sync immediately.
         self.preview.launch(
             state.video_path, state.audio_path,
             self.v_override_var.get(), self.a_offset_var.get())
 
         if not self._settings.get("suppress_offset_notification", False):
-            messagebox.showinfo(
-                "Complete",
-                f"Installation pipeline finished for {state.map_name}.\n\n"
-                "The Tool isnt perfect, offset refinement is needed.\n\n"
-                "Use the Sync Refinement panel below to fine-tune "
-                "audio/video timing, then click 'Apply & Finish'.")
+            if is_ipk:
+                messagebox.showinfo(
+                    "Complete",
+                    f"Installation pipeline finished for {state.map_name}.\n\n"
+                    "IPK maps require manual Video Offset adjustment.\n"
+                    "X360 binaries do not store video timing data, so the "
+                    "calculated offset is an approximation.\n\n"
+                    "VIDEO_OFFSET has been enabled automatically.\n"
+                    "AUDIO_OFFSET is disabled (IPK audio is pre-trimmed).\n\n"
+                    "Use the Sync Refinement panel to adjust until the "
+                    "video matches the beat, then click 'Apply & Finish'.")
+            else:
+                messagebox.showinfo(
+                    "Complete",
+                    f"Installation pipeline finished for {state.map_name}.\n\n"
+                    "The Tool isnt perfect, offset refinement is needed.\n\n"
+                    "Use the Sync Refinement panel below to fine-tune "
+                    "audio/video timing, then click 'Apply & Finish'.")
 
     # ------------------------------------------------------------------
     # Sync refinement callbacks
@@ -1864,7 +1958,7 @@ class MapInstallerGUI:
 
         def _apply():
             try:
-                print(f"    Applying: VIDEO_OVERRIDE={v_override:.5f}, "
+                print(f"    Applying: VIDEO_OFFSET={v_override:.5f}, "
                       f"AUDIO_OFFSET={a_offset:.5f}")
                 map_builder.generate_text_files(
                     state.map_name, state.ipk_extracted,
@@ -1882,10 +1976,15 @@ class MapInstallerGUI:
                     messagebox.showinfo(
                         "Applied",
                         f"Sync values applied and files regenerated.\n\n"
-                        f"VIDEO_OVERRIDE: {v_override:.5f}\n"
+                        f"VIDEO_OFFSET: {v_override:.5f}\n"
                         f"AUDIO_OFFSET: {a_offset:.5f}\n\n"
                         f"Map '{state.map_name}' is ready to use.")
                     self.install_btn.configure(state="normal")
+                    # Reset preview state so stale audio doesn't replay
+                    # when the user loads a new map.
+                    self.preview.reset()
+                    self._set_preview_state("disabled")
+                    self._set_sync_state("disabled")
 
                 self.root.after(0, _done)
                 self.root.after(100, lambda: self._prompt_cleanup(state))

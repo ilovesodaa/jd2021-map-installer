@@ -66,8 +66,8 @@ def convert_file(in_path, out_path):
 
     try:
         data = load_ckd_json(in_path)
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        logger.error("Error parsing JSON in %s: %s", in_path, e)
+    except Exception as e:
+        logger.error("Error parsing CKD %s: %s", in_path, e)
         return
 
     lua_str = "params =\n" + convert_value(data, 0)

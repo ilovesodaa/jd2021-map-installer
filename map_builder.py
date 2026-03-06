@@ -8,6 +8,13 @@ import zipfile
 from log_config import get_logger
 from helpers import load_ckd_json, AUDIO_PREVIEW_FADE_S, MAX_JD_VERSION
 
+
+def _prefer_non_legacy(paths):
+    """Sort CKD paths so non-legacy (JSON) files come before main_legacy (binary) ones."""
+    non_legacy = [p for p in paths if "main_legacy" not in os.path.basename(p).lower()]
+    legacy = [p for p in paths if "main_legacy" in os.path.basename(p).lower()]
+    return non_legacy + legacy
+
 logger = get_logger("map_builder")
 
 def lua_long_string(text):
@@ -76,11 +83,16 @@ def check_metadata_encoding(ipk_dir):
     Returns a dict of {field_name: original_value} for any field that contains
     non-ASCII characters.  Returns empty dict if all fields are clean.
     """
-    songdesc_paths = glob.glob(os.path.join(ipk_dir, "**", "*songdesc.tpl.ckd"), recursive=True)
+    songdesc_paths = _prefer_non_legacy(
+        glob.glob(os.path.join(ipk_dir, "**", "*songdesc*.tpl.ckd"), recursive=True))
     if not songdesc_paths:
         return {}
 
-    sd_data = load_ckd_json(songdesc_paths[0])
+    try:
+        sd_data = load_ckd_json(songdesc_paths[0])
+    except (UnicodeDecodeError, Exception) as e:
+        logger.warning("metadata encoding check failed: %s", e)
+        return {}
     sd_struct = sd_data["COMPONENTS"][0]
 
     problems = {}
@@ -98,7 +110,8 @@ def extract_musictrack_metadata(ipk_dir):
         dict with keys: markers (list[int]), start_beat (int), video_start_time (float)
         Returns None if musictrack CKD cannot be found or parsed.
     """
-    ckd_paths = glob.glob(os.path.join(ipk_dir, "**", "*musictrack.tpl.ckd"), recursive=True)
+    ckd_paths = _prefer_non_legacy(
+        glob.glob(os.path.join(ipk_dir, "**", "*musictrack*.tpl.ckd"), recursive=True))
     if not ckd_paths:
         return None
     try:
@@ -109,7 +122,7 @@ def extract_musictrack_metadata(ipk_dir):
             "start_beat": mt_struct["startBeat"],
             "video_start_time": mt_struct["videoStartTime"],
         }
-    except (KeyError, IndexError, json.JSONDecodeError) as e:
+    except (KeyError, IndexError, json.JSONDecodeError, UnicodeDecodeError) as e:
         logger.warning("    Warning: Could not extract musictrack metadata: %s", e)
         return None
 
@@ -720,7 +733,21 @@ def _write_autodance_stubs(target_dir, map_name):
 						JD_AutodanceData =
 						{{
 							recording_structure = {{}},
-							video_structure = {{}},
+							video_structure = {{
+								NAME = "JD_AutodanceVideoStructure",
+								JD_AutodanceVideoStructure =
+								{{
+									SongStartPosition = 0,
+									Duration = 0,
+									ThumbnailTime = 0,
+									FadeOutDuration = 0,
+									GroundPlanePath = "invalid ",
+									FirstLayerTripleBackgroundPath = "invalid ",
+									SecondLayerTripleBackgroundPath = "invalid ",
+									ThirdLayerTripleBackgroundPath = "invalid ",
+									playback_events = {{}},
+								}},
+							}},
 							autodanceSoundPath = ""
 						}}
 					}}
@@ -843,19 +870,25 @@ def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override
     """
     map_lower = map_name.lower()
 
-    # Find musictrack.tpl.ckd
-    ckd_json_paths = glob.glob(os.path.join(ipk_dir, "**", "*musictrack.tpl.ckd"), recursive=True)
+    # Find musictrack.tpl.ckd (prefer non-legacy JSON over binary main_legacy)
+    ckd_json_paths = _prefer_non_legacy(
+        glob.glob(os.path.join(ipk_dir, "**", "*musictrack*.tpl.ckd"), recursive=True))
     if not ckd_json_paths:
         logger.error("Error: Could not find musictrack.tpl.ckd")
         return None
     ckd_json_path = ckd_json_paths[0]
 
-    # Find and parse songdesc.tpl.ckd for metadata
-    songdesc_paths = glob.glob(os.path.join(ipk_dir, "**", "*songdesc.tpl.ckd"), recursive=True)
+    # Find and parse songdesc.tpl.ckd for metadata (prefer non-legacy JSON)
+    songdesc_paths = _prefer_non_legacy(
+        glob.glob(os.path.join(ipk_dir, "**", "*songdesc*.tpl.ckd"), recursive=True))
     sd_struct = {}
     if songdesc_paths:
-        sd_data = load_ckd_json(songdesc_paths[0])
-        sd_struct = sd_data["COMPONENTS"][0]
+        try:
+            sd_data = load_ckd_json(songdesc_paths[0])
+            sd_struct = sd_data["COMPONENTS"][0]
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError, KeyError, IndexError) as e:
+            logger.warning("    Could not parse songdesc CKD: %s", e)
+            logger.warning("    Using default metadata")
     else:
         logger.warning("    songdesc.tpl.ckd not found; using default metadata")
 
@@ -896,14 +929,41 @@ def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override
 							VAL = "{val}"
 						}},'''
 
-    mt_data = load_ckd_json(ckd_json_path)
+    try:
+        mt_data = load_ckd_json(ckd_json_path)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as e:
+        logger.error("Error: Cannot parse musictrack CKD (%s): %s",
+                     os.path.basename(ckd_json_path), e)
+        return None
     mt_struct = mt_data["COMPONENTS"][0]["trackData"]["structure"]
 
     video_start_time = video_start_time_override if video_start_time_override is not None else mt_struct['videoStartTime']
 
-    # Determine Coach Number from downloaded images
-    coach_imgs = [f for f in os.listdir(os.path.join(target_dir, "MenuArt/textures")) if "_coach_" in f.lower() and f.endswith(".png")]
-    num_coach = len(coach_imgs) if coach_imgs else 1
+    # Safety check: if startBeat < 0 (map has pre-roll) but videoStartTime
+    # is 0.0, the game engine will assert "adding a brick in the past".
+    # This catches cases where the caller should have synthesized a value.
+    if video_start_time == 0.0 and mt_struct.get("startBeat", 0) < 0:
+        # Synthesize from markers as a last-resort fallback
+        markers = mt_struct.get("markers", [])
+        idx = abs(mt_struct["startBeat"])
+        if markers and idx < len(markers):
+            video_start_time = -(markers[idx] / 48.0 / 1000.0)
+            logger.warning("    videoStartTime was 0.0 with startBeat=%d; "
+                           "auto-synthesized %.5f from markers",
+                           mt_struct["startBeat"], video_start_time)
+        else:
+            logger.warning("    videoStartTime is 0.0 with startBeat=%d. "
+                           "The game may assert 'adding a brick in the past'. "
+                           "Use VIDEO_OFFSET to set a negative value.",
+                           mt_struct["startBeat"])
+
+    # Determine Coach Number: prefer authoritative NumCoach from songdesc CKD,
+    # fall back to counting coach image files on disk.
+    num_coach = sd_struct.get("NumCoach", 0)
+    if not num_coach or num_coach < 1:
+        coach_imgs = [f for f in os.listdir(os.path.join(target_dir, "MenuArt/textures"))
+                      if "_coach_" in f.lower() and (f.endswith(".png") or f.endswith(".tga"))]
+        num_coach = len(coach_imgs) if coach_imgs else 1
 
     ckd_phone = sd_struct.get("PhoneImages", {})
     if ckd_phone:

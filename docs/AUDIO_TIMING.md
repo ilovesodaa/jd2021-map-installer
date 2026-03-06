@@ -1,6 +1,6 @@
 # Audio Timing & Pre-Roll Silence
 
-This document explains the UbiArt engine's audio/video synchronization model, the pre-roll silence problem that affects most ported maps, and the AMB-based solution implemented in `generate_intro_amb`.
+This document explains the UbiArt engine's audio/video synchronization model, the pre-roll silence problem that affects most ported maps, the AMB-based solution, and IPK-specific audio handling.
 
 ---
 
@@ -12,7 +12,7 @@ Every map has a `.trk` (MusicTrack) file that defines the beat grid. The two mos
 |---|---|---|
 | `videoStartTime` | float (seconds) | Where in the video file beat 0 appears. Negative = video has a pre-roll intro before beat 0. |
 | `startBeat` | int | The beat index of the first marker (e.g. `-5` = the first marker is beat -5). |
-| `markers` | array (samples @ 48kHz) | Sample position for each beat. Marker 0 always corresponds to sample 0 of the WAV. |
+| `markers` | array (ticks @ 48 ticks/ms) | Tick position for each beat. `markers[0]` = 0 corresponds to beat 0. |
 
 The engine couples two behaviors to `videoStartTime`:
 
@@ -52,12 +52,12 @@ The engine loads `SoundComponent` actors from the audio `.isc` at `t=0`, before 
 
 The solution is to generate an intro AMB that:
 - Plays from `t=0`, covering the silence window
-- Sources its audio from the same OGG as the main WAV
+- Sources its audio from the same OGG/WAV as the main track
 - Fades out gracefully near the end
 
 ### Why Same-Source Overlap Is Inaudible
 
-At `t=abs(vst)` the main WAV begins playing. For a brief window, both the AMB and the WAV are playing simultaneously. Both are sourced from the same OGG file. At any time `t` in the overlap window:
+At `t=abs(vst)` the main WAV begins playing. For a brief window, both the AMB and the WAV are playing simultaneously. Both are sourced from the same audio file. At any time `t` in the overlap window:
 
 - AMB is playing `OGG[t]` (started at `t=0`, now at position `t` in the OGG)
 - WAV is playing `OGG[abs(vst) + (t - abs(vst))] = OGG[t]` (started at `t=abs(vst)` from sample `OGG[abs(vst)]`, now also at position `t`)
@@ -75,9 +75,11 @@ The pipeline tracks two independent timing values:
 | Variable | Source | Meaning |
 |---|---|---|
 | `v_override` | `videoStartTime` from `musictrack.tpl.ckd` | How far before beat 0 the video file starts. Always negative (e.g., `-2.145`). |
-| `a_offset` | Marker-based calculation (preferred) or equals `v_override` (fallback) | How far before beat 0 the OGG file starts. Always negative. |
+| `a_offset` | Marker-based calculation (preferred), `0.0` for IPK maps, or equals `v_override` (fallback) | How far before beat 0 the audio file starts. Controls audio trimming/padding. |
 
-These were previously assumed to be equal — they usually are, but marker-based timing can produce a different (more accurate) `a_offset` value.
+### HTML/Fetch Maps (Standard Mode)
+
+For server-fetched maps, both `v_override` and `a_offset` are typically negative. The OGG audio contains the full song and `a_offset` trims it to start at the correct beat.
 
 The marker-based formula for `a_offset`:
 ```
@@ -86,9 +88,29 @@ marker_preroll_ms = markers[idx] / 48.0 + 85.0   # 85ms = OGG codec decode laten
 a_offset          = -(marker_preroll_ms / 1000.0)
 ```
 
-`markers[idx]` is the sample position (at 48kHz) of the first beat. Dividing by 48 converts to milliseconds. The 85ms constant compensates for OGG decode latency that would otherwise cause a perceived early start.
+`markers[idx]` is the tick position of beat 0 in the audio. Dividing by 48 converts to milliseconds. The 85ms constant compensates for OGG decode latency.
 
-When `a_offset` equals `v_override`, the two streams are perfectly symmetric and no extra adjustment is needed. When they differ, the intro AMB must bridge the gap (see Section 4 below).
+### IPK Maps (Xbox 360 Binary Mode)
+
+For IPK maps extracted from Xbox 360 archives, the handling differs significantly:
+
+1. **`a_offset` is always `0.0`** — The binary CKD audio (decoded from XMA2 via vgmstream) already contains the full preroll from `startBeat` to `endBeat`. The `markers` array maps beat indices to tick positions within this untrimmed audio. Trimming would break the marker-to-audio alignment.
+
+2. **`v_override` is synthesized from markers** — Xbox 360 binary CKDs store `videoStartTime = 0.0` (the X360 engine handled sync differently). The pipeline synthesizes a video offset:
+   ```
+   v_override = -(markers[abs(startBeat)] / 48.0 / 1000.0)
+   ```
+   Note: **No +85ms offset** — the 85ms codec latency compensation is only for OGG audio trimming, not for video timing.
+
+3. **Video lead-in is not encoded** — The synthesized `v_override` accounts for the audio preroll but not for any extra video frames before the audio starts. This varies per map (0s for TGIF, ~1.7s for Koi, ~1.2s for MrBlueSky) and cannot be derived from any binary metadata. Users must fine-tune the VIDEO_OFFSET manually.
+
+### Community Tool Validation
+
+The marker formula `markers[abs(startBeat)] / 48` = milliseconds is confirmed by multiple community tools:
+- **MediaTool** (JustDanceTools) — uses `markers[abs(startBeat)] / 48` for FFmpeg `-ss`
+- **Unity2UbiArt** — uses `markers[abs(startBeat)] / 48` for audio cutting
+- **ferris_dancing** — binary CKD parser confirms field layout: markers(u32be[]), startBeat(i32be), endBeat(u32be), videoStartTime(f32be)
+- **UBIART-AMB-CUTTER** — adds +85ms to the formula (only tool that does; used as calibration source for our codec offset constant)
 
 ---
 
@@ -120,7 +142,7 @@ fade_start        = audio_delay + abs(a_offset) + 1.155
 amb_duration      = audio_delay + audio_content_dur
 ```
 
-The 1.355s tail in the fallback covers engine WAV scheduling jitter (the WAV does not start at exactly `t=abs(vst)` — the engine needs time to buffer the main audio file before playback begins). It was empirically derived: a 100ms tail still produced an audible gap; a 3.5s AMB with no fade played seamlessly. The tail covers both buffer-loading delay for the ~30MB main WAV and OS audio pipeline latency.
+The 1.355s tail in the fallback covers engine WAV scheduling jitter. The tail covers both buffer-loading delay for the ~30MB main WAV and OS audio pipeline latency.
 
 For Albatraoz example assuming `v_override = -2.145`, `marker_preroll_ms = 2060ms`:
 ```
@@ -133,8 +155,6 @@ fade_start         = 0.085 + 2.060 - 0.200 = 1.945s
 ```
 
 **200ms linear fade-out** is always applied at `fade_start` to prevent a hard-cut volume snap when the AMB ends.
-
-If a map behaves differently on significantly different hardware, the 1.355s fallback tail constant can be increased. Shortening it below ~1.0s risks reintroducing a gap.
 
 ---
 
@@ -167,7 +187,7 @@ The `.ilu` `volume = 0` field is a **dB offset** (0 = unity gain), not a mute fl
 - `generate_intro_amb` creates `amb_{mapname}_intro.tpl`, `.ilu`, and `.wav` from scratch
 - Injects the AMB actor into `{MapName}_audio.isc` (only if not already present)
 
-**Case 3 — `a_offset >= 0`** (no pre-roll silence):
+**Case 3 — `a_offset >= 0` and (`v_override` is None or `v_override >= 0`)**:
 - Function returns immediately for generation
 - Any previously generated `*_intro.wav` is silenced (replaced with 0.1s silence) to prevent double-audio on re-runs
 
@@ -175,6 +195,11 @@ The `.ilu` `volume = 0` field is a **dB offset** (0 = unity gain), not a mute fl
 - Some maps reference additional AMB clips in their mainsequence tape (clips with `StartTime <= 0`)
 - `extract_amb_audio` scans these clips and overwrites their placeholder WAVs with real audio from the OGG pre-roll, as long as the placeholder is smaller than 50KB (which silent stubs always are)
 - This applies marker-based preroll duration (with 200ms fade) when available, otherwise falls back to `abs(a_offset) + 1.355s`
+
+**Case 5 — Orphan WAV CKDs inside IPK** (e.g., `amb_koi_intro.wav.ckd` without matching `amb_koi_intro.tpl.ckd`):
+- Step 09 (`step_09_process_amb`) detects these orphan WAV CKDs
+- Generates synthetic TPL and ILU wrappers for each orphan
+- Creates a silent placeholder WAV that `generate_intro_amb` / `extract_amb_audio` later overwrites with real content
 
 The functions are called after every `convert_audio` invocation, including all interactive sync loop options, so all AMB files automatically stay consistent if timing is adjusted.
 
@@ -185,3 +210,4 @@ The functions are called after every `convert_audio` invocation, including all i
 - The 1.355s fallback tail is system-derived. On hardware with exceptionally high WAV scheduling latency (>1s), the gap may still be audible. The marker-based primary path does not have this problem since its timing is derived from the actual audio data, not a heuristic.
 - Maps where the original JDU AMB intro references a separate audio asset (not the main OGG) will have that asset replaced by a clip from the main OGG. This is acceptable since JDU-hosted AMB WAV files are not downloadable by this pipeline.
 - Background AMB sounds (SoundSetClips with `StartTime > 0`) remain as silent placeholders since they require mid-song audio not present in the pre-roll. Only SoundSetClips with `StartTime <= 0` are populated with real audio (see Case 4).
+- **IPK video offset is approximate** — The synthesized `v_override` for IPK maps is based on marker preroll timing only. Per-map video lead-in (extra video frames before audio starts) varies and is not encoded in any binary metadata field. The GUI auto-enables VIDEO_OFFSET and warns users that manual adjustment is expected.

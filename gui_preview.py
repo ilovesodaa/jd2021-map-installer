@@ -196,17 +196,23 @@ class PreviewManager:
                 if w < 10 or h < 10:
                     w, h = 480, 270
 
-                # Compute seek positions
-                abs_v = abs(v_override) if v_override else 0.0
-                abs_a = abs(a_offset) if a_offset else 0.0
-                offset_diff = abs_a - abs_v
+                # Compute seek positions (sign-aware)
+                # v_override: typically negative; |v_override| = video intro before beat-0
+                # a_offset: negative = audio pre-roll to trim; positive = silence to pad
+                vid_seek = abs(v_override) if v_override else 0.0
 
-                if offset_diff >= 0:
-                    vid_seek = max(0.0, start_time)
-                    aud_seek = max(0.0, start_time + offset_diff)
+                aud_delay_ms = 0
+                if a_offset and a_offset < 0:
+                    aud_seek = abs(a_offset)
+                elif a_offset and a_offset > 0:
+                    aud_seek = 0.0
+                    aud_delay_ms = int(a_offset * 1000)
                 else:
-                    vid_seek = max(0.0, start_time + abs(offset_diff))
-                    aud_seek = max(0.0, start_time)
+                    aud_seek = 0.0
+
+                # Offset both by start_time for scrubbing
+                vid_seek += start_time
+                aud_seek += start_time
 
                 vf_chain = (
                     f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
@@ -225,15 +231,31 @@ class PreviewManager:
                     "-"
                 ]
 
-                ffplay_cmd = [
-                    "ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"]
-                if aud_seek > 0:
-                    ffplay_cmd += ["-ss", f"{aud_seek:.6f}"]
-                ffplay_cmd += ["-i", audio_path]
+                if aud_delay_ms > 0:
+                    # Positive offset: pad silence via adelay filter
+                    ffplay_cmd = [
+                        "ffplay", "-nodisp", "-autoexit",
+                        "-loglevel", "quiet"]
+                    if aud_seek > 0:
+                        ffplay_cmd += ["-ss", f"{aud_seek:.6f}"]
+                    ffplay_cmd += [
+                        "-i", audio_path,
+                        "-af",
+                        f"adelay={aud_delay_ms}|{aud_delay_ms},"
+                        f"asetpts=PTS-STARTPTS"]
+                else:
+                    # Zero or negative offset: simple seek
+                    ffplay_cmd = [
+                        "ffplay", "-nodisp", "-autoexit",
+                        "-loglevel", "quiet"]
+                    if aud_seek > 0:
+                        ffplay_cmd += ["-ss", f"{aud_seek:.6f}"]
+                    ffplay_cmd += ["-i", audio_path]
 
                 print(f"    Launching embedded preview "
                       f"(vid_seek={vid_seek:.3f}s, "
-                      f"aud_seek={aud_seek:.3f}s)...")
+                      f"aud_seek={aud_seek:.3f}s, "
+                      f"aud_delay_ms={aud_delay_ms})...")
 
                 _cflags = (subprocess.CREATE_NO_WINDOW
                            if sys.platform == "win32" else 0)
@@ -374,16 +396,17 @@ class PreviewManager:
                    "format=duration", "-of", "default=nw=1:nk=1", audio_path]
             a_dur = float(subprocess.check_output(cmd, text=True).strip())
 
-            abs_v = abs(v_override) if v_override else 0.0
-            abs_a = abs(a_offset) if a_offset else 0.0
-            offset_diff = abs_a - abs_v
+            # Sign-aware playable duration
+            vid_beat0 = abs(v_override) if v_override else 0.0
+            v_playable = v_dur - vid_beat0
 
-            if offset_diff >= 0:
-                v_playable = v_dur
-                a_playable = a_dur - offset_diff
+            if a_offset and a_offset < 0:
+                a_playable = a_dur - abs(a_offset)
+            elif a_offset and a_offset > 0:
+                a_playable = a_dur + a_offset
             else:
-                v_playable = v_dur - abs(offset_diff)
                 a_playable = a_dur
+
             return max(v_playable, a_playable)
         except Exception as e:
             logger.warning(
