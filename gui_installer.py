@@ -894,68 +894,38 @@ class MapInstallerGUI:
         threading.Thread(target=_run, daemon=True).start()
 
     def _install_from_manual_spec(self, spec):
-        if self._pipeline_running:
-            return
-
-        jd_dir = self.jd_dir_entry.get().strip()
-        if not jd_dir:
-            messagebox.showerror("Missing Input", "Game Directory is required.")
-            return
-
         require_html = spec.mode == "manual" and spec.submode == "downloaded_assets"
-        self._pipeline_running = True
-        self.install_btn.configure(state="disabled")
-        self.fetch_install_btn.configure(state="disabled")
-        self.preflight_btn.configure(state="disabled", text="Auto-checking...")
+        asset_html = spec.asset_html or "(manual)"
+        nohud_html = spec.nohud_html or "(manual)"
 
-        def _auto_preflight_then_install():
-            result = map_installer.preflight_check(
-                jd_dir,
-                spec.asset_html or "(manual)",
-                spec.nohud_html or "(manual)",
-                auto_install=True,
-                interactive=False,
-                require_html=require_html,
+        def _build_state():
+            map_name = spec.codename or os.path.basename(spec.source_path)
+            state = map_installer.PipelineState(
+                map_name=map_name,
+                asset_html=asset_html,
+                nohud_html=nohud_html,
+                jd_dir=self.jd_dir_entry.get().strip() or None,
+                quality=self.quality_var.get(),
+                original_map_name=map_name,
             )
-            passed = result if not isinstance(result, tuple) else result[0]
+            source_type = "ipk_file" if spec.mode == "ipk" else (spec.submode or "manual")
+            map_installer.configure_manual_source(
+                state,
+                source_type=source_type,
+                source_dir=spec.source_path,
+                ipk_extracted=spec.ipk_extracted,
+                audio_path=self.mode_audio_entry.get().strip() or spec.audio_path,
+                video_path=self.mode_video_entry.get().strip() or spec.video_path,
+                codename=spec.codename,
+                manual_ipk_file=spec.ipk_file,
+            )
+            return state
 
-            def _after():
-                self._pipeline_running = False
-                self.preflight_btn.configure(state="normal", text="Pre-flight Check")
-                self.fetch_install_btn.configure(state="normal")
-                if not passed:
-                    self._preflight_passed = False
-                    self.install_btn.configure(state="disabled")
-                    messagebox.showwarning("Pre-flight Failed", "Automatic pre-flight failed.")
-                    return
-
-                self._preflight_passed = True
-                state = map_installer.PipelineState(
-                    map_name=spec.codename or os.path.basename(spec.source_path),
-                    asset_html=spec.asset_html or "(manual)",
-                    nohud_html=spec.nohud_html or "(manual)",
-                    jd_dir=jd_dir or None,
-                    quality=self.quality_var.get(),
-                    original_map_name=spec.codename or os.path.basename(spec.source_path),
-                )
-                state._interactive = False
-
-                source_type = "ipk_file" if spec.mode == "ipk" else (spec.submode or "manual")
-                map_installer.configure_manual_source(
-                    state,
-                    source_type=source_type,
-                    source_dir=spec.source_path,
-                    ipk_extracted=spec.ipk_extracted,
-                    audio_path=self.mode_audio_entry.get().strip() or spec.audio_path,
-                    video_path=self.mode_video_entry.get().strip() or spec.video_path,
-                    codename=spec.codename,
-                    manual_ipk_file=spec.ipk_file,
-                )
-                self._start_pipeline_with_state(state)
-
-            self.root.after(0, _after)
-
-        threading.Thread(target=_auto_preflight_then_install, daemon=True).start()
+        self._launch_install(
+            _build_state,
+            asset_html=asset_html,
+            nohud_html=nohud_html,
+            require_html=require_html)
 
     def _redirect_stdout(self):
         handler = TextWidgetHandler(self.log_text, self.root)
@@ -982,6 +952,27 @@ class MapInstallerGUI:
                 btn.configure(state=state)
             except tk.TclError:
                 pass
+
+    def _disable_all_install_controls(self):
+        """Disable all install-related controls during pipeline or preflight."""
+        self._pipeline_running = True
+        self.install_btn.configure(state="disabled")
+        self.fetch_install_btn.configure(state="disabled")
+        self.preflight_btn.configure(state="disabled", text="Auto-checking...")
+        self.mode_install_btn.configure(state="disabled")
+        self.codename_entry.configure(state="disabled")
+        self._set_html_inputs_state(False)
+
+    def _restore_install_controls(self):
+        """Re-enable install controls after pipeline finishes or fails."""
+        self._pipeline_running = False
+        self._fetch_mode_lock = False
+        self.preflight_btn.configure(state="normal", text="Pre-flight Check")
+        self.mode_install_btn.configure(state="normal")
+        self.fetch_install_btn.configure(state="normal")
+        self.codename_entry.configure(state="normal")
+        self._set_html_inputs_state(True)
+        self._on_html_inputs_changed()
 
     def _set_sync_state(self, state):
         """Enable or disable all widgets inside the sync refinement frame."""
@@ -1311,14 +1302,6 @@ class MapInstallerGUI:
 
         asset_html = self.asset_html_entry.get().strip()
         nohud_html = self.nohud_html_entry.get().strip()
-        jd_dir = self.jd_dir_entry.get().strip()
-
-        if not jd_dir:
-            messagebox.showerror(
-                "Missing Input",
-                "Game Directory is required.\n\n"
-                "Set it in the Configuration section, then retry.")
-            return
 
         if not asset_html or not nohud_html:
             messagebox.showerror(
@@ -1342,30 +1325,79 @@ class MapInstallerGUI:
                 "Select a valid file and retry.")
             return
 
-        # Make Install resilient even if the user skips the explicit preflight button.
+        def _build_state():
+            map_name = self._derive_codename(asset_html, nohud_html, fallback=None)
+            if not map_name:
+                messagebox.showerror(
+                    "Missing Input",
+                    "Could not detect map codename from the selected files.\n"
+                    "Try selecting valid HTML files from a map folder.")
+                return None
+            # Check for non-ASCII characters and prompt for replacement
+            original_map_name = map_name
+            if any(ord(c) > 127 for c in map_name):
+                non_ascii = [c for c in map_name if ord(c) > 127]
+                replacement = simpledialog.askstring(
+                    "Non-ASCII Characters Detected",
+                    f"Map name '{map_name}' contains non-standard characters: {non_ascii}\n"
+                    f"Some of these (e.g. Chinese characters) may cause file path issues.\n\n"
+                    f"Enter a replacement name, or click Cancel to keep the original as-is:",
+                    initialvalue=map_name,
+                    parent=self.root
+                )
+                if replacement and replacement.strip():
+                    map_name = replacement.strip()
+
+            return map_installer.PipelineState(
+                map_name=map_name,
+                asset_html=asset_html,
+                nohud_html=nohud_html,
+                jd_dir=self.jd_dir_entry.get().strip() or None,
+                quality=self.quality_var.get(),
+                original_map_name=original_map_name
+            )
+
+        self._launch_install(
+            _build_state,
+            asset_html=asset_html,
+            nohud_html=nohud_html,
+            require_html=True)
+
+    def _launch_install(self, state_factory, asset_html="(manual)",
+                        nohud_html="(manual)", require_html=True):
+        """Unified install: validates, runs auto-preflight if needed, starts pipeline.
+
+        Args:
+            state_factory: Callable() -> PipelineState, called after preflight passes.
+            asset_html: HTML path for preflight (or "(manual)" for non-HTML modes).
+            nohud_html: HTML path for preflight (or "(manual)" for non-HTML modes).
+            require_html: Whether preflight should require valid HTML files.
+        """
+        if self._pipeline_running:
+            return
+
+        jd_dir = self.jd_dir_entry.get().strip()
+        if not jd_dir:
+            messagebox.showerror("Missing Input", "Game Directory is required.")
+            return
+
+        self._disable_all_install_controls()
+
         if not self._settings.get("skip_preflight", False) and not self._preflight_passed:
-            self._pipeline_running = True
-            self.install_btn.configure(state="disabled")
-            self.fetch_install_btn.configure(state="disabled")
-            self.preflight_btn.configure(state="disabled", text="Auto-checking...")
             print("    Pre-flight was not run manually. Running automatic pre-flight now...")
 
-            def _auto_preflight_then_install():
+            def _auto_preflight():
                 result = map_installer.preflight_check(
                     jd_dir, asset_html, nohud_html,
-                    auto_install=True, interactive=False)
+                    auto_install=True, interactive=False,
+                    require_html=require_html)
                 passed = result if not isinstance(result, tuple) else result[0]
 
                 def _after():
-                    self._pipeline_running = False
-                    self.preflight_btn.configure(state="normal", text="Pre-flight Check")
-                    self.fetch_install_btn.configure(state="normal")
                     if not passed:
                         self._preflight_passed = False
+                        self._restore_install_controls()
                         self.install_btn.configure(state="disabled")
-                        self._set_html_inputs_state(True)
-                        self._fetch_mode_lock = False
-                        self._on_html_inputs_changed()
                         messagebox.showwarning(
                             "Pre-flight Failed",
                             "Automatic pre-flight failed.\n\n"
@@ -1374,61 +1406,32 @@ class MapInstallerGUI:
 
                     self._preflight_passed = True
                     self.install_btn.configure(state="normal")
-                    self._on_install(started_from_fetch=started_from_fetch)
+                    # Build the PipelineState and start the pipeline
+                    state = state_factory()
+                    if state is None:
+                        self._restore_install_controls()
+                        return
+                    state._interactive = False
+                    self._start_pipeline_with_state(state)
 
                 self.root.after(0, _after)
 
-            threading.Thread(target=_auto_preflight_then_install, daemon=True).start()
+            threading.Thread(target=_auto_preflight, daemon=True).start()
             return
 
-        map_name = self._derive_codename(asset_html, nohud_html, fallback=None)
-        if not map_name:
-            self._fetch_mode_lock = False
-            self._set_html_inputs_state(True)
-            self.codename_entry.configure(state="normal")
-            self._on_html_inputs_changed()
-            messagebox.showerror(
-                "Missing Input",
-                "Could not detect map codename from the selected files.\n"
-                "Try selecting valid HTML files from a map folder.")
+        # Preflight already passed -- build state immediately
+        state = state_factory()
+        if state is None:
+            self._restore_install_controls()
             return
-        # Check for non-ASCII characters and prompt for replacement
-        original_map_name = map_name
-        if any(ord(c) > 127 for c in map_name):
-            non_ascii = [c for c in map_name if ord(c) > 127]
-            replacement = simpledialog.askstring(
-                "Non-ASCII Characters Detected",
-                f"Map name '{map_name}' contains non-standard characters: {non_ascii}\n"
-                f"Some of these (e.g. Chinese characters) may cause file path issues.\n\n"
-                f"Enter a replacement name, or click Cancel to keep the original as-is:",
-                initialvalue=map_name,
-                parent=self.root
-            )
-            if replacement and replacement.strip():
-                map_name = replacement.strip()
-
-        state = map_installer.PipelineState(
-            map_name=map_name,
-            asset_html=asset_html,
-            nohud_html=nohud_html,
-            jd_dir=jd_dir or None,
-            quality=self.quality_var.get(),
-            original_map_name=original_map_name
-        )
-        # GUI mode: don't call input() in pipeline steps
         state._interactive = False
         self._start_pipeline_with_state(state)
 
     def _start_pipeline_with_state(self, state):
-        """Common start logic for HTML, IPK, and manual source modes."""
-        # Disable controls during pipeline
-        self._pipeline_running = True
-        self.install_btn.configure(state="disabled")
-        self.preflight_btn.configure(state="disabled")
-        self.fetch_install_btn.configure(state="disabled")
-        self.mode_install_btn.configure(state="disabled")
-        self._set_html_inputs_state(False)
+        """Common start logic for HTML, IPK, and manual source modes.
 
+        Controls are already disabled by _launch_install -> _disable_all_install_controls.
+        """
         # Reset progress
         for i in range(len(self.STEP_NAMES)):
             self._update_step_status(i, "pending")
@@ -1593,14 +1596,8 @@ class MapInstallerGUI:
             print(f"    {field}: '{original_val}' → '{result_holder[0]}'")
 
     def _on_pipeline_error(self):
-        self._pipeline_running = False
+        self._restore_install_controls()
         self.install_btn.configure(state="normal")
-        self.mode_install_btn.configure(state="normal")
-        self.preflight_btn.configure(state="normal")
-        self._fetch_mode_lock = False
-        self._set_html_inputs_state(True)
-        self.fetch_install_btn.configure(state="normal")
-        self.codename_entry.configure(state="normal")
 
         # If this run came from Fetch mode, clear stale HTML inputs so
         # the user can immediately retry Fetch & Install.
@@ -1610,11 +1607,11 @@ class MapInstallerGUI:
             print("    Cleared stale HTML inputs after fetch-based failure. Retry Fetch & Install.")
 
         self._last_run_from_fetch = False
-        self._on_html_inputs_changed()
 
     def _on_pipeline_complete(self):
-        self._pipeline_running = False
         state = self.pipeline_state
+        self._restore_install_controls()
+
         # Populate sync values from pipeline
         self.v_override_var.set(
             state.v_override if state.v_override is not None else 0.0)
@@ -1625,14 +1622,6 @@ class MapInstallerGUI:
         # Enable sync refinement and preview controls
         self._set_sync_state("normal")
         self._set_preview_state("normal")
-        # Keep install disabled until user finishes sync refinement via Apply
-        self.preflight_btn.configure(state="normal")
-        self.mode_install_btn.configure(state="normal")
-        self._fetch_mode_lock = False
-        self._set_html_inputs_state(True)
-        self.fetch_install_btn.configure(state="normal")
-        self.codename_entry.configure(state="normal")
-        self._on_html_inputs_changed()
 
         # Auto-start preview so users can validate sync immediately.
         self.preview.launch(
