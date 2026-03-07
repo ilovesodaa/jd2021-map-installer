@@ -1,8 +1,13 @@
 node_modules/
-<<<<<<< HEAD
 config.json
 .browser-profile/
-=======
+
+# Downloaded map outputs (any codename folder)
+*/assets.html
+*/nohud.html
+
+# Dependencies
+node_modules/
 
 # Debug / temp
 test_dom.mjs
@@ -12,4 +17,3 @@ open_browser.mjs
 scrape_conversation.mjs
 MapDownloads/
 output/
->>>>>>> 919e2595da78ab7988f52801d5c682c85a563a86
