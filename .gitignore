@@ -1,58 +1,69 @@
+# Game data and map data (user-specific)
 jd21/
 ipk_extracted_fixed/
 ipk_extracted/
 cache/
-Starships/
 world/
-errors.txt
-dump*
-__pycache__/
 
-.vscode/
+# Build / runtime artifacts
+__pycache__/
+logs/
+installer_paths.json
+installer_settings.json
+dump*
+tmpclaude*
+nul
+test_autodance_output.tmp
+*.pyc
+
+# Auto-downloaded tools (not committed; installed at runtime)
+tools/ffmpeg/
+
+# JDH_Downloader runtime artifacts (source files ARE committed)
+tools/JDH_Downloader/node_modules/
+tools/JDH_Downloader/config.json
+tools/JDH_Downloader/.browser-profile/
+
+# Legacy external tool directories
+3rdPartyTools/
+JustDanceTools/
+jd2021pc tools/
+jd2021pc tools.zip
+
+# Map data directories (user content)
+MapDownloads/
+MapDownloads2/
+Starships/
 BadRomance/
 GetGetDown/
 ImAnAlbatraoz/
 Rockabye/
+Albatraoz/
 downloads/
+
+# IDE and editor files
+.vscode/
+
+# Misc dev / personal files
 virtualKinect/
 pose_landmarker_lite.task
-Albatraoz/
-*.txt
-*.dtape
-*.ktape
-jd21.rar
-
-JustDanceTools/
-jd2021pc tools/
-jd2021pc tools.zip
-MapDownloads/
-MapDownloads2/
-
-# Legacy external tool directories (now integrated into project)
-3rdPartyTools/
-
-tmpclaude*
-JD2021MapInstaller.zip
-nul
-
-logs/
-test_autodance_output.tmp
-
-installer_paths.json
-
-snapshot_2025-08-19_19-40/
-snapshot_2025-08-19_19-40.zip
-FiddlerSetup.5.0.20253.3311-latest.exe
-
-
 mock-server/
 MobileScoringRevivalProject/
 ritmica/
-
 compare*
-
 todo/
-installer_settings.json
 get_codenames.py
+snapshot_*/
+*.zip
+*.rar
+*.exe
+!tools/vgmstream/vgmstream.exe
 
-tools/JDH_Downloader/
+# Text files in root (not requirements.txt or tool READMEs)
+/*.txt
+!requirements.txt
+!/tools/**/README.md
+
+# Tape/audio data files (generated/extracted)
+*.dtape
+*.ktape

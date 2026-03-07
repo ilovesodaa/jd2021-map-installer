@@ -99,8 +99,11 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _find_vgmstream() -> Optional[str]:
-    """Locate the vgmstream executable in the bundled third-party tools."""
+    """Locate the vgmstream executable in the bundled tools."""
     candidates = [
+        # Primary: bundled in tools/vgmstream/ (committed to repo)
+        os.path.join(_SCRIPT_DIR, "tools", "vgmstream", "vgmstream.exe"),
+        # Legacy: 3rdPartyTools location (local dev installs)
         os.path.join(_SCRIPT_DIR, "3rdPartyTools", "jd2021pc tools",
                      "JDTools - 1.9.0", "bin", "vgmstream.exe"),
     ]
