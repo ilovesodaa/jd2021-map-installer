@@ -10,12 +10,13 @@ import threading
 import subprocess
 import sys
 import time
-import logging
+from log_config import get_logger
 
 from PIL import Image, ImageTk
 from helpers import PREVIEW_FPS, PREVIEW_POLL_FRAMES
 
-logger = logging.getLogger("jd2021.gui.preview")
+from log_config import get_logger
+logger = get_logger("gui.preview")
 
 
 class PreviewManager:
@@ -252,10 +253,11 @@ class PreviewManager:
                         ffplay_cmd += ["-ss", f"{aud_seek:.6f}"]
                     ffplay_cmd += ["-i", audio_path]
 
-                print(f"    Launching embedded preview "
-                      f"(vid_seek={vid_seek:.3f}s, "
-                      f"aud_seek={aud_seek:.3f}s, "
-                      f"aud_delay_ms={aud_delay_ms})...")
+                logger.debug("Launching embedded preview "
+                      "(vid_seek=%.3fs, "
+                      "aud_seek=%.3fs, "
+                      "aud_delay_ms=%s)...",
+                      vid_seek, aud_seek, aud_delay_ms)
 
                 _cflags = (subprocess.CREATE_NO_WINDOW
                            if sys.platform == "win32" else 0)
