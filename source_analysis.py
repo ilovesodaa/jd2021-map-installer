@@ -95,8 +95,26 @@ def _find_html_pair(folder: str):
     return asset, nohud
 
 
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _find_vgmstream() -> Optional[str]:
+    """Locate the vgmstream executable in the bundled third-party tools."""
+    candidates = [
+        os.path.join(_SCRIPT_DIR, "3rdPartyTools", "jd2021pc tools",
+                     "JDTools - 1.9.0", "bin", "vgmstream.exe"),
+    ]
+    for p in candidates:
+        if os.path.isfile(p):
+            return p
+    return None
+
+
 def _extract_ckd_audio(ckd_path: str, output_dir: str) -> Optional[str]:
     """Strip the 44-byte CKD header from a cooked audio file and write raw audio.
+
+    For standard OGG/WAV payloads the header is simply stripped.  For X360
+    proprietary formats (XMA etc.) vgmstream is used to decode to WAV.
 
     Returns the path of the extracted file, or *None* on failure.
     """
@@ -116,26 +134,47 @@ def _extract_ckd_audio(ckd_path: str, output_dir: str) -> Optional[str]:
     elif payload[:4] == b"RIFF":
         ext = ".wav"
     else:
-        # Fallback to vgmstream for X360/other proprietary formats
-        vgm_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "3rdPartyTools", "jd2021pc tools", "JDTools - 1.9.0", "bin", "vgmstream.exe")
-        if not os.path.isfile(vgm_path):
-            vgm_path = r"D:\jd2021pc\3rdPartyTools\jd2021pc tools\JDTools - 1.9.0\bin\vgmstream.exe"
-        
-        if os.path.isfile(vgm_path):
-            os.makedirs(output_dir, exist_ok=True)
-            base = os.path.splitext(os.path.basename(ckd_path))[0]
-            if base.lower().endswith(".wav") or base.lower().endswith(".ogg"):
-                base = base[:-4]
-            out_path = os.path.join(output_dir, base + ".wav")
-            
-            import subprocess
-            try:
-                res = subprocess.run([vgm_path, "-o", out_path, ckd_path], capture_output=True)
-                if res.returncode == 0 and os.path.exists(out_path):
-                    return out_path
-            except Exception as e:
-                print(f"Warning: vgmstream fallback failed: {e}")
-        return None  # unknown format – skip
+        # Proprietary format (XMA, etc.) -- try vgmstream on the raw CKD first,
+        # then on just the payload written to a temp file.
+        vgm_path = _find_vgmstream()
+        if not vgm_path:
+            print(f"Warning: unknown CKD audio format and vgmstream not found for {os.path.basename(ckd_path)}")
+            return None
+
+        os.makedirs(output_dir, exist_ok=True)
+        base = os.path.splitext(os.path.basename(ckd_path))[0]
+        if base.lower().endswith(".wav") or base.lower().endswith(".ogg"):
+            base = base[:-4]
+        out_path = os.path.join(output_dir, base + ".wav")
+
+        import subprocess
+        import tempfile
+
+        # Attempt 1: feed vgmstream the original CKD file directly
+        try:
+            res = subprocess.run(
+                [vgm_path, "-o", out_path, ckd_path],
+                capture_output=True, timeout=60)
+            if res.returncode == 0 and os.path.isfile(out_path) and os.path.getsize(out_path) > 100:
+                return out_path
+        except Exception:
+            pass
+
+        # Attempt 2: strip CKD header, write payload to temp file, decode
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".xma", delete=False) as tmp:
+                tmp.write(payload)
+                tmp_path = tmp.name
+            res = subprocess.run(
+                [vgm_path, "-o", out_path, tmp_path],
+                capture_output=True, timeout=60)
+            os.unlink(tmp_path)
+            if res.returncode == 0 and os.path.isfile(out_path) and os.path.getsize(out_path) > 100:
+                return out_path
+        except Exception as e:
+            print(f"Warning: vgmstream fallback failed for {os.path.basename(ckd_path)}: {e}")
+
+        return None
 
     os.makedirs(output_dir, exist_ok=True)
     base = os.path.splitext(os.path.basename(ckd_path))[0]
@@ -256,12 +295,12 @@ def analyze_ipk_file_mode(ipk_file: str, audio_path: str = "", video_path: str =
     spec.codename = _extract_codename_from_ipk_name(ipk_file)
 
     source_dir = os.path.dirname(ipk_file)
+    # Only look for audio/video alongside the IPK file, NOT inside
+    # ipk_extracted/.  That directory may contain stale data from a
+    # previous installation of a different IPK.  Fresh audio/video
+    # will be detected after step_04 re-extracts the IPK.
     if not audio_path:
         audio_path = _pick_audio(source_dir, spec.codename)
-        # Also check inside ipk_extracted/ if it already exists
-        ipk_ext_dir = os.path.join(source_dir, "ipk_extracted")
-        if not audio_path and os.path.isdir(ipk_ext_dir):
-            audio_path = _pick_audio(ipk_ext_dir, spec.codename)
     if not video_path:
         video_path = _pick_webm(source_dir, spec.codename)
 
