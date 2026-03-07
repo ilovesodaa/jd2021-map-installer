@@ -125,10 +125,6 @@ class PipelineState:
         self.musictrack_start_beat = None   # int, typically negative
         self.marker_preroll_ms = None       # float: markers[abs(startBeat)] / 48 + offset
 
-        # Preview loop data (populated in step 06 from musictrack CKD)
-        self.preview_loop_start_sec = 0.0   # seconds from beat-0
-        self.preview_loop_end_sec = 0.0     # seconds from beat-0
-
         # SoundSetClip data from mainsequence tape (populated in step 08)
         self.amb_sound_clips = []           # list of dicts from mainsequence SoundSetClips
 
