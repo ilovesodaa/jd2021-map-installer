@@ -200,12 +200,12 @@ def reconstruct_state_for_readjust(download_dir, jd_dir=None):
     """Build a minimal PipelineState from a map's download directory.
 
     Used for re-adjusting offset on an already-installed map without
-    re-running the full pipeline.  Requires that .ogg and .webm files
-    still exist in download_dir.
+    re-running the full pipeline.  Supports both JDU download folders
+    (with .ogg/.webm at root) and IPK extraction folders (with .wav.ckd
+    and nested .webm).
 
     Args:
-        download_dir: Path to the map's download folder (containing .ogg, .webm,
-                      and optionally ipk_extracted/).
+        download_dir: Path to the map's download folder or IPK extraction folder.
         jd_dir:       Search root for game data (auto-detected if omitted).
 
     Returns:
@@ -219,20 +219,41 @@ def reconstruct_state_for_readjust(download_dir, jd_dir=None):
     if not os.path.isdir(download_dir):
         raise FileNotFoundError(f"Download directory not found: {download_dir}")
 
-    # --- Locate .ogg audio ---
-    ogg_files = [f for f in os.listdir(download_dir) if f.endswith('.ogg')]
-    if not ogg_files:
-        raise FileNotFoundError(f"No .ogg audio file found in {download_dir}")
-    audio_path = os.path.join(download_dir, ogg_files[0])
+    from source_analysis import _pick_audio, _pick_webm, _pick_webm_recursive
 
-    # --- Locate .webm video (exclude previews) ---
+    # --- Locate audio (JDU: .ogg at root; IPK: .wav.ckd recursive) ---
+    is_ipk_source = False
+    ogg_files = [f for f in os.listdir(download_dir)
+                 if f.lower().endswith('.ogg') and 'AudioPreview' not in f]
+    audio_path = os.path.join(download_dir, ogg_files[0]) if ogg_files else None
+
+    if not audio_path:
+        audio_path = _pick_audio(download_dir, "")
+    if not audio_path:
+        ipk_sub = os.path.join(download_dir, "ipk_extracted")
+        if os.path.isdir(ipk_sub):
+            audio_path = _pick_audio(ipk_sub, "")
+    if audio_path and not ogg_files:
+        is_ipk_source = True
+    if not audio_path:
+        raise FileNotFoundError(
+            f"No audio file (.ogg, .wav, .ckd) found in {download_dir}")
+
+    # --- Locate .webm video (JDU: root; IPK: recursive) ---
     webm_files = [f for f in os.listdir(download_dir)
                   if f.endswith('.webm')
                   and 'MapPreview' not in f
                   and 'VideoPreview' not in f]
-    if not webm_files:
+    video_path = os.path.join(download_dir, webm_files[0]) if webm_files else None
+
+    if not video_path:
+        video_path = _pick_webm(download_dir, "") or _pick_webm_recursive(download_dir, "")
+    if not video_path:
+        ipk_sub = os.path.join(download_dir, "ipk_extracted")
+        if os.path.isdir(ipk_sub):
+            video_path = _pick_webm_recursive(ipk_sub, "")
+    if not video_path:
         raise FileNotFoundError(f"No gameplay .webm video found in {download_dir}")
-    video_path = os.path.join(download_dir, webm_files[0])
 
     # --- Derive map name ---
     map_name = None
@@ -264,16 +285,26 @@ def reconstruct_state_for_readjust(download_dir, jd_dir=None):
     state.audio_path = audio_path
     state.video_path = video_path
     state._interactive = True
+    if is_ipk_source:
+        state.source_type = "ipk_file"
 
     # --- IPK extracted dir ---
+    # Either download_dir/ipk_extracted (JDU style) or download_dir itself (IPK style)
     ipk_dir = os.path.join(download_dir, "ipk_extracted")
-    if os.path.isdir(ipk_dir):
+    if not os.path.isdir(ipk_dir):
+        # Check if the directory itself contains IPK data (musictrack CKDs)
+        mt_test = glob.glob(os.path.join(download_dir, "**", "*musictrack*ckd"), recursive=True)
+        if mt_test:
+            ipk_dir = download_dir
+        else:
+            ipk_dir = None
+    if ipk_dir:
         state.ipk_extracted = ipk_dir
 
-    # --- Extract musictrack metadata from ipk_extracted if available ---
+    # --- Extract musictrack metadata from ipk data if available ---
     v_override = None
     marker_preroll_ms = None
-    if os.path.isdir(ipk_dir):
+    if ipk_dir and os.path.isdir(ipk_dir):
         mt_meta = map_builder.extract_musictrack_metadata(ipk_dir)
         if mt_meta:
             v_override = mt_meta["video_start_time"]
@@ -314,7 +345,7 @@ def reconstruct_state_for_readjust(download_dir, jd_dir=None):
         state.a_offset = state.v_override
 
     # --- Load AMB sound clip metadata from mainsequence tape if available ---
-    if os.path.isdir(ipk_dir):
+    if ipk_dir and os.path.isdir(ipk_dir):
         import ubiart_lua as _ual
         cine_tapes = glob.glob(
             os.path.join(ipk_dir, "**", "*mainsequence*tape.ckd"), recursive=True)
@@ -1194,6 +1225,16 @@ def compute_marker_preroll(markers, start_beat, offset_ms=MARKER_OFFSET_MS):
     return markers[idx] / 48.0 + offset_ms
 
 def convert_audio(audio_path, map_name, target_dir, a_offset=0.0):
+    # Handle cooked audio files (.wav.ckd / .ogg.ckd) by extracting raw audio first
+    if audio_path.lower().endswith(".ckd"):
+        from source_analysis import _extract_ckd_audio
+        extracted = _extract_ckd_audio(audio_path, os.path.dirname(audio_path))
+        if extracted:
+            logger.info("    Extracted raw audio from CKD: %s", os.path.basename(extracted))
+            audio_path = extracted
+        else:
+            raise RuntimeError(f"Failed to extract audio from CKD: {audio_path}")
+
     wav_out = os.path.join(target_dir, f"Audio/{map_name}.wav")
     ogg_out = os.path.join(target_dir, f"Audio/{map_name}.ogg")
 
@@ -1712,7 +1753,8 @@ def step_01_clean(state):
     print("[1] Cleaning up if there is a previous build...")
     _safe_rmtree(state.target_dir)
     _safe_rmtree(state.cache_dir)
-    if not getattr(state, "preserve_source_dirs", False):
+    cleanup = getattr(state, 'cleanup_behavior', 'ask')
+    if cleanup == "delete" and not getattr(state, "preserve_source_dirs", False):
         _safe_rmtree(state.extracted_zip_dir)
         _safe_rmtree(state.ipk_extracted)
 
@@ -1765,7 +1807,13 @@ def step_02_download(state):
     print("[2] Downloading assets from JDU servers...")
     urls1 = map_downloader.extract_urls(state.asset_html) if state.asset_html and os.path.exists(state.asset_html) else []
     urls2 = map_downloader.extract_urls(state.nohud_html) if state.nohud_html and os.path.exists(state.nohud_html) else []
-    map_downloader.download_files(urls1 + urls2, state.download_dir,
+    all_urls = urls1 + urls2
+    if not all_urls:
+        raise RuntimeError(
+            "No valid download links found in the HTML files.\n"
+            "The JDU bot may have returned an error for this track.\n"
+            "Check that the HTML files contain actual asset URLs.")
+    map_downloader.download_files(all_urls, state.download_dir,
                                   quality=state.quality, interactive=False)
 
     # Auto-detect internal codename from downloaded files

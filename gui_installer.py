@@ -131,8 +131,8 @@ class MapInstallerGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("JD2021 Map Installer")
-        self.root.geometry("1000x900")
-        self.root.minsize(1000, 900)
+        self.root.geometry("1450x700")
+        self.root.minsize(1450, 700)
 
         # State
         self.pipeline_state = None
@@ -183,9 +183,21 @@ class MapInstallerGUI:
         container = ttk.Frame(self.root)
         container.pack(fill="both", expand=True, padx=8, pady=4)
 
+        # Two-column layout: left = Install panel, right = progress/preview/log/sync
+        container.columnconfigure(0, weight=0, minsize=450)  # Left: fixed min width
+        container.columnconfigure(1, weight=1)   # Right: expandable
+        container.rowconfigure(0, weight=1)
+
+        left_col = ttk.Frame(container, width=450)
+        left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        left_col.pack_propagate(False)   # Lock width — children can't push it wider
+
+        right_col = ttk.Frame(container)
+        right_col.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+
         # ===================== UNIFIED INSTALL PANEL =====================
-        install_panel = ttk.LabelFrame(container, text="Install", padding=6)
-        install_panel.pack(fill="x", pady=(0, 4))
+        install_panel = ttk.LabelFrame(left_col, text="Install", padding=6)
+        install_panel.pack(fill="both", expand=True, pady=(0, 4))
 
         # --- Row 0: Mode selector ---
         mode_row = ttk.Frame(install_panel)
@@ -205,8 +217,6 @@ class MapInstallerGUI:
         self.source_mode_combo.bind(
             "<<ComboboxSelected>>", lambda _e: self._on_source_mode_changed())
 
-        # (Submode selector removed — manual mode v2 uses per-file selectors)
-
         # --- Mode-specific frames (swapped by _on_source_mode_changed) ---
         self._mode_frames = {}
         self._mode_frame_parent = ttk.Frame(install_panel)
@@ -216,7 +226,7 @@ class MapInstallerGUI:
         f_fetch = ttk.Frame(self._mode_frame_parent)
         ttk.Label(f_fetch, text="Codename:", width=16, anchor="e").pack(
             side="left", padx=(0, 4))
-        self.codename_entry = ttk.Entry(f_fetch, width=64)
+        self.codename_entry = ttk.Entry(f_fetch, width=40)
         self.codename_entry.pack(side="left", fill="x", expand=True)
         ToolTip(self.codename_entry,
                 "Enter a map codename (e.g. TemperatureALT) to fetch HTML "
@@ -232,13 +242,15 @@ class MapInstallerGUI:
                  "Fetch fresh links if download fails.",
             fg="#856404",
             font=("Consolas", 9, "bold"),
+            wraplength=450,
+            justify="left",
         ).pack(anchor="w", pady=(0, 4))
         # Asset HTML row
         html_r1 = ttk.Frame(f_html)
         html_r1.pack(fill="x", pady=1)
         ttk.Label(html_r1, text="Asset HTML:", width=16, anchor="e").pack(
             side="left", padx=(0, 4))
-        self.asset_html_entry = ttk.Entry(html_r1, width=64)
+        self.asset_html_entry = ttk.Entry(html_r1, width=40)
         self.asset_html_entry.pack(side="left", fill="x", expand=True)
         ToolTip(self.asset_html_entry,
                 "Path to the downloaded map asset HTML file containing "
@@ -252,7 +264,7 @@ class MapInstallerGUI:
         html_r2.pack(fill="x", pady=1)
         ttk.Label(html_r2, text="NOHUD HTML:", width=16, anchor="e").pack(
             side="left", padx=(0, 4))
-        self.nohud_html_entry = ttk.Entry(html_r2, width=64)
+        self.nohud_html_entry = ttk.Entry(html_r2, width=40)
         self.nohud_html_entry.pack(side="left", fill="x", expand=True)
         ToolTip(self.nohud_html_entry,
                 "Path to the downloaded NoHUD HTML file containing "
@@ -269,7 +281,7 @@ class MapInstallerGUI:
         r.pack(fill="x", pady=1)
         ttk.Label(r, text="IPK File:", width=16, anchor="e").pack(
             side="left", padx=(0, 4))
-        self.source_path_entry = ttk.Entry(r, width=64)
+        self.source_path_entry = ttk.Entry(r, width=40)
         self.source_path_entry.pack(side="left", fill="x", expand=True)
         ttk.Button(
             r, text="Browse", width=8,
@@ -286,10 +298,30 @@ class MapInstallerGUI:
         f_manual = ttk.Frame(self._mode_frame_parent)
         self._manual_entries = {}
 
+        # Submode selector row (JDU vs IPK)
+        submode_row = ttk.Frame(f_manual); submode_row.pack(fill="x", pady=(0, 4))
+        ttk.Label(submode_row, text="Source Type:", width=16, anchor="e").pack(
+            side="left", padx=(0, 4))
+        self._manual_submode_var = tk.StringVar(value="JDU")
+        self._manual_submode_combo = ttk.Combobox(
+            submode_row,
+            textvariable=self._manual_submode_var,
+            values=["JDU", "IPK"],
+            state="readonly",
+            width=12,
+        )
+        self._manual_submode_combo.pack(side="left")
+        self._manual_submode_combo.bind(
+            "<<ComboboxSelected>>", lambda _e: self._on_manual_submode_changed())
+        self._manual_submode_hint = ttk.Label(
+            submode_row, text="Downloaded assets + nohud HTML",
+            foreground="#555555", font=("Consolas", 8, "italic"))
+        self._manual_submode_hint.pack(side="left", padx=(8, 0))
+
         # Row 0: Root folder + Codename
         row = ttk.Frame(f_manual); row.pack(fill="x", pady=1)
         ttk.Label(row, text="Root Folder:", width=16, anchor="e").pack(side="left", padx=(0, 4))
-        self._manual_root_entry = ttk.Entry(row, width=48)
+        self._manual_root_entry = ttk.Entry(row, width=30)
         self._manual_root_entry.pack(side="left", fill="x", expand=True)
         ttk.Button(row, text="Browse", width=7,
                    command=self._on_manual_root_browse).pack(side="left", padx=(4, 0))
@@ -298,21 +330,21 @@ class MapInstallerGUI:
 
         row = ttk.Frame(f_manual); row.pack(fill="x", pady=1)
         ttk.Label(row, text="Codename:", width=16, anchor="e").pack(side="left", padx=(0, 4))
-        self._manual_codename_entry = ttk.Entry(row, width=48)
+        self._manual_codename_entry = ttk.Entry(row, width=30)
         self._manual_codename_entry.pack(side="left", fill="x", expand=True)
 
         # --- Required Files ---
         req_frame = ttk.LabelFrame(f_manual, text="Required Files")
         req_frame.pack(fill="x", pady=(4, 2), padx=2)
         for key, label, ftypes in [
-            ("audio_path",      "Audio File:",      [("Audio", "*.ogg *.wav"), ("All", "*.*")]),
+            ("audio_path",      "Audio File:",      [("Audio", "*.ogg *.wav *.wav.ckd"), ("All", "*.*")]),
             ("video_path",      "Video File:",      [("WebM", "*.webm"), ("All", "*.*")]),
             ("musictrack_path", "Musictrack CKD:",  [("CKD", "*.ckd"), ("All", "*.*")]),
         ]:
             self._build_manual_file_row(req_frame, key, label, ftypes)
 
         # --- Tapes & Config (optional) ---
-        tape_frame = ttk.LabelFrame(f_manual, text="Tapes & Config (optional)")
+        tape_frame = ttk.LabelFrame(f_manual, text="Tapes & Config")
         tape_frame.pack(fill="x", pady=2, padx=2)
         for key, label, ftypes in [
             ("songdesc_path",    "Songdesc CKD:",    [("CKD", "*.ckd"), ("All", "*.*")]),
@@ -323,7 +355,7 @@ class MapInstallerGUI:
             self._build_manual_file_row(tape_frame, key, label, ftypes)
 
         # --- Asset Folders (optional) ---
-        dir_frame = ttk.LabelFrame(f_manual, text="Asset Folders (optional)")
+        dir_frame = ttk.LabelFrame(f_manual, text="Asset Folders")
         dir_frame.pack(fill="x", pady=2, padx=2)
         for key, label in [
             ("moves_dir",   "Moves Folder:"),
@@ -341,7 +373,7 @@ class MapInstallerGUI:
         batch_r1.pack(fill="x", pady=1)
         ttk.Label(batch_r1, text="Maps Folder:", width=16, anchor="e").pack(
             side="left", padx=(0, 4))
-        self._batch_folder_entry = ttk.Entry(batch_r1, width=64)
+        self._batch_folder_entry = ttk.Entry(batch_r1, width=40)
         self._batch_folder_entry.pack(side="left", fill="x", expand=True)
         ttk.Button(
             batch_r1, text="Browse", width=8,
@@ -375,7 +407,7 @@ class MapInstallerGUI:
         gd_row.pack(fill="x", pady=1)
         ttk.Label(gd_row, text="Game Directory:", width=16, anchor="e").pack(
             side="left", padx=(0, 4))
-        self.jd_dir_entry = ttk.Entry(gd_row, width=64)
+        self.jd_dir_entry = ttk.Entry(gd_row, width=40)
         self.jd_dir_entry.pack(side="left", fill="x", expand=True)
         ToolTip(self.jd_dir_entry,
                 "Path to the Just Dance 2021 installation folder.")
@@ -395,12 +427,12 @@ class MapInstallerGUI:
                     "mid_hd", "mid", "low_hd", "low"],
             state="readonly", width=12).pack(side="left")
 
-        # --- Button row ---
-        btn_row = ttk.Frame(install_panel)
-        btn_row.pack(fill="x", pady=(4, 0))
+        # --- Button rows (split into 2 rows for narrower column) ---
+        btn_row1 = ttk.Frame(install_panel)
+        btn_row1.pack(fill="x", pady=(4, 0))
 
         self.install_btn = ttk.Button(
-            btn_row, text="Install", command=self._on_unified_install)
+            btn_row1, text="Install", command=self._on_unified_install)
         self.install_btn.pack(side="left")
         ToolTip(self.install_btn,
                 "Run the install pipeline for the currently selected mode.")
@@ -410,43 +442,45 @@ class MapInstallerGUI:
         self.mode_install_btn = self.install_btn
 
         self.preflight_btn = ttk.Button(
-            btn_row, text="Pre-flight Check", command=self._on_preflight)
+            btn_row1, text="Pre-flight Check", command=self._on_preflight)
         self.preflight_btn.pack(side="left", padx=(12, 0))
         ToolTip(self.preflight_btn,
                 "Validates file paths and necessary tools (ffmpeg, ffplay) "
                 "before installing.")
 
         self.clear_cache_btn = ttk.Button(
-            btn_row, text="Clear Path Cache", command=self._on_clear_cache)
+            btn_row1, text="Clear Path Cache", command=self._on_clear_cache)
         self.clear_cache_btn.pack(side="left", padx=(12, 0))
         ToolTip(self.clear_cache_btn,
                 "Deletes the saved Just Dance 2021 game data paths. "
                 "The next Pre-flight Check or Install will re-scan.")
 
+        btn_row2 = ttk.Frame(install_panel)
+        btn_row2.pack(fill="x", pady=(2, 0))
+
         self.readjust_btn = ttk.Button(
-            btn_row, text="Re-adjust Offset", command=self._on_readjust)
-        self.readjust_btn.pack(side="left", padx=(12, 0))
+            btn_row2, text="Re-adjust Offset", command=self._on_readjust)
+        self.readjust_btn.pack(side="left")
         ToolTip(self.readjust_btn,
                 "Re-adjust audio/video offset on an already-installed map.\n"
-                "Select the map's download folder "
-                "(must contain .ogg and .webm files).")
+                "Select the map's download folder or IPK extraction folder.")
 
         self.settings_btn = ttk.Button(
-            btn_row, text="Settings", command=self._on_settings)
+            btn_row2, text="Settings", command=self._on_settings)
         self.settings_btn.pack(side="left", padx=(12, 0))
         ToolTip(self.settings_btn,
                 "Open installer settings (preflight, notifications, "
                 "cleanup, quality defaults).")
 
         self.reset_btn = ttk.Button(
-            btn_row, text="Reset State", command=self._on_reset_state)
+            btn_row2, text="Reset State", command=self._on_reset_state)
         self.reset_btn.pack(side="left", padx=(12, 0))
         ToolTip(self.reset_btn,
                 "Clear current inputs/progress and unlock all controls "
                 "without restarting the app.")
 
         # ===================== MIDDLE: PROGRESS + PREVIEW =====================
-        middle = ttk.Frame(container)
+        middle = ttk.Frame(right_col)
         middle.pack(fill="both", expand=True, pady=(0, 4))
 
         # --- Left: Installation Progress ---
@@ -482,7 +516,7 @@ class MapInstallerGUI:
         self.media_ctrls = self.preview.build_controls(prev_frame)
 
         # ===================== LOG OUTPUT =====================
-        log_frame = ttk.LabelFrame(container, text="Log Output", padding=4)
+        log_frame = ttk.LabelFrame(right_col, text="Log Output", padding=4)
         log_frame.pack(fill="x", pady=(0, 4))
 
         log_inner = ttk.Frame(log_frame)
@@ -500,7 +534,7 @@ class MapInstallerGUI:
 
         # ===================== SYNC REFINEMENT =====================
         self.sync_frame = ttk.LabelFrame(
-            container, text="Sync Refinement", padding=6)
+            right_col, text="Sync Refinement", padding=6)
         self.sync_frame.pack(fill="x", pady=(0, 4))
 
         tk.Label(
@@ -520,7 +554,7 @@ class MapInstallerGUI:
                  "pre-trimmed. Adjust VIDEO_OFFSET until the video matches "
                  "the beat.",
             font=("Consolas", 8, "bold"), fg="#CC6600",
-            wraplength=900, justify="left")
+            wraplength=450, justify="left")
         # Not packed yet -- shown dynamically by _on_pipeline_complete
 
         deltas = [1, 0.1, 0.01, 0.001]
@@ -805,11 +839,11 @@ class MapInstallerGUI:
         """Build a row: Label + Entry + Browse + Clear for a file selector."""
         row = ttk.Frame(parent)
         row.pack(fill="x", pady=1)
-        ttk.Label(row, text=label, width=18, anchor="e").pack(side="left", padx=(0, 4))
-        entry = ttk.Entry(row, width=48)
+        ttk.Label(row, text=label, width=15, anchor="e").pack(side="left", padx=(0, 4))
+        entry = ttk.Entry(row, width=30)
         entry.pack(side="left", fill="x", expand=True)
         ttk.Button(
-            row, text="Browse", width=6,
+            row, text="Browse", width=7,
             command=lambda e=entry, ft=filetypes: self._browse_manual_file(e, ft)
         ).pack(side="left", padx=(4, 0))
         ttk.Button(
@@ -822,11 +856,11 @@ class MapInstallerGUI:
         """Build a row: Label + Entry + Browse + Clear for a folder selector."""
         row = ttk.Frame(parent)
         row.pack(fill="x", pady=1)
-        ttk.Label(row, text=label, width=18, anchor="e").pack(side="left", padx=(0, 4))
-        entry = ttk.Entry(row, width=48)
+        ttk.Label(row, text=label, width=15, anchor="e").pack(side="left", padx=(0, 4))
+        entry = ttk.Entry(row, width=30)
         entry.pack(side="left", fill="x", expand=True)
         ttk.Button(
-            row, text="Browse", width=6,
+            row, text="Browse", width=7,
             command=lambda e=entry: self._browse_manual_dir(e)
         ).pack(side="left", padx=(4, 0))
         ttk.Button(
@@ -871,8 +905,10 @@ class MapInstallerGUI:
         if not root or not os.path.isdir(root):
             return
         from source_analysis import auto_populate_manual_fields
+        submode = self._manual_submode_var.get()
         detected = auto_populate_manual_fields(root,
-                                               codename=self._manual_codename_entry.get().strip())
+                                               codename=self._manual_codename_entry.get().strip(),
+                                               submode=submode)
         # Fill codename if empty
         if detected.get("codename") and not self._manual_codename_entry.get().strip():
             self._manual_codename_entry.delete(0, tk.END)
@@ -883,6 +919,20 @@ class MapInstallerGUI:
             if val and not entry.get().strip():
                 entry.delete(0, tk.END)
                 entry.insert(0, val)
+
+    def _on_manual_submode_changed(self):
+        """Handle manual submode change between JDU and IPK."""
+        submode = self._manual_submode_var.get()
+        # Update hint label
+        if submode == "IPK":
+            self._manual_submode_hint.configure(text="Unpacked IPK map files")
+        else:
+            self._manual_submode_hint.configure(text="Downloaded assets + nohud HTML")
+        # Clear all manual fields so user re-scans for the new source type
+        self._manual_root_entry.delete(0, tk.END)
+        self._manual_codename_entry.delete(0, tk.END)
+        for entry in self._manual_entries.values():
+            entry.delete(0, tk.END)
 
     def _browse_mode_source(self):
         mode = self.source_mode_var.get()
@@ -911,7 +961,7 @@ class MapInstallerGUI:
     def _on_source_mode_changed(self):
         mode = self.source_mode_var.get()
 
-        # Swap mode-specific frame
+        # Swap mode-specific frame (pack/pack_forget for dynamic height)
         for key, frame in self._mode_frames.items():
             if key == mode:
                 frame.pack(fill="x")
@@ -1016,6 +1066,7 @@ class MapInstallerGUI:
         elif mode == "manual":
             spec = source_analysis.analyze_manual_mode_v2(
                 root_folder=self._manual_root_entry.get().strip(),
+                submode=self._manual_submode_var.get(),
                 audio_path=self._manual_entries.get("audio_path", ttk.Entry()).get().strip(),
                 video_path=self._manual_entries.get("video_path", ttk.Entry()).get().strip(),
                 musictrack_path=self._manual_entries.get("musictrack_path", ttk.Entry()).get().strip(),
@@ -1255,6 +1306,7 @@ class MapInstallerGUI:
                         original_map_name=codename,
                     )
                     state._interactive = False
+                    state.cleanup_behavior = self._settings.get("cleanup_behavior", "ask")
                     map_installer.configure_manual_source(
                         state,
                         source_type="ipk_file",
@@ -1274,8 +1326,9 @@ class MapInstallerGUI:
                     results.append((ipk_name, codename if 'codename' in dir() else "?", False, str(e)))
                     print(f"    FAILED: {e}")
                 finally:
-                    # Clean up per-map extraction directory
-                    if 'ipk_extracted' in dir() and os.path.isdir(ipk_extracted):
+                    # Clean up per-map extraction directory based on cleanup setting
+                    cleanup = self._settings.get("cleanup_behavior", "ask")
+                    if cleanup == "delete" and 'ipk_extracted' in dir() and os.path.isdir(ipk_extracted):
                         import shutil
                         shutil.rmtree(ipk_extracted, ignore_errors=True)
 
@@ -1321,7 +1374,12 @@ class MapInstallerGUI:
                 quality=self.quality_var.get(),
                 original_map_name=map_name,
             )
-            source_type = "ipk_file" if spec.mode == "ipk" else "manual_v2"
+            if spec.mode == "ipk":
+                source_type = "ipk_file"
+            elif spec.submode == "IPK":
+                source_type = "ipk_file"
+            else:
+                source_type = "manual_v2"
             # For IPK mode, prefer spec paths over GUI entries to avoid
             # stale audio/video from a previous installation.
             if spec.mode == "ipk":
@@ -1749,8 +1807,11 @@ class MapInstallerGUI:
             if not map_name:
                 messagebox.showerror(
                     "Missing Input",
-                    "Could not detect map codename from the selected files.\n"
-                    "Try selecting valid HTML files from a map folder.")
+                    "Could not detect map codename from the selected files.\n\n"
+                    "Possible causes:\n"
+                    "- HTML files don't contain valid download links\n"
+                    "- The JDU bot returned an error for this track\n"
+                    "- The files were corrupted during download")
                 return None
             # Check for non-ASCII characters and prompt for replacement
             original_map_name = map_name
@@ -1856,6 +1917,7 @@ class MapInstallerGUI:
             self._update_step_status(i, "pending")
 
         self.pipeline_state = state
+        state.cleanup_behavior = self._settings.get("cleanup_behavior", "ask")
 
         # Close any previous log file handler and open a new one for this install run
         if self._file_handler:
