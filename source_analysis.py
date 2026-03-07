@@ -300,6 +300,18 @@ def analyze_html_mode(asset_html: str, nohud_html: str) -> SourceSpec:
         spec.errors.append("NOHUD HTML is required.")
 
     if not spec.errors:
+        asset_urls = map_downloader.extract_urls(asset_html) if asset_html else []
+        nohud_urls = map_downloader.extract_urls(nohud_html) if nohud_html else []
+        if not asset_urls:
+            spec.errors.append(
+                "Asset HTML contains no valid download links. "
+                "The file may be corrupted or the JDU bot returned an error.")
+        if not nohud_urls:
+            spec.errors.append(
+                "NOHUD HTML contains no valid download links. "
+                "The file may be corrupted or the JDU bot returned an error.")
+
+    if not spec.errors:
         spec.ready_for_prepare = True
         spec.ready_for_install = True
     return spec
