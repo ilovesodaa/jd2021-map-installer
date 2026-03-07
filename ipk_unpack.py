@@ -108,6 +108,8 @@ def extract(target_file, output_dir=None):
 
         base_offset = _unpack(ipk_header['base_offset']['value'])
 
+        raw_count = 0
+        compressed_count = 0
         for k, v in enumerate(file_chunks):
             offset = _unpack(file_chunks[k]['offset']['value'])
             data_size = _unpack(file_chunks[k]['size']['value'])
@@ -133,12 +135,17 @@ def extract(target_file, output_dir=None):
                 raw_data = file.read(data_size)
                 try:
                     decompressed = zlib.decompress(raw_data)
+                    compressed_count += 1
                 except zlib.error:
                     try:
                         decompressed = lzma.decompress(raw_data)
+                        compressed_count += 1
                     except lzma.LZMAError:
                         logger.debug("    File %s is not compressed (zlib/lzma failed), using raw data", file_name)
                         decompressed = raw_data
+                        raw_count += 1
                 ff.write(decompressed)
 
+    if raw_count:
+        logger.info("    IPK: %d of %d files were already uncompressed (raw data)", raw_count, num_files)
     logger.info("    IPK: Extracted %d files to %s", num_files, output_path)
