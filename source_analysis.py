@@ -147,45 +147,55 @@ def _extract_ckd_audio(ckd_path: str, output_dir: str) -> Optional[str]:
     elif payload[:4] == b"RIFF":
         ext = ".wav"
     else:
-        # Proprietary format (XMA, etc.) -- try vgmstream on the raw CKD first,
-        # then on just the payload written to a temp file.
-        vgm_path = _find_vgmstream()
-        if not vgm_path:
-            print(f"Warning: unknown CKD audio format and vgmstream not found for {os.path.basename(ckd_path)}")
-            return None
+        # CKD header may be larger than 44 bytes — scan for magic bytes
+        riff_offset = data.find(b"RIFF", 0, 512)
+        ogg_offset = data.find(b"OggS", 0, 512)
+        if riff_offset >= 0 and (ogg_offset < 0 or riff_offset <= ogg_offset):
+            payload = data[riff_offset:]
+            ext = ".wav"
+        elif ogg_offset >= 0:
+            payload = data[ogg_offset:]
+            ext = ".ogg"
+        else:
+            # Proprietary format (XMA, etc.) -- try vgmstream on the raw CKD first,
+            # then on just the payload written to a temp file.
+            vgm_path = _find_vgmstream()
+            if not vgm_path:
+                print(f"Warning: unknown CKD audio format and vgmstream not found for {os.path.basename(ckd_path)}")
+                return None
 
-        os.makedirs(output_dir, exist_ok=True)
-        base = os.path.splitext(os.path.basename(ckd_path))[0]
-        if base.lower().endswith(".wav") or base.lower().endswith(".ogg"):
-            base = base[:-4]
-        out_path = os.path.join(output_dir, base + ".wav")
+            os.makedirs(output_dir, exist_ok=True)
+            base = os.path.splitext(os.path.basename(ckd_path))[0]
+            if base.lower().endswith(".wav") or base.lower().endswith(".ogg"):
+                base = base[:-4]
+            out_path = os.path.join(output_dir, base + ".wav")
 
-        import subprocess
-        import tempfile
+            import subprocess
+            import tempfile
 
-        # Attempt 1: feed vgmstream the original CKD file directly
-        try:
-            res = subprocess.run(
-                [vgm_path, "-o", out_path, ckd_path],
-                capture_output=True, timeout=60)
-            if res.returncode == 0 and os.path.isfile(out_path) and os.path.getsize(out_path) > 100:
-                return out_path
-        except Exception:
-            pass
+            # Attempt 1: feed vgmstream the original CKD file directly
+            try:
+                res = subprocess.run(
+                    [vgm_path, "-o", out_path, ckd_path],
+                    capture_output=True, timeout=60)
+                if res.returncode == 0 and os.path.isfile(out_path) and os.path.getsize(out_path) > 100:
+                    return out_path
+            except Exception:
+                pass
 
-        # Attempt 2: strip CKD header, write payload to temp file, decode
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".xma", delete=False) as tmp:
-                tmp.write(payload)
-                tmp_path = tmp.name
-            res = subprocess.run(
-                [vgm_path, "-o", out_path, tmp_path],
-                capture_output=True, timeout=60)
-            os.unlink(tmp_path)
-            if res.returncode == 0 and os.path.isfile(out_path) and os.path.getsize(out_path) > 100:
-                return out_path
-        except Exception as e:
-            print(f"Warning: vgmstream fallback failed for {os.path.basename(ckd_path)}: {e}")
+            # Attempt 2: strip CKD header, write payload to temp file, decode
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".xma", delete=False) as tmp:
+                    tmp.write(payload)
+                    tmp_path = tmp.name
+                res = subprocess.run(
+                    [vgm_path, "-o", out_path, tmp_path],
+                    capture_output=True, timeout=60)
+                os.unlink(tmp_path)
+                if res.returncode == 0 and os.path.isfile(out_path) and os.path.getsize(out_path) > 100:
+                    return out_path
+            except Exception as e:
+                print(f"Warning: vgmstream fallback failed for {os.path.basename(ckd_path)}: {e}")
 
         return None
 
@@ -420,11 +430,37 @@ def analyze_manual_mode(folder: str, submode: str = "auto") -> SourceSpec:
 # Manual mode v2 — explicit per-file selection with auto-populate
 # ---------------------------------------------------------------------------
 
-def auto_populate_manual_fields(root_folder, codename=""):
+def _pick_webm_recursive(folder: str, codename: Optional[str]) -> Optional[str]:
+    """Find a .webm video file recursively (for IPK structures with nested dirs)."""
+    hits = [
+        f for f in glob.glob(os.path.join(folder, "**", "*.webm"), recursive=True)
+        if "mappreview" not in os.path.basename(f).lower()
+        and "videopreview" not in os.path.basename(f).lower()
+    ]
+    if not hits:
+        return None
+    if codename:
+        lower = codename.lower()
+        matches = [p for p in hits if os.path.basename(p).lower().startswith(lower)]
+        if matches:
+            hits = matches
+    for quality in SUPPORTED_QUALITIES:
+        q = f"_{quality}.webm"
+        for path in hits:
+            if os.path.basename(path).upper().endswith(q):
+                return path
+    return hits[0]
+
+
+def auto_populate_manual_fields(root_folder, codename="", submode="JDU"):
     """Scan root_folder and return a dict of auto-detected paths.
 
     Keys match the manual mode field names.  Values are paths or None.
     Used by the GUI to pre-fill fields when the user selects a root folder.
+
+    submode controls scan behaviour:
+      "JDU" — audio/video at root level, CKDs inside {root}/ipk_extracted/
+      "IPK" — everything inside root (the extraction folder itself)
     """
     root_folder = _normalize(root_folder)
     if not root_folder or not os.path.isdir(root_folder):
@@ -436,46 +472,54 @@ def auto_populate_manual_fields(root_folder, codename=""):
         codename = os.path.basename(root_folder)
     result["codename"] = codename
 
-    # Audio and video (reuse existing helpers)
-    result["audio_path"] = _pick_audio(root_folder, codename)
-    result["video_path"] = _pick_webm(root_folder, codename)
+    if submode == "IPK":
+        # IPK: root IS the extracted data.  Audio is .wav.ckd, video is nested.
+        result["audio_path"] = _pick_audio(root_folder, codename)
+        result["video_path"] = _pick_webm_recursive(root_folder, codename)
+        ckd_search_root = root_folder
+    else:
+        # JDU: audio/video at root level, CKDs inside ipk_extracted/
+        result["audio_path"] = _pick_audio(root_folder, codename)
+        result["video_path"] = _pick_webm(root_folder, codename)
+        ipk_sub = os.path.join(root_folder, "ipk_extracted")
+        ckd_search_root = ipk_sub if os.path.isdir(ipk_sub) else root_folder
 
     # Musictrack CKD
-    hits = glob.glob(os.path.join(root_folder, "**", "*musictrack*.tpl.ckd"), recursive=True)
+    hits = glob.glob(os.path.join(ckd_search_root, "**", "*musictrack*.tpl.ckd"), recursive=True)
     result["musictrack_path"] = hits[0] if hits else None
 
     # Songdesc CKD
-    hits = glob.glob(os.path.join(root_folder, "**", "*songdesc*.tpl.ckd"), recursive=True)
+    hits = glob.glob(os.path.join(ckd_search_root, "**", "*songdesc*.tpl.ckd"), recursive=True)
     result["songdesc_path"] = hits[0] if hits else None
 
     # Dance tape CKD
-    hits = glob.glob(os.path.join(root_folder, "**", "*_tml_dance.?tape.ckd"), recursive=True)
+    hits = glob.glob(os.path.join(ckd_search_root, "**", "*_tml_dance.?tape.ckd"), recursive=True)
     result["dtape_path"] = hits[0] if hits else None
 
     # Karaoke tape CKD
-    hits = glob.glob(os.path.join(root_folder, "**", "*_tml_karaoke.?tape.ckd"), recursive=True)
+    hits = glob.glob(os.path.join(ckd_search_root, "**", "*_tml_karaoke.?tape.ckd"), recursive=True)
     result["ktape_path"] = hits[0] if hits else None
 
     # Mainsequence tape CKD
-    hits = glob.glob(os.path.join(root_folder, "**", "*mainsequence*.tape.ckd"), recursive=True)
+    hits = glob.glob(os.path.join(ckd_search_root, "**", "*mainsequence*.tape.ckd"), recursive=True)
     result["mainsequence_path"] = hits[0] if hits else None
 
     # Moves folder
-    hits = glob.glob(os.path.join(root_folder, "**", "moves"), recursive=True)
+    hits = glob.glob(os.path.join(ckd_search_root, "**", "moves"), recursive=True)
     result["moves_dir"] = hits[0] if hits else None
 
     # Pictos folder
-    hits = glob.glob(os.path.join(root_folder, "**", "pictos"), recursive=True)
+    hits = glob.glob(os.path.join(ckd_search_root, "**", "pictos"), recursive=True)
     result["pictos_dir"] = hits[0] if hits else None
 
     # MenuArt folder (try textures sub-dir first, fall back to menuart)
-    hits = glob.glob(os.path.join(root_folder, "**", "menuart", "textures"), recursive=True)
+    hits = glob.glob(os.path.join(ckd_search_root, "**", "menuart", "textures"), recursive=True)
     if not hits:
-        hits = glob.glob(os.path.join(root_folder, "**", "menuart"), recursive=True)
+        hits = glob.glob(os.path.join(ckd_search_root, "**", "menuart"), recursive=True)
     result["menuart_dir"] = hits[0] if hits else None
 
     # AMB folder
-    hits = glob.glob(os.path.join(root_folder, "**", "audio", "amb"), recursive=True)
+    hits = glob.glob(os.path.join(ckd_search_root, "**", "audio", "amb"), recursive=True)
     result["amb_dir"] = hits[0] if hits else None
 
     return result
@@ -483,6 +527,7 @@ def auto_populate_manual_fields(root_folder, codename=""):
 
 def analyze_manual_mode_v2(
     root_folder,
+    submode="JDU",
     audio_path="",
     video_path="",
     musictrack_path="",
@@ -500,15 +545,24 @@ def analyze_manual_mode_v2(
 
     Unlike analyze_manual_mode (v1), this function does NOT auto-detect files.
     Each path is provided explicitly by the caller (from GUI entry fields).
+
+    submode: "JDU" (downloaded assets) or "IPK" (unpacked IPK).
     """
     root_folder = _normalize(root_folder) if root_folder else ""
-    spec = SourceSpec(mode="manual", submode="manual_v2", source_path=root_folder or "")
+    spec = SourceSpec(mode="manual", submode=submode, source_path=root_folder or "")
 
     if not root_folder or not os.path.isdir(root_folder):
         spec.errors.append("Select a valid root folder.")
         return spec
 
-    spec.ipk_extracted = root_folder
+    if submode == "IPK":
+        # IPK: root folder IS the extracted data
+        spec.ipk_extracted = root_folder
+    else:
+        # JDU: CKDs live inside ipk_extracted/ sub-folder
+        ipk_sub = os.path.join(root_folder, "ipk_extracted")
+        spec.ipk_extracted = ipk_sub if os.path.isdir(ipk_sub) else root_folder
+
     spec.codename = codename.strip() or os.path.basename(root_folder)
 
     # Validate and assign paths

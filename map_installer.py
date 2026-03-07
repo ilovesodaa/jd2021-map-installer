@@ -125,10 +125,6 @@ class PipelineState:
         self.musictrack_start_beat = None   # int, typically negative
         self.marker_preroll_ms = None       # float: markers[abs(startBeat)] / 48 + offset
 
-        # Preview loop data (populated in step 06 from musictrack CKD)
-        self.preview_loop_start_sec = 0.0   # seconds from beat-0
-        self.preview_loop_end_sec = 0.0     # seconds from beat-0
-
         # SoundSetClip data from mainsequence tape (populated in step 08)
         self.amb_sound_clips = []           # list of dicts from mainsequence SoundSetClips
 
@@ -1198,6 +1194,16 @@ def compute_marker_preroll(markers, start_beat, offset_ms=MARKER_OFFSET_MS):
     return markers[idx] / 48.0 + offset_ms
 
 def convert_audio(audio_path, map_name, target_dir, a_offset=0.0):
+    # Handle cooked audio files (.wav.ckd / .ogg.ckd) by extracting raw audio first
+    if audio_path.lower().endswith(".ckd"):
+        from source_analysis import _extract_ckd_audio
+        extracted = _extract_ckd_audio(audio_path, os.path.dirname(audio_path))
+        if extracted:
+            logger.info("    Extracted raw audio from CKD: %s", os.path.basename(extracted))
+            audio_path = extracted
+        else:
+            raise RuntimeError(f"Failed to extract audio from CKD: {audio_path}")
+
     wav_out = os.path.join(target_dir, f"Audio/{map_name}.wav")
     ogg_out = os.path.join(target_dir, f"Audio/{map_name}.ogg")
 
