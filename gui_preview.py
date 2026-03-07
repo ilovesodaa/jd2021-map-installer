@@ -58,6 +58,10 @@ class PreviewManager:
         self._ffplay_warned = False
         self._auto_resume = False
 
+        # Loop parameters (seconds from beat-0; 0 = no loop)
+        self._loop_start = 0.0
+        self._loop_end = 0.0
+
         # Stashed launch arguments so toggle/seek/resize can relaunch
         self._last_video_path = None
         self._last_audio_path = None
@@ -158,7 +162,7 @@ class PreviewManager:
     # ------------------------------------------------------------------
 
     def launch(self, video_path, audio_path, v_override, a_offset,
-               start_time=0.0):
+               start_time=0.0, loop_start=0.0, loop_end=0.0):
         """Start (or restart) the preview from *start_time*."""
         if not video_path or not audio_path:
             return
@@ -171,6 +175,8 @@ class PreviewManager:
         self._last_audio_path = audio_path
         self._last_v_override = v_override
         self._last_a_offset = a_offset
+        self._loop_start = loop_start
+        self._loop_end = loop_end
 
         def _do():
             with self._lock:
@@ -342,7 +348,9 @@ class PreviewManager:
             st = start_time if start_time is not None else self._position
             self.launch(self._last_video_path, self._last_audio_path,
                         self._last_v_override, self._last_a_offset,
-                        start_time=st)
+                        start_time=st,
+                        loop_start=self._loop_start,
+                        loop_end=self._loop_end)
 
     def _kill(self):
         """Terminate ffmpeg/ffplay subprocesses and reset handles."""
@@ -427,6 +435,23 @@ class PreviewManager:
                 while len(data) < frame_size:
                     chunk = proc.stdout.read(frame_size - len(data))
                     if not chunk:
+                        # EOF reached — loop or stop gracefully
+                        if (self._loop_start > 0
+                                and self._loop_end > self._loop_start
+                                and not stop_event.is_set()):
+                            # Keep last frame visible while re-launching
+                            self._keep_image = True
+                            self.root.after(
+                                0, lambda ls=self._loop_start:
+                                    self._relaunch_current(start_time=ls))
+                        else:
+                            # No loop: stop, keep last frame visible
+                            self._keep_image = True
+                            self._playing = False
+                            if self._btn_playpause:
+                                self.root.after(
+                                    0, lambda: self._btn_playpause.configure(
+                                        text="\u25b6"))
                         return
                     data += chunk
 
@@ -552,7 +577,9 @@ class PreviewManager:
         self._debounce_timer = None
         if self._playing or self._ffmpeg is not None:
             self.launch(video_path, audio_path, v_override, a_offset,
-                        start_time=self._position)
+                        start_time=self._position,
+                        loop_start=self._loop_start,
+                        loop_end=self._loop_end)
 
     def _set_widget_state_recursive(self, widget, state):
         try:

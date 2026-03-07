@@ -205,16 +205,7 @@ class MapInstallerGUI:
         self.source_mode_combo.bind(
             "<<ComboboxSelected>>", lambda _e: self._on_source_mode_changed())
 
-        # Manual submode (shown only in manual mode, handled by _on_source_mode_changed)
-        self._submode_label = ttk.Label(mode_row, text="Submode:")
-        self.manual_submode_var = tk.StringVar(value="auto")
-        self.manual_submode_combo = ttk.Combobox(
-            mode_row,
-            textvariable=self.manual_submode_var,
-            values=["auto", "unpacked_ipk", "downloaded_assets"],
-            state="readonly",
-            width=18,
-        )
+        # (Submode selector removed — manual mode v2 uses per-file selectors)
 
         # --- Mode-specific frames (swapped by _on_source_mode_changed) ---
         self._mode_frames = {}
@@ -291,40 +282,57 @@ class MapInstallerGUI:
         self.mode_video_entry = ttk.Entry(f_ipk)
         self._mode_frames["ipk"] = f_ipk
 
-        # MANUAL frame: Folder + Audio + Video (reuses ipk entries via shared refs)
+        # MANUAL frame: full per-file/folder selector layout
         f_manual = ttk.Frame(self._mode_frame_parent)
-        man_r1 = ttk.Frame(f_manual)
-        man_r1.pack(fill="x", pady=1)
-        ttk.Label(man_r1, text="Source Folder:", width=16, anchor="e").pack(
-            side="left", padx=(0, 4))
-        self._manual_source_entry = ttk.Entry(man_r1, width=64)
-        self._manual_source_entry.pack(side="left", fill="x", expand=True)
-        ttk.Button(
-            man_r1, text="Browse", width=8,
-            command=self._browse_mode_source).pack(side="left", padx=(4, 0))
-        # Audio/video rows for manual mode use the same entries as IPK
-        # (they're read from mode_audio_entry / mode_video_entry)
-        for row_label, entry_ref, filetypes in [
-            ("Audio (.ogg):", self.mode_audio_entry,
-             [("OGG files", "*.ogg"), ("All files", "*.*")]),
-            ("Video (.webm):", self.mode_video_entry,
-             [("WEBM files", "*.webm"), ("All files", "*.*")]),
+        self._manual_entries = {}
+
+        # Row 0: Root folder + Codename
+        row = ttk.Frame(f_manual); row.pack(fill="x", pady=1)
+        ttk.Label(row, text="Root Folder:", width=16, anchor="e").pack(side="left", padx=(0, 4))
+        self._manual_root_entry = ttk.Entry(row, width=48)
+        self._manual_root_entry.pack(side="left", fill="x", expand=True)
+        ttk.Button(row, text="Browse", width=7,
+                   command=self._on_manual_root_browse).pack(side="left", padx=(4, 0))
+        ttk.Button(row, text="Scan", width=5,
+                   command=self._on_manual_auto_populate).pack(side="left", padx=(2, 0))
+
+        row = ttk.Frame(f_manual); row.pack(fill="x", pady=1)
+        ttk.Label(row, text="Codename:", width=16, anchor="e").pack(side="left", padx=(0, 4))
+        self._manual_codename_entry = ttk.Entry(row, width=48)
+        self._manual_codename_entry.pack(side="left", fill="x", expand=True)
+
+        # --- Required Files ---
+        req_frame = ttk.LabelFrame(f_manual, text="Required Files")
+        req_frame.pack(fill="x", pady=(4, 2), padx=2)
+        for key, label, ftypes in [
+            ("audio_path",      "Audio File:",      [("Audio", "*.ogg *.wav"), ("All", "*.*")]),
+            ("video_path",      "Video File:",      [("WebM", "*.webm"), ("All", "*.*")]),
+            ("musictrack_path", "Musictrack CKD:",  [("CKD", "*.ckd"), ("All", "*.*")]),
         ]:
-            r = ttk.Frame(f_manual)
-            r.pack(fill="x", pady=1)
-            ttk.Label(r, text=row_label, width=16, anchor="e").pack(
-                side="left", padx=(0, 4))
-            # Create a separate entry for manual mode so widgets aren't shared
-            man_entry = ttk.Entry(r, width=64)
-            man_entry.pack(side="left", fill="x", expand=True)
-            if "Audio" in row_label:
-                self._manual_audio_entry = man_entry
-            else:
-                self._manual_video_entry = man_entry
-            ttk.Button(
-                r, text="Browse", width=8,
-                command=lambda e=man_entry, ft=filetypes: self._browse_specific_file(e, ft)
-            ).pack(side="left", padx=(4, 0))
+            self._build_manual_file_row(req_frame, key, label, ftypes)
+
+        # --- Tapes & Config (optional) ---
+        tape_frame = ttk.LabelFrame(f_manual, text="Tapes & Config (optional)")
+        tape_frame.pack(fill="x", pady=2, padx=2)
+        for key, label, ftypes in [
+            ("songdesc_path",    "Songdesc CKD:",    [("CKD", "*.ckd"), ("All", "*.*")]),
+            ("dtape_path",       "Dance Tape CKD:",  [("CKD", "*.ckd"), ("All", "*.*")]),
+            ("ktape_path",       "Karaoke Tape CKD:",[("CKD", "*.ckd"), ("All", "*.*")]),
+            ("mainsequence_path","Mainseq Tape CKD:",[("CKD", "*.ckd"), ("All", "*.*")]),
+        ]:
+            self._build_manual_file_row(tape_frame, key, label, ftypes)
+
+        # --- Asset Folders (optional) ---
+        dir_frame = ttk.LabelFrame(f_manual, text="Asset Folders (optional)")
+        dir_frame.pack(fill="x", pady=2, padx=2)
+        for key, label in [
+            ("moves_dir",   "Moves Folder:"),
+            ("pictos_dir",  "Pictos Folder:"),
+            ("menuart_dir", "MenuArt Folder:"),
+            ("amb_dir",     "AMB Folder:"),
+        ]:
+            self._build_manual_dir_row(dir_frame, key, label)
+
         self._mode_frames["manual"] = f_manual
 
         # BATCH frame: Folder only
@@ -789,6 +797,93 @@ class MapInstallerGUI:
                 self.mode_audio_entry.delete(0, tk.END)
                 self.mode_video_entry.delete(0, tk.END)
 
+    # ------------------------------------------------------------------
+    # Manual mode v2 helpers
+    # ------------------------------------------------------------------
+
+    def _build_manual_file_row(self, parent, key, label, filetypes):
+        """Build a row: Label + Entry + Browse + Clear for a file selector."""
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=1)
+        ttk.Label(row, text=label, width=18, anchor="e").pack(side="left", padx=(0, 4))
+        entry = ttk.Entry(row, width=48)
+        entry.pack(side="left", fill="x", expand=True)
+        ttk.Button(
+            row, text="Browse", width=6,
+            command=lambda e=entry, ft=filetypes: self._browse_manual_file(e, ft)
+        ).pack(side="left", padx=(4, 0))
+        ttk.Button(
+            row, text="Clear", width=5,
+            command=lambda e=entry: (e.delete(0, tk.END))
+        ).pack(side="left", padx=(2, 0))
+        self._manual_entries[key] = entry
+
+    def _build_manual_dir_row(self, parent, key, label):
+        """Build a row: Label + Entry + Browse + Clear for a folder selector."""
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=1)
+        ttk.Label(row, text=label, width=18, anchor="e").pack(side="left", padx=(0, 4))
+        entry = ttk.Entry(row, width=48)
+        entry.pack(side="left", fill="x", expand=True)
+        ttk.Button(
+            row, text="Browse", width=6,
+            command=lambda e=entry: self._browse_manual_dir(e)
+        ).pack(side="left", padx=(4, 0))
+        ttk.Button(
+            row, text="Clear", width=5,
+            command=lambda e=entry: (e.delete(0, tk.END))
+        ).pack(side="left", padx=(2, 0))
+        self._manual_entries[key] = entry
+
+    def _browse_manual_file(self, entry, filetypes):
+        """Open file dialog for manual mode, defaulting to root folder or MapDownloads."""
+        initial = self._manual_root_entry.get().strip()
+        if not initial or not os.path.isdir(initial):
+            initial = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MapDownloads")
+        path = filedialog.askopenfilename(initialdir=initial, filetypes=filetypes)
+        if path:
+            entry.delete(0, tk.END)
+            entry.insert(0, path)
+
+    def _browse_manual_dir(self, entry):
+        """Open directory dialog for manual mode."""
+        initial = self._manual_root_entry.get().strip()
+        if not initial or not os.path.isdir(initial):
+            initial = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MapDownloads")
+        path = filedialog.askdirectory(initialdir=initial, mustexist=True)
+        if path:
+            entry.delete(0, tk.END)
+            entry.insert(0, path)
+
+    def _on_manual_root_browse(self):
+        """Browse for root folder, then auto-populate if fields are empty."""
+        initial = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MapDownloads")
+        path = filedialog.askdirectory(initialdir=initial, mustexist=True)
+        if not path:
+            return
+        self._manual_root_entry.delete(0, tk.END)
+        self._manual_root_entry.insert(0, path)
+        self._on_manual_auto_populate()
+
+    def _on_manual_auto_populate(self):
+        """Scan root folder and fill any empty manual mode fields."""
+        root = self._manual_root_entry.get().strip()
+        if not root or not os.path.isdir(root):
+            return
+        from source_analysis import auto_populate_manual_fields
+        detected = auto_populate_manual_fields(root,
+                                               codename=self._manual_codename_entry.get().strip())
+        # Fill codename if empty
+        if detected.get("codename") and not self._manual_codename_entry.get().strip():
+            self._manual_codename_entry.delete(0, tk.END)
+            self._manual_codename_entry.insert(0, detected["codename"])
+        # Fill each entry only if currently empty
+        for key, entry in self._manual_entries.items():
+            val = detected.get(key)
+            if val and not entry.get().strip():
+                entry.delete(0, tk.END)
+                entry.insert(0, val)
+
     def _browse_mode_source(self):
         mode = self.source_mode_var.get()
         if mode == "ipk":
@@ -802,7 +897,7 @@ class MapInstallerGUI:
 
         # Write to the correct entry based on mode
         if mode == "manual":
-            target = self._manual_source_entry
+            target = self._manual_root_entry
         elif mode == "ipk":
             target = self.source_path_entry
         elif mode == "batch":
@@ -822,15 +917,6 @@ class MapInstallerGUI:
                 frame.pack(fill="x")
             else:
                 frame.pack_forget()
-
-        # Show/hide manual submode selector
-        if mode == "manual":
-            self._submode_label.pack(side="left", padx=(12, 4))
-            self.manual_submode_combo.pack(side="left")
-            self.manual_submode_combo.configure(state="readonly")
-        else:
-            self._submode_label.pack_forget()
-            self.manual_submode_combo.pack_forget()
 
         # Show/hide Analyze/Prepare buttons (not needed for fetch mode)
         if mode == "fetch":
@@ -858,7 +944,7 @@ class MapInstallerGUI:
         if mode == "ipk":
             return self.source_path_entry.get().strip()
         if mode == "manual":
-            return self._manual_source_entry.get().strip()
+            return self._manual_root_entry.get().strip()
         if mode == "batch":
             return self._batch_folder_entry.get().strip()
         return ""
@@ -867,14 +953,16 @@ class MapInstallerGUI:
         """Return the audio path from the appropriate entry for the current mode."""
         mode = self.source_mode_var.get()
         if mode == "manual":
-            return self._manual_audio_entry.get().strip()
+            e = self._manual_entries.get("audio_path")
+            return e.get().strip() if e else ""
         return self.mode_audio_entry.get().strip()
 
     def _get_video_path(self):
         """Return the video path from the appropriate entry for the current mode."""
         mode = self.source_mode_var.get()
         if mode == "manual":
-            return self._manual_video_entry.get().strip()
+            e = self._manual_entries.get("video_path")
+            return e.get().strip() if e else ""
         return self.mode_video_entry.get().strip()
 
     def _analyze_mode_source(self):
@@ -926,7 +1014,21 @@ class MapInstallerGUI:
             # stale paths from a previous installation.
             spec = source_analysis.analyze_ipk_file_mode(source_path)
         elif mode == "manual":
-            spec = source_analysis.analyze_manual_mode(source_folder, self.manual_submode_var.get())
+            spec = source_analysis.analyze_manual_mode_v2(
+                root_folder=self._manual_root_entry.get().strip(),
+                audio_path=self._manual_entries.get("audio_path", ttk.Entry()).get().strip(),
+                video_path=self._manual_entries.get("video_path", ttk.Entry()).get().strip(),
+                musictrack_path=self._manual_entries.get("musictrack_path", ttk.Entry()).get().strip(),
+                songdesc_path=self._manual_entries.get("songdesc_path", ttk.Entry()).get().strip(),
+                dtape_path=self._manual_entries.get("dtape_path", ttk.Entry()).get().strip(),
+                ktape_path=self._manual_entries.get("ktape_path", ttk.Entry()).get().strip(),
+                mainsequence_path=self._manual_entries.get("mainsequence_path", ttk.Entry()).get().strip(),
+                moves_dir=self._manual_entries.get("moves_dir", ttk.Entry()).get().strip(),
+                pictos_dir=self._manual_entries.get("pictos_dir", ttk.Entry()).get().strip(),
+                menuart_dir=self._manual_entries.get("menuart_dir", ttk.Entry()).get().strip(),
+                amb_dir=self._manual_entries.get("amb_dir", ttk.Entry()).get().strip(),
+                codename=self._manual_codename_entry.get().strip(),
+            )
         elif mode == "batch":
             spec = source_analysis.SourceSpec(mode="batch", source_path=source_folder)
             if not source_folder or not os.path.isdir(source_folder):
@@ -940,8 +1042,10 @@ class MapInstallerGUI:
 
         if spec.audio_path:
             if mode == "manual":
-                self._manual_audio_entry.delete(0, tk.END)
-                self._manual_audio_entry.insert(0, spec.audio_path)
+                e = self._manual_entries.get("audio_path")
+                if e:
+                    e.delete(0, tk.END)
+                    e.insert(0, spec.audio_path)
             else:
                 self.mode_audio_entry.delete(0, tk.END)
                 self.mode_audio_entry.insert(0, spec.audio_path)
@@ -950,8 +1054,10 @@ class MapInstallerGUI:
             self.mode_audio_entry.delete(0, tk.END)
         if spec.video_path:
             if mode == "manual":
-                self._manual_video_entry.delete(0, tk.END)
-                self._manual_video_entry.insert(0, spec.video_path)
+                e = self._manual_entries.get("video_path")
+                if e:
+                    e.delete(0, tk.END)
+                    e.insert(0, spec.video_path)
             else:
                 self.mode_video_entry.delete(0, tk.END)
                 self.mode_video_entry.insert(0, spec.video_path)
@@ -1208,7 +1314,7 @@ class MapInstallerGUI:
         threading.Thread(target=_run, daemon=True).start()
 
     def _install_from_manual_spec(self, spec):
-        require_html = spec.mode == "manual" and spec.submode == "downloaded_assets"
+        require_html = False
         asset_html = spec.asset_html or "(manual)"
         nohud_html = spec.nohud_html or "(manual)"
 
@@ -1222,15 +1328,15 @@ class MapInstallerGUI:
                 quality=self.quality_var.get(),
                 original_map_name=map_name,
             )
-            source_type = "ipk_file" if spec.mode == "ipk" else (spec.submode or "manual")
+            source_type = "ipk_file" if spec.mode == "ipk" else "manual_v2"
             # For IPK mode, prefer spec paths over GUI entries to avoid
             # stale audio/video from a previous installation.
             if spec.mode == "ipk":
                 audio_path = spec.audio_path
                 video_path = spec.video_path
             else:
-                audio_path = self._get_audio_path() or spec.audio_path
-                video_path = self._get_video_path() or spec.video_path
+                audio_path = spec.audio_path
+                video_path = spec.video_path
             map_installer.configure_manual_source(
                 state,
                 source_type=source_type,
@@ -1240,6 +1346,15 @@ class MapInstallerGUI:
                 video_path=video_path,
                 codename=spec.codename,
                 manual_ipk_file=spec.ipk_file,
+                override_musictrack=spec.musictrack_path,
+                override_songdesc=spec.songdesc_path,
+                override_dtape=spec.dtape_path,
+                override_ktape=spec.ktape_path,
+                override_mainsequence=spec.mainsequence_path,
+                override_moves_dir=spec.moves_dir,
+                override_pictos_dir=spec.pictos_dir,
+                override_menuart_dir=spec.menuart_dir,
+                override_amb_dir=spec.amb_dir,
             )
             return state
 
@@ -2089,7 +2204,9 @@ class MapInstallerGUI:
         # Auto-start preview so users can validate sync immediately.
         self.preview.launch(
             state.video_path, state.audio_path,
-            self.v_override_var.get(), self.a_offset_var.get())
+            self.v_override_var.get(), self.a_offset_var.get(),
+            loop_start=getattr(state, 'preview_loop_start_sec', 0.0),
+            loop_end=getattr(state, 'preview_loop_end_sec', 0.0))
 
         if not self._settings.get("suppress_offset_notification", False):
             if is_ipk:
