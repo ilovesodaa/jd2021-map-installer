@@ -23,6 +23,7 @@ PREVIEW_FPS = 24            # Frames per second for embedded video preview
 PREVIEW_POLL_FRAMES = 6     # Update seek UI every N frames (~250ms at 24fps)
 AUDIO_PREVIEW_FADE_S = 2.0  # Default audio preview fade-out duration in seconds
 MAX_JD_VERSION = 2021       # Maximum JDVersion the engine supports
+MIN_JD_VERSION = 2014       # Minimum JDVersion that JD2021 GameManagerConfig supports
 
 
 # ---------------------------------------------------------------------------

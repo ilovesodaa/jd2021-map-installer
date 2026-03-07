@@ -6,7 +6,7 @@ import subprocess
 import glob
 import zipfile
 from log_config import get_logger
-from helpers import load_ckd_json, AUDIO_PREVIEW_FADE_S, MAX_JD_VERSION
+from helpers import load_ckd_json, AUDIO_PREVIEW_FADE_S, MAX_JD_VERSION, MIN_JD_VERSION
 
 
 def _prefer_non_legacy(paths):
@@ -1013,9 +1013,12 @@ def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override
 						}},'''
     tags_lua = tags_lua.rstrip(",")
 
-    # Cap JDVersion and OriginalJDVersion to 2021 to prevent GameManagerConfig crashes on JD2022+ maps
-    jd_version_safe = min(int(sd_struct.get('JDVersion', MAX_JD_VERSION)), MAX_JD_VERSION)
-    orig_jd_version_safe = min(int(sd_struct.get('OriginalJDVersion', jd_version_safe)), MAX_JD_VERSION)
+    # Clamp JDVersion and OriginalJDVersion to the range supported by
+    # JD2021's GameManagerConfig (2014–2021).  Values outside this range
+    # (e.g. 1 from very old maps or 2022+ from newer maps) cause the
+    # game to fail to load entirely.
+    jd_version_safe = max(MIN_JD_VERSION, min(int(sd_struct.get('JDVersion', MAX_JD_VERSION)), MAX_JD_VERSION))
+    orig_jd_version_safe = max(MIN_JD_VERSION, min(int(sd_struct.get('OriginalJDVersion', jd_version_safe)), MAX_JD_VERSION))
 
     # --- Generate all files via helpers ---
     _write_musictrack_trk(target_dir, map_name, mt_struct, video_start_time)

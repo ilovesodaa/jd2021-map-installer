@@ -1834,6 +1834,22 @@ def step_03_extract_scenes(state):
                 z.extractall(state.extracted_zip_dir)
 
 
+def _detect_maps_in_ipk(ipk_extracted):
+    """Scan an extracted IPK directory for map codenames.
+
+    Returns a list of codename strings found under world/maps/.
+    """
+    maps_dirs = glob.glob(os.path.join(ipk_extracted, "**", "world", "maps"), recursive=True)
+    codenames = set()
+    for maps_dir in maps_dirs:
+        if os.path.isdir(maps_dir):
+            for entry in os.listdir(maps_dir):
+                full = os.path.join(maps_dir, entry)
+                if os.path.isdir(full) and not entry.startswith('.'):
+                    codenames.add(entry)
+    return sorted(codenames)
+
+
 def step_04_unpack_ipk(state):
     """Unpack IPK archives."""
     has_manual_ipk = getattr(state, "manual_ipk_file", None) and os.path.isfile(state.manual_ipk_file)
@@ -1865,6 +1881,29 @@ def step_04_unpack_ipk(state):
                 ipk_unpack.extract(ipk, state.ipk_extracted)
             except (AssertionError, OSError, struct.error) as e:
                 logger.warning("    Warning: IPK extraction issue: %s", e)
+
+    # Detect bundle IPKs (multiple maps in one archive)
+    detected_maps = _detect_maps_in_ipk(state.ipk_extracted)
+    if len(detected_maps) > 1:
+        print(f"    Bundle IPK detected: {len(detected_maps)} maps found: {', '.join(detected_maps)}")
+        # Try to match the codename from the IPK filename
+        target = state.codename.lower() if state.codename else ""
+        matching = [m for m in detected_maps if m.lower() == target]
+        if not matching:
+            # Codename from IPK filename didn't match; use the first map
+            # and store the full list so the GUI can offer a selection.
+            state.bundle_maps = detected_maps
+            state.codename = detected_maps[0]
+            print(f"    Auto-selected first map: {state.codename}")
+            print(f"    To install other maps from this bundle, re-run with the specific codename.")
+        else:
+            state.codename = matching[0]
+            print(f"    Using matched codename: {state.codename}")
+    elif len(detected_maps) == 1:
+        # Single map -- update codename if it was derived from the IPK filename
+        if state.codename.lower() != detected_maps[0].lower():
+            print(f"    Codename correction: {state.codename} -> {detected_maps[0]}")
+            state.codename = detected_maps[0]
 
     # Re-detect audio/video after extraction if not yet set (IPK mode defers
     # detection until the files are actually extracted).
@@ -1903,7 +1942,16 @@ def step_04_unpack_ipk(state):
 def step_05_decode_menuart(state):
     """Decode MenuArt CKDs and copy raw PNG/JPGs."""
     print("[5] Decoding menu art textures...")
-    if os.path.exists(state.download_dir):
+
+    # Only scan download_dir for loose textures if it looks like a map-specific
+    # directory (not a drive root or the user's Desktop, which would be slow
+    # and pick up irrelevant files).
+    _download_looks_safe = (
+        os.path.exists(state.download_dir)
+        and len(os.path.basename(state.download_dir)) > 0
+        and os.path.dirname(state.download_dir) != state.download_dir  # not a drive root
+    )
+    if _download_looks_safe:
         for file in os.listdir(state.download_dir):
             src = os.path.join(state.download_dir, file)
             dst = None
@@ -1928,9 +1976,13 @@ def step_05_decode_menuart(state):
                     shutil.copy2(src, dst)
 
     # Decode CKDs to actual TGAs/PNGs
-    subprocess.run([sys.executable, os.path.join(SCRIPT_DIR, "ckd_decode.py"), "--batch", "--quiet",
-                    os.path.join(state.target_dir, "MenuArt/textures"),
-                    os.path.join(state.target_dir, "MenuArt/textures")], check=False, capture_output=True)
+    menuart_dir = os.path.join(state.target_dir, "MenuArt/textures")
+    if os.path.isdir(menuart_dir):
+        subprocess.run([sys.executable, os.path.join(SCRIPT_DIR, "ckd_decode.py"), "--batch", "--quiet",
+                        menuart_dir, menuart_dir], check=False, capture_output=True,
+                       timeout=120)
+    else:
+        print("    No MenuArt/textures directory to decode.")
 
 
 def step_05b_validate_menuart(state):
@@ -2121,6 +2173,13 @@ def step_07_convert_tapes(state):
             with open(dst_tape, 'w', encoding='utf-8') as f:
                 f.write(lua_str)
             print(f"    Converted {os.path.basename(src_tapes[0])} -> {os.path.basename(dst_tape)}")
+        else:
+            if ty == "karaoke":
+                print(f"    Note: No karaoke tape found in source. "
+                      f"This map will not display lyrics.")
+            elif ty == "dance":
+                print(f"    WARNING: No dance tape found in source! "
+                      f"Choreography may be missing.")
 
 
 def step_08_convert_cinematics(state):
@@ -2179,16 +2238,31 @@ def step_09_process_amb(state):
                     f.write(tpl_content)
                 print(f"    Generated AMB: {base}.ilu + {base}.tpl")
                 # Generate silent WAV placeholders for any referenced audio files that don't exist
+                # First, try to decode any .wav.ckd files from the IPK
                 for rel_path in audio_file_paths:
                     abs_path = os.path.join(state.jd21_dir, "data", rel_path.replace("/", os.sep))
                     if not os.path.exists(abs_path):
-                        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-                        with wave.open(abs_path, 'w') as wf:
-                            wf.setnchannels(1)
-                            wf.setsampwidth(2)
-                            wf.setframerate(48000)
-                            wf.writeframes(b'\x00\x00' * 4800)  # 0.1s silence
-                        print(f"    Created silent placeholder: {os.path.basename(abs_path)}")
+                        # Try to find and decode a matching .wav.ckd in the amb source dir
+                        wav_name = os.path.basename(rel_path)
+                        ckd_candidate = os.path.join(amb_dir_path, wav_name + ".ckd")
+                        decoded = None
+                        if os.path.isfile(ckd_candidate):
+                            from source_analysis import _extract_ckd_audio
+                            decoded = _extract_ckd_audio(ckd_candidate, os.path.dirname(abs_path))
+                        if decoded and os.path.isfile(decoded):
+                            # Rename to expected path if needed
+                            if os.path.abspath(decoded) != os.path.abspath(abs_path):
+                                os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+                                shutil.move(decoded, abs_path)
+                            print(f"    Decoded AMB audio: {os.path.basename(abs_path)}")
+                        else:
+                            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+                            with wave.open(abs_path, 'w') as wf:
+                                wf.setnchannels(1)
+                                wf.setsampwidth(2)
+                                wf.setframerate(48000)
+                                wf.writeframes(b'\x00\x00' * 4800)  # 0.1s silence
+                            print(f"    Created silent placeholder: {os.path.basename(abs_path)}")
 
             # Handle orphan WAV CKDs without matching TPL CKDs (e.g., Koi has
             # amb_koi_intro.wav.ckd but no amb_koi_intro.tpl.ckd).  Generate
@@ -2228,9 +2302,15 @@ def step_09_process_amb(state):
                         f.write(ilu_content)
                     with open(os.path.join(dest_amb, f"{base}.tpl"), 'w', encoding='utf-8') as f:
                         f.write(tpl_content)
-                    # Create silent WAV placeholder
+                    # Try to decode the CKD audio instead of a silent placeholder
+                    from source_analysis import _extract_ckd_audio
+                    decoded = _extract_ckd_audio(wav_ckd, dest_amb)
                     wav_abs = os.path.join(dest_amb, f"{base}.wav")
-                    if not os.path.exists(wav_abs):
+                    if decoded and os.path.isfile(decoded):
+                        if os.path.abspath(decoded) != os.path.abspath(wav_abs):
+                            shutil.move(decoded, wav_abs)
+                        print(f"    Decoded orphan AMB audio: {base}.wav")
+                    elif not os.path.exists(wav_abs):
                         with wave.open(wav_abs, 'w') as wf:
                             wf.setnchannels(1)
                             wf.setsampwidth(2)
@@ -2262,7 +2342,9 @@ def step_09_process_amb(state):
                     f.write(isc_data)
                 print(f"    Injected {len(amb_tpls)} AMB actor(s) into audio ISC")
     else:
-        print("[9] No ambient sound templates found, skipping.")
+        print("[9] No ambient sound templates found in IPK. "
+              "If this map has ambient effects (rain, intro sounds), "
+              "they may be missing from the source.")
 
 
 def step_10_decode_pictos(state):

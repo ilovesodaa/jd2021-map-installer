@@ -992,6 +992,10 @@ class MapInstallerGUI:
             return
 
         if spec.mode == "ipk":
+            # Clear stale extraction from previous IPK installs
+            if os.path.isdir(spec.ipk_extracted):
+                import shutil
+                shutil.rmtree(spec.ipk_extracted, ignore_errors=True)
             os.makedirs(spec.ipk_extracted, exist_ok=True)
             try:
                 import ipk_unpack
@@ -999,12 +1003,13 @@ class MapInstallerGUI:
             except Exception as e:
                 messagebox.showerror("Prepare Failed", f"Could not unpack IPK:\n{e}")
                 return
-            # Re-detect audio after extraction (may find .wav.ckd inside IPK)
+            # Re-detect audio/video after fresh extraction
+            from source_analysis import _pick_audio, _pick_webm
+            spec.audio_path = _pick_audio(os.path.dirname(spec.ipk_file), spec.codename)
             if not spec.audio_path:
-                from source_analysis import _pick_audio
-                spec.audio_path = _pick_audio(os.path.dirname(spec.ipk_file), spec.codename)
-                if not spec.audio_path:
-                    spec.audio_path = _pick_audio(spec.ipk_extracted, spec.codename)
+                spec.audio_path = _pick_audio(spec.ipk_extracted, spec.codename)
+            if not spec.video_path:
+                spec.video_path = _pick_webm(spec.ipk_extracted, spec.codename)
             spec.ready_for_install = bool(spec.audio_path and spec.video_path)
             self.mode_status_var.set(f"Prepared IPK source at {spec.ipk_extracted}")
             return
@@ -1056,17 +1061,31 @@ class MapInstallerGUI:
             if not os.path.isdir(spec.ipk_extracted):
                 return
 
-        if mode == "manual" and spec.submode == "downloaded_assets" and not spec.ipk_extracted:
-            messagebox.showerror(
-                "Install",
-                "Manual downloaded assets mode requires ipk_extracted/.\n"
-                "Use a prepared folder or prepare via IPK mode first.")
-            return
+        if mode == "manual" and spec.submode == "downloaded_assets":
+            if not spec.ipk_extracted:
+                # Auto-prepare: try to extract scene archives first
+                self._prepare_mode_source()
+                spec = self._source_spec
+                if not spec or not spec.ipk_extracted:
+                    messagebox.showerror(
+                        "Install",
+                        "Manual mode (downloaded assets) requires extracted scene data.\n\n"
+                        "Make sure your source folder contains either:\n"
+                        "  - An assets.html file (with JDU asset links)\n"
+                        "  - Or an ipk_extracted/ subfolder with map data")
+                    return
 
         self._install_from_manual_spec(spec)
 
     def _run_batch_mode(self, root_folder):
         if self._pipeline_running:
+            return
+
+        # Check if this folder contains .ipk files (IPK batch mode)
+        import glob as _glob
+        ipk_files = _glob.glob(os.path.join(root_folder, "*.ipk"))
+        if ipk_files:
+            self._run_batch_ipk_mode(root_folder, ipk_files)
             return
 
         self._pipeline_running = True
@@ -1105,6 +1124,89 @@ class MapInstallerGUI:
 
         threading.Thread(target=_run, daemon=True).start()
 
+    def _run_batch_ipk_mode(self, root_folder, ipk_files):
+        """Install all .ipk files found in the given folder sequentially."""
+        self._pipeline_running = True
+        self.mode_install_btn.configure(state="disabled")
+        self.mode_status_var.set(f"Batch IPK mode: {len(ipk_files)} files found...")
+
+        jd_dir = self.jd_dir_entry.get().strip() or None
+        quality = self.quality_var.get()
+
+        def _run():
+            results = []
+            for idx, ipk_path in enumerate(sorted(ipk_files)):
+                ipk_name = os.path.basename(ipk_path)
+                print(f"\n=== Batch IPK [{idx + 1}/{len(ipk_files)}]: {ipk_name} ===")
+                self.root.after(0, self.mode_status_var.set,
+                                f"Batch IPK [{idx + 1}/{len(ipk_files)}]: {ipk_name}...")
+
+                try:
+                    from source_analysis import _extract_codename_from_ipk_name
+                    codename = _extract_codename_from_ipk_name(ipk_path)
+                    source_dir = os.path.dirname(ipk_path)
+                    ipk_extracted = os.path.join(source_dir, f"ipk_extracted_{codename}")
+
+                    state = map_installer.PipelineState(
+                        map_name=codename,
+                        asset_html="(ipk-batch)",
+                        nohud_html="(ipk-batch)",
+                        jd_dir=jd_dir,
+                        quality=quality,
+                        original_map_name=codename,
+                    )
+                    state._interactive = False
+                    map_installer.configure_manual_source(
+                        state,
+                        source_type="ipk_file",
+                        source_dir=source_dir,
+                        ipk_extracted=ipk_extracted,
+                        codename=codename,
+                        manual_ipk_file=ipk_path,
+                    )
+
+                    step_fns = [fn for _, fn in map_installer.PIPELINE_STEPS]
+                    for step_fn in step_fns:
+                        step_fn(state)
+
+                    results.append((ipk_name, codename, True, None))
+                    print(f"    OK: {codename}")
+                except Exception as e:
+                    results.append((ipk_name, codename if 'codename' in dir() else "?", False, str(e)))
+                    print(f"    FAILED: {e}")
+                finally:
+                    # Clean up per-map extraction directory
+                    if 'ipk_extracted' in dir() and os.path.isdir(ipk_extracted):
+                        import shutil
+                        shutil.rmtree(ipk_extracted, ignore_errors=True)
+
+            # Print summary
+            ok = [r for r in results if r[2]]
+            fail = [r for r in results if not r[2]]
+            print(f"\n=== Batch IPK Summary ===")
+            print(f"    Installed: {len(ok)}, Failed: {len(fail)}")
+            for name, codename, _, _ in ok:
+                print(f"      OK: {codename} ({name})")
+            for name, codename, _, err in fail:
+                print(f"      FAIL: {codename} ({name}): {err}")
+
+            def _after():
+                self._pipeline_running = False
+                self.mode_install_btn.configure(state="normal")
+                msg = f"Installed {len(ok)} of {len(results)} maps."
+                if fail:
+                    msg += f"\n\nFailed ({len(fail)}):\n" + "\n".join(
+                        f"  - {c} ({n}): {e}" for n, c, _, e in fail)
+                self.mode_status_var.set(f"Batch done: {len(ok)}/{len(results)} OK")
+                if fail:
+                    messagebox.showwarning("Batch IPK", msg)
+                else:
+                    messagebox.showinfo("Batch IPK", msg)
+
+            self.root.after(0, _after)
+
+        threading.Thread(target=_run, daemon=True).start()
+
     def _install_from_manual_spec(self, spec):
         require_html = spec.mode == "manual" and spec.submode == "downloaded_assets"
         asset_html = spec.asset_html or "(manual)"
@@ -1121,13 +1223,21 @@ class MapInstallerGUI:
                 original_map_name=map_name,
             )
             source_type = "ipk_file" if spec.mode == "ipk" else (spec.submode or "manual")
+            # For IPK mode, prefer spec paths over GUI entries to avoid
+            # stale audio/video from a previous installation.
+            if spec.mode == "ipk":
+                audio_path = spec.audio_path
+                video_path = spec.video_path
+            else:
+                audio_path = self._get_audio_path() or spec.audio_path
+                video_path = self._get_video_path() or spec.video_path
             map_installer.configure_manual_source(
                 state,
                 source_type=source_type,
                 source_dir=spec.source_path,
                 ipk_extracted=spec.ipk_extracted,
-                audio_path=self._get_audio_path() or spec.audio_path,
-                video_path=self._get_video_path() or spec.video_path,
+                audio_path=audio_path,
+                video_path=video_path,
                 codename=spec.codename,
                 manual_ipk_file=spec.ipk_file,
             )
@@ -1698,9 +1808,60 @@ class MapInstallerGUI:
 
             # After step 4 (IPK unpack), check for non-ASCII metadata and prompt
             if i == 4 and hasattr(state, 'ipk_extracted') and state.ipk_extracted:
+                # Check for bundle IPK (multiple maps) and prompt user to select
+                if hasattr(state, 'bundle_maps') and state.bundle_maps:
+                    selected = self._select_bundle_map(state)
+                    if selected is None:
+                        # User cancelled
+                        print("    Bundle map selection cancelled by user.")
+                        self.root.after(0, self._on_pipeline_error)
+                        return
                 self._check_metadata_gui(state)
 
         print("=== Automation Complete! ===")
+        # Print install summary
+        print(f"\n--- Install Summary ---")
+        print(f"  Map:       {state.map_name}")
+        print(f"  Codename:  {state.codename}")
+        if state.audio_path:
+            audio_fmt = os.path.splitext(state.audio_path)[1].lstrip('.')
+            print(f"  Audio:     {os.path.basename(state.audio_path)} ({audio_fmt})")
+        else:
+            print(f"  Audio:     MISSING")
+        if state.video_path:
+            print(f"  Video:     {os.path.basename(state.video_path)}")
+        else:
+            print(f"  Video:     MISSING")
+        print(f"  V_OFFSET:  {state.v_override}")
+        print(f"  A_OFFSET:  {state.a_offset}")
+        is_ipk = getattr(state, 'source_type', '') == 'ipk_file'
+        if is_ipk:
+            print(f"  Source:    IPK file")
+        # Check for missing optional assets
+        timeline_dir = os.path.join(state.target_dir, "Timeline")
+        if os.path.isdir(timeline_dir):
+            has_karaoke = any(f.endswith(".ktape") for f in os.listdir(timeline_dir))
+            has_dance = any(f.endswith(".dtape") for f in os.listdir(timeline_dir))
+            pictos_dir = os.path.join(timeline_dir, "pictos")
+            has_pictos = os.path.isdir(pictos_dir) and len(os.listdir(pictos_dir)) > 0
+        else:
+            has_karaoke = has_dance = has_pictos = False
+        amb_dir = os.path.join(state.target_dir, "Audio", "AMB")
+        has_amb = os.path.isdir(amb_dir) and any(f.endswith(".wav") for f in os.listdir(amb_dir))
+        warnings = []
+        if not has_karaoke:
+            warnings.append("No karaoke lyrics (ktape)")
+        if not has_dance:
+            warnings.append("No choreography (dtape)")
+        if not has_pictos:
+            warnings.append("No pictograms")
+        if warnings:
+            print(f"  Warnings:  {'; '.join(warnings)}")
+        else:
+            print(f"  Assets:    All present")
+        if has_amb:
+            print(f"  Ambiance:  Present")
+        print(f"--- End Summary ---\n")
         self.root.after(0, self._on_pipeline_complete)
 
     def _check_metadata_gui(self, state):
@@ -1795,6 +1956,85 @@ class MapInstallerGUI:
 
             state.metadata_overrides[field] = result_holder[0]
             print(f"    {field}: '{original_val}' → '{result_holder[0]}'")
+
+    def _select_bundle_map(self, state):
+        """Show a dialog to select which map to install from a bundle IPK.
+
+        Returns the selected codename, or None if cancelled.
+        Updates state.codename and state.map_name to the selected map.
+        """
+        result_event = threading.Event()
+        result_holder = [None]
+
+        def _ask():
+            dlg = tk.Toplevel(self.root)
+            dlg.title("Bundle IPK - Select Map")
+            dlg.geometry("400x300")
+            dlg.transient(self.root)
+            dlg.grab_set()
+
+            dlg.update_idletasks()
+            x = self.root.winfo_x() + (self.root.winfo_width() - 400) // 2
+            y = self.root.winfo_y() + (self.root.winfo_height() - 300) // 2
+            dlg.geometry(f"+{x}+{y}")
+
+            content = ttk.Frame(dlg, padding=12)
+            content.pack(fill="both", expand=True)
+
+            ttk.Label(content, text=(
+                f"This IPK bundle contains {len(state.bundle_maps)} maps.\n"
+                "Select which map to install:"
+            ), wraplength=350).pack(fill="x", pady=(0, 8))
+
+            listbox = tk.Listbox(content, font=("Consolas", 10))
+            listbox.pack(fill="both", expand=True, pady=(0, 8))
+            for m in state.bundle_maps:
+                listbox.insert(tk.END, m)
+            listbox.selection_set(0)
+
+            btn_frame = ttk.Frame(content)
+            btn_frame.pack(fill="x")
+
+            def _on_ok():
+                sel = listbox.curselection()
+                if sel:
+                    result_holder[0] = state.bundle_maps[sel[0]]
+                dlg.destroy()
+
+            def _on_cancel():
+                result_holder[0] = None
+                dlg.destroy()
+
+            ttk.Button(btn_frame, text="Install Selected", command=_on_ok).pack(side="right", padx=(4, 0))
+            ttk.Button(btn_frame, text="Cancel", command=_on_cancel).pack(side="right")
+
+            dlg.protocol("WM_DELETE_WINDOW", _on_cancel)
+            self.root.wait_window(dlg)
+            result_event.set()
+
+        self.root.after(0, _ask)
+        while not result_event.wait(timeout=0.5):
+            if self._closing:
+                return None
+
+        selected = result_holder[0]
+        if selected:
+            state.codename = selected
+            state.map_name = selected
+            state.map_lower = selected.lower()
+            # Update target paths for the selected map
+            state.target_dir = os.path.join(
+                state.jd21_dir, "data", "World", "MAPS", state.map_name)
+            state.cache_dir = os.path.join(
+                state.jd21_dir, "data", "cache", "itf_cooked", "pc",
+                "world", "maps", state.map_lower)
+            # Re-detect audio/video for the selected codename
+            from source_analysis import _pick_audio
+            new_audio = _pick_audio(state.ipk_extracted, state.codename)
+            if new_audio:
+                state.audio_path = new_audio
+            print(f"    Selected map from bundle: {selected}")
+        return selected
 
     def _on_pipeline_error(self):
         self._restore_install_controls()
