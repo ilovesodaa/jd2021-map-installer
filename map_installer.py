@@ -307,10 +307,30 @@ def reconstruct_state_for_readjust(download_dir, jd_dir=None):
     if ipk_dir and os.path.isdir(ipk_dir):
         mt_meta = map_builder.extract_musictrack_metadata(ipk_dir)
         if mt_meta:
-            v_override = mt_meta["video_start_time"]
             state.musictrack_start_beat = mt_meta["start_beat"]
             marker_preroll_ms = compute_marker_preroll(
                 mt_meta["markers"], mt_meta["start_beat"])
+
+    # --- For readjust: prefer the ACTUAL videoStartTime from the installed .trk ---
+    # This is the value currently in use in-game, not a recalculated approximation.
+    trk_path = os.path.join(
+        state.target_dir, "Audio", f"{map_name.lower()}.trk")
+    if os.path.isfile(trk_path):
+        try:
+            with open(trk_path, 'r', encoding='utf-8') as f:
+                trk_text = f.read()
+            m = re.search(r'videoStartTime\s*=\s*([-\d.]+)', trk_text)
+            if m:
+                v_override = float(m.group(1))
+                print(f"    Read videoStartTime from installed .trk: {v_override}")
+        except (OSError, ValueError) as e:
+            logger.warning("    Could not read .trk file: %s", e)
+
+    # --- Fallback: synthesize from CKD markers if .trk not available ---
+    if v_override is None and ipk_dir and os.path.isdir(ipk_dir):
+        mt_meta = map_builder.extract_musictrack_metadata(ipk_dir)
+        if mt_meta:
+            v_override = mt_meta["video_start_time"]
             # For IPK maps with pre-roll, synthesize from markers rather than
             # trusting the raw CKD value (X360 binary CKDs store 0.0).
             if (v_override == 0.0
@@ -320,26 +340,14 @@ def reconstruct_state_for_readjust(download_dir, jd_dir=None):
                 if idx < len(mt_meta["markers"]):
                     v_override = -(mt_meta["markers"][idx] / 48.0 / 1000.0)
 
-    # --- Fallback: parse videoStartTime from installed .trk file ---
-    if v_override is None:
-        trk_pattern = os.path.join(
-            state.target_dir, "Timeline", f"{map_name}_MusicTrack.trk")
-        if os.path.isfile(trk_pattern):
-            try:
-                with open(trk_pattern, 'r', encoding='utf-8') as f:
-                    trk_text = f.read()
-                m = re.search(r'videoStartTime\s*=\s*([-\d.]+)', trk_text)
-                if m:
-                    v_override = float(m.group(1))
-                    print(f"    Read videoStartTime from installed .trk: {v_override}")
-            except (OSError, ValueError) as e:
-                logger.warning("    Could not read .trk file: %s", e)
-
     state.v_override = v_override  # may be None; step_06 will synthesize if needed
     state.marker_preroll_ms = marker_preroll_ms
 
     # --- Compute a_offset from marker data ---
-    if marker_preroll_ms is not None:
+    # IPK maps: audio already contains full preroll, no trim needed.
+    if is_ipk_source:
+        state.a_offset = 0.0
+    elif marker_preroll_ms is not None:
         state.a_offset = -(marker_preroll_ms / 1000.0)
     else:
         state.a_offset = state.v_override

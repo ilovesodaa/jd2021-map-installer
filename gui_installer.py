@@ -1659,12 +1659,38 @@ class MapInstallerGUI:
         self._set_sync_state("normal")
         self._set_preview_state("normal")
 
-        messagebox.showinfo(
-            "Readjust Mode",
-            f"Loaded '{state.map_name}' for offset readjustment.\n\n"
-            f"VIDEO_OFFSET: {state.v_override}\n"
-            f"AUDIO_OFFSET: {state.a_offset}\n\n"
-            "Use the Sync Refinement panel to adjust, then click 'Apply & Finish'.")
+        # IPK-specific: show warning, enable video offset, disable audio offset
+        is_ipk = getattr(state, 'source_type', '') == 'ipk_file'
+        if is_ipk:
+            self._ipk_sync_warning.pack(anchor="w", pady=(0, 4))
+            children = self.sync_frame.winfo_children()
+            if len(children) > 1:
+                self._ipk_sync_warning.pack_configure(after=children[0])
+            if not self.v_override_enabled_var.get():
+                self.v_override_enabled_var.set(True)
+                self._on_v_override_toggle(suppress_popup=True)
+            for w in self._ao_row_widgets:
+                w.configure(state="disabled")
+            self.pad_audio_btn.configure(state="disabled")
+            self.sync_beatgrid_btn.configure(state="disabled")
+
+            messagebox.showinfo(
+                "Readjust Mode (IPK)",
+                f"Loaded '{state.map_name}' for offset readjustment.\n\n"
+                f"VIDEO_OFFSET: {state.v_override}\n"
+                f"AUDIO_OFFSET: {state.a_offset} (disabled for IPK)\n\n"
+                "IPK maps require manual Video Offset adjustment.\n"
+                "Audio Offset is disabled because IPK audio is pre-trimmed.\n\n"
+                "Adjust VIDEO_OFFSET until the video matches the beat, "
+                "then click 'Apply & Finish'.")
+        else:
+            self._ipk_sync_warning.pack_forget()
+            messagebox.showinfo(
+                "Readjust Mode",
+                f"Loaded '{state.map_name}' for offset readjustment.\n\n"
+                f"VIDEO_OFFSET: {state.v_override}\n"
+                f"AUDIO_OFFSET: {state.a_offset}\n\n"
+                "Use the Sync Refinement panel to adjust, then click 'Apply & Finish'.")
 
     def _on_readjust_error(self, error_msg):
         """Called on main thread when readjust state build fails."""
