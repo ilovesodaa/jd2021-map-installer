@@ -1120,11 +1120,11 @@ class MapInstallerGUI:
             self.mode_status_var.set(f"Prepared IPK source at {spec.ipk_extracted}")
             return
 
-        if spec.mode == "manual" and spec.submode == "downloaded_assets" and not spec.ipk_extracted:
+        if spec.mode == "manual" and not spec.ipk_extracted:
             messagebox.showwarning(
                 "Prepare Required",
-                "Downloaded assets source is missing ipk_extracted/.\n"
-                "Please prepare/extract scene IPK first or use IPK mode.")
+                "Manual mode requires a valid root folder.\n"
+                "Please set the root folder in the manual fields.")
             return
 
         self.mode_status_var.set("Prepare complete.")
@@ -1167,19 +1167,12 @@ class MapInstallerGUI:
             if not os.path.isdir(spec.ipk_extracted):
                 return
 
-        if mode == "manual" and spec.submode == "downloaded_assets":
-            if not spec.ipk_extracted:
-                # Auto-prepare: try to extract scene archives first
-                self._prepare_mode_source()
-                spec = self._source_spec
-                if not spec or not spec.ipk_extracted:
-                    messagebox.showerror(
-                        "Install",
-                        "Manual mode (downloaded assets) requires extracted scene data.\n\n"
-                        "Make sure your source folder contains either:\n"
-                        "  - An assets.html file (with JDU asset links)\n"
-                        "  - Or an ipk_extracted/ subfolder with map data")
-                    return
+        if mode == "manual" and not spec.ipk_extracted:
+            messagebox.showerror(
+                "Install",
+                "Manual mode requires a valid root folder.\n"
+                "Please set the root folder in the manual fields.")
+            return
 
         self._install_from_manual_spec(spec)
 
