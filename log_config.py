@@ -74,4 +74,5 @@ def setup_gui_logging(handler):
         return
 
     root.setLevel(logging.DEBUG)
+    handler.setLevel(logging.INFO)
     root.addHandler(handler)
