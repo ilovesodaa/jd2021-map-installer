@@ -146,6 +146,18 @@ class PipelineState:
         self.preserve_source_dirs = False
         self.manual_ipk_file = None
 
+        # Manual mode: per-asset override paths
+        # When set, pipeline steps use these instead of globbing ipk_extracted.
+        self.override_musictrack = None
+        self.override_songdesc = None
+        self.override_dtape = None
+        self.override_ktape = None
+        self.override_mainsequence = None
+        self.override_moves_dir = None
+        self.override_pictos_dir = None
+        self.override_menuart_dir = None
+        self.override_amb_dir = None
+
 
 def clean_path(path):
     """Deep cleans a path: removes quotes, trims whitespace, normalizes, and makes absolute if possible."""
@@ -1966,7 +1978,12 @@ def step_05_decode_menuart(state):
 
     if hasattr(state, "ipk_extracted") and state.ipk_extracted and os.path.exists(state.ipk_extracted):
         import glob
-        for src in glob.glob(os.path.join(state.ipk_extracted, "**", "menuart", "textures", "*.*"), recursive=True):
+        menuart_search_dir = getattr(state, 'override_menuart_dir', None)
+        if menuart_search_dir and os.path.isdir(menuart_search_dir):
+            menuart_sources = glob.glob(os.path.join(menuart_search_dir, "*.*"))
+        else:
+            menuart_sources = glob.glob(os.path.join(state.ipk_extracted, "**", "menuart", "textures", "*.*"), recursive=True)
+        for src in menuart_sources:
             file = os.path.basename(src)
             if file.endswith(".ckd") or file.endswith(".png") or file.endswith(".jpg"):
                 new_name = re.sub(re.escape(state.codename), state.map_name, file, flags=re.IGNORECASE) if state.codename.lower() in file.lower() else file
@@ -2104,7 +2121,11 @@ def step_06_generate_configs(state):
 
     # Extract musictrack marker data early (needed for IPK v_override synthesis
     # and marker-based pre-roll calculations later)
-    mt_meta = map_builder.extract_musictrack_metadata(state.ipk_extracted)
+    _mt_override = getattr(state, 'override_musictrack', None)
+    if _mt_override and os.path.isfile(_mt_override):
+        mt_meta = map_builder.extract_musictrack_metadata_from_file(_mt_override)
+    else:
+        mt_meta = map_builder.extract_musictrack_metadata(state.ipk_extracted)
     if mt_meta:
         state.musictrack_start_beat = mt_meta["start_beat"]
         state.marker_preroll_ms = compute_marker_preroll(
@@ -2114,6 +2135,14 @@ def step_06_generate_configs(state):
                   f"(startBeat={state.musictrack_start_beat})")
         else:
             print(f"    Marker pre-roll: N/A (startBeat={mt_meta['start_beat']})")
+
+        # Preview loop bounds (beat indices → seconds from beat-0)
+        markers = mt_meta["markers"]
+        pls = int(mt_meta.get("preview_loop_start", 0))
+        ple = int(mt_meta.get("preview_loop_end", 0))
+        if 0 < pls < len(markers) and 0 < ple < len(markers):
+            state.preview_loop_start_sec = markers[pls] / 48.0 / 1000.0
+            state.preview_loop_end_sec = markers[ple] / 48.0 / 1000.0
     else:
         print(f"    Warning: Could not extract musictrack metadata; "
               f"using fallbacks for AMB duration")
@@ -2150,9 +2179,16 @@ def step_06_generate_configs(state):
         print(f"    IPK map has startBeat={mt_meta['start_beat']} (no pre-roll). "
               f"videoStartTime=0.0 is correct.")
 
+    _overrides = {}
+    if getattr(state, 'override_musictrack', None):
+        _overrides["musictrack_path"] = state.override_musictrack
+    if getattr(state, 'override_songdesc', None):
+        _overrides["songdesc_path"] = state.override_songdesc
+
     video_start_time = map_builder.generate_text_files(
         state.map_name, state.ipk_extracted, state.target_dir, state.v_override,
-        metadata_overrides=state.metadata_overrides or None)
+        metadata_overrides=state.metadata_overrides or None,
+        overrides=_overrides or None)
 
     if video_start_time is None:
         raise RuntimeError("Could not fetch video start time.")
@@ -2165,7 +2201,12 @@ def step_07_convert_tapes(state):
     """Convert choreography and karaoke tapes to Lua."""
     print("[7] Converting choreography and karaoke tapes to Lua...")
     for ty in ["dance", "karaoke"]:
-        src_tapes = glob.glob(os.path.join(state.ipk_extracted, f"**/*_tml_{ty}.?tape.ckd"), recursive=True)
+        override_key = 'override_dtape' if ty == "dance" else 'override_ktape'
+        override_path = getattr(state, override_key, None)
+        if override_path and os.path.isfile(override_path):
+            src_tapes = [override_path]
+        else:
+            src_tapes = glob.glob(os.path.join(state.ipk_extracted, f"**/*_tml_{ty}.?tape.ckd"), recursive=True)
         if src_tapes:
             dst_tape = os.path.join(state.target_dir, f"Timeline/{state.map_name}_TML_{ty.capitalize()}.{ty[0]}tape")
             tape_data = ubiart_lua.load_ckd_json(src_tapes[0])
@@ -2185,43 +2226,52 @@ def step_07_convert_tapes(state):
 def step_08_convert_cinematics(state):
     """Convert cinematic tapes to Lua."""
     print("[8] Converting cinematic tapes to Lua...")
-    cinematics_dirs = glob.glob(os.path.join(state.ipk_extracted, "**/cinematics"), recursive=True)
+    _mainseq_override = getattr(state, 'override_mainsequence', None)
+    if _mainseq_override and os.path.isfile(_mainseq_override):
+        tape_files = [_mainseq_override]
+    else:
+        tape_files = []
+        for cine_dir in glob.glob(os.path.join(state.ipk_extracted, "**/cinematics"), recursive=True):
+            tape_files.extend(glob.glob(os.path.join(cine_dir, "*.tape.ckd")))
     cine_converted = 0
-    for cine_dir in cinematics_dirs:
-        for tape_file in glob.glob(os.path.join(cine_dir, "*.tape.ckd")):
-            tape_basename = os.path.basename(tape_file)
-            output_name = tape_basename.replace(".ckd", "")
-            if "mainsequence" in output_name.lower():
-                output_name = f"{state.map_name}_MainSequence.tape"
-            dst_path = os.path.join(state.target_dir, f"Cinematics/{output_name}")
-            tape_data = ubiart_lua.load_ckd_json(tape_file)
-            # Extract SoundSetClip metadata from mainsequence for AMB audio extraction
-            if "mainsequence" in tape_basename.lower():
-                for raw_clip in tape_data.get("Clips", []):
-                    if raw_clip.get("__class") == "SoundSetClip":
-                        clip_name = raw_clip["SoundSetPath"].split("/")[-1].split(".")[0]
-                        state.amb_sound_clips.append({
-                            "name": clip_name,
-                            "start_time": raw_clip["StartTime"],
-                            "duration": raw_clip["Duration"],
-                            "path": raw_clip["SoundSetPath"],
-                        })
-                if state.amb_sound_clips:
-                    intro_clips = [c for c in state.amb_sound_clips if c["start_time"] <= 0]
-                    print(f"    Found {len(state.amb_sound_clips)} SoundSetClip(s) "
-                          f"({len(intro_clips)} intro)")
-            lua_str = ubiart_lua.process_tape(tape_data, tape_type="cinematics")
-            with open(dst_path, 'w', encoding='utf-8') as f:
-                f.write(lua_str)
-            print(f"    Converted {tape_basename} -> {output_name}")
-            cine_converted += 1
+    for tape_file in tape_files:
+        tape_basename = os.path.basename(tape_file)
+        output_name = tape_basename.replace(".ckd", "")
+        if "mainsequence" in output_name.lower():
+            output_name = f"{state.map_name}_MainSequence.tape"
+        dst_path = os.path.join(state.target_dir, f"Cinematics/{output_name}")
+        tape_data = ubiart_lua.load_ckd_json(tape_file)
+        # Extract SoundSetClip metadata from mainsequence for AMB audio extraction
+        if "mainsequence" in tape_basename.lower():
+            for raw_clip in tape_data.get("Clips", []):
+                if raw_clip.get("__class") == "SoundSetClip":
+                    clip_name = raw_clip["SoundSetPath"].split("/")[-1].split(".")[0]
+                    state.amb_sound_clips.append({
+                        "name": clip_name,
+                        "start_time": raw_clip["StartTime"],
+                        "duration": raw_clip["Duration"],
+                        "path": raw_clip["SoundSetPath"],
+                    })
+            if state.amb_sound_clips:
+                intro_clips = [c for c in state.amb_sound_clips if c["start_time"] <= 0]
+                print(f"    Found {len(state.amb_sound_clips)} SoundSetClip(s) "
+                      f"({len(intro_clips)} intro)")
+        lua_str = ubiart_lua.process_tape(tape_data, tape_type="cinematics")
+        with open(dst_path, 'w', encoding='utf-8') as f:
+            f.write(lua_str)
+        print(f"    Converted {tape_basename} -> {output_name}")
+        cine_converted += 1
     if cine_converted == 0:
         print("    No cinematic tapes found, keeping empty fallback.")
 
 
 def step_09_process_amb(state):
     """Process ambient sound templates."""
-    amb_dirs = glob.glob(os.path.join(state.ipk_extracted, "**/audio/amb"), recursive=True)
+    _amb_override = getattr(state, 'override_amb_dir', None)
+    if _amb_override and os.path.isdir(_amb_override):
+        amb_dirs = [_amb_override]
+    else:
+        amb_dirs = glob.glob(os.path.join(state.ipk_extracted, "**/audio/amb"), recursive=True)
     if amb_dirs:
         print("[9] Processing ambient sound templates...")
         for amb_dir_path in amb_dirs:
@@ -2350,10 +2400,14 @@ def step_09_process_amb(state):
 def step_10_decode_pictos(state):
     """Decode pictograms."""
     print("[10] Decoding pictograms...")
-    picto_src_dir = None
-    for path in glob.glob(os.path.join(state.ipk_extracted, "**/pictos"), recursive=True):
-        picto_src_dir = path
-        break
+    _pictos_override = getattr(state, 'override_pictos_dir', None)
+    if _pictos_override and os.path.isdir(_pictos_override):
+        picto_src_dir = _pictos_override
+    else:
+        picto_src_dir = None
+        for path in glob.glob(os.path.join(state.ipk_extracted, "**/pictos"), recursive=True):
+            picto_src_dir = path
+            break
     sys.stdout.flush()
 
     if picto_src_dir:
@@ -2370,8 +2424,13 @@ def step_10_decode_pictos(state):
 def step_11_extract_moves(state):
     """Extract move files and autodance data."""
     print("[11] Extracting move files and autodance data...")
+    _moves_override = getattr(state, 'override_moves_dir', None)
     for plat in ["nx", "wii", "durango", "scarlett", "orbis", "prospero", "wiiu", "x360"]:
-        moves_src = glob.glob(os.path.join(state.ipk_extracted, f"**/moves/{plat}"), recursive=True)
+        if _moves_override and os.path.isdir(_moves_override):
+            plat_dir = os.path.join(_moves_override, plat)
+            moves_src = [plat_dir] if os.path.isdir(plat_dir) else []
+        else:
+            moves_src = glob.glob(os.path.join(state.ipk_extracted, f"**/moves/{plat}"), recursive=True)
         for folder in moves_src:
             dest_moves = os.path.join(state.target_dir, f"Timeline/Moves/{plat.upper()}")
             os.makedirs(dest_moves, exist_ok=True)
@@ -2599,6 +2658,15 @@ def configure_manual_source(
     video_path=None,
     codename=None,
     manual_ipk_file=None,
+    override_musictrack=None,
+    override_songdesc=None,
+    override_dtape=None,
+    override_ktape=None,
+    override_mainsequence=None,
+    override_moves_dir=None,
+    override_pictos_dir=None,
+    override_menuart_dir=None,
+    override_amb_dir=None,
 ):
     """Configure a PipelineState for manual/IPK source workflows.
 
@@ -2613,6 +2681,17 @@ def configure_manual_source(
     state.video_path = os.path.abspath(video_path) if video_path else state.video_path
     state.codename = (codename or state.map_name).strip()
     state.manual_ipk_file = os.path.abspath(manual_ipk_file) if manual_ipk_file else None
+
+    # Per-asset override paths (manual mode file/folder selectors)
+    state.override_musictrack = override_musictrack
+    state.override_songdesc = override_songdesc
+    state.override_dtape = override_dtape
+    state.override_ktape = override_ktape
+    state.override_mainsequence = override_mainsequence
+    state.override_moves_dir = override_moves_dir
+    state.override_pictos_dir = override_pictos_dir
+    state.override_menuart_dir = override_menuart_dir
+    state.override_amb_dir = override_amb_dir
 
     state.skip_download = True
     state.skip_scene_extract = True

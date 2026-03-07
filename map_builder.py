@@ -121,9 +121,33 @@ def extract_musictrack_metadata(ipk_dir):
             "markers": mt_struct["markers"],
             "start_beat": mt_struct["startBeat"],
             "video_start_time": mt_struct["videoStartTime"],
+            "preview_loop_start": mt_struct.get("previewLoopStart", 0),
+            "preview_loop_end": mt_struct.get("previewLoopEnd", 0),
         }
     except (KeyError, IndexError, json.JSONDecodeError, UnicodeDecodeError) as e:
         logger.warning("    Warning: Could not extract musictrack metadata: %s", e)
+        return None
+
+
+def extract_musictrack_metadata_from_file(ckd_path):
+    """Extract musictrack metadata from a specific CKD file path.
+
+    Same as extract_musictrack_metadata but takes a direct file path
+    instead of searching within a directory.
+    """
+    try:
+        mt_data = load_ckd_json(ckd_path)
+        mt_struct = mt_data["COMPONENTS"][0]["trackData"]["structure"]
+        return {
+            "markers": mt_struct["markers"],
+            "start_beat": mt_struct["startBeat"],
+            "video_start_time": mt_struct["videoStartTime"],
+            "preview_loop_start": mt_struct.get("previewLoopStart", 0),
+            "preview_loop_end": mt_struct.get("previewLoopEnd", 0),
+        }
+    except (KeyError, IndexError, json.JSONDecodeError, UnicodeDecodeError) as e:
+        logger.warning("    Warning: Could not extract musictrack metadata from %s: %s",
+                       ckd_path, e)
         return None
 
 
@@ -137,6 +161,26 @@ def _write_musictrack_trk(target_dir, map_name, mt_struct, video_start_time):
     sigs = ", ".join(f"{{ MusicSignature = {{ beats = {s['beats']}, marker = {s['marker']} }} }}" for s in mt_struct["signatures"])
     sects = ", ".join(f"{{ MusicSection = {{ sectionType = {s['sectionType']}, marker = {s['marker']} }} }}" for s in mt_struct["sections"])
 
+    # Sanitize preview fields: must be non-negative and within marker range.
+    # X360 binary CKDs can produce garbage floats (e.g. -1.8e9, 1.2e11) that
+    # cause the game engine to seek to nonexistent video positions → blank screen.
+    num_markers = len(mt_struct["markers"])
+    preview_entry = float(mt_struct.get('previewEntry', 0))
+    preview_loop_start = float(mt_struct.get('previewLoopStart', 0))
+    preview_loop_end = float(mt_struct.get('previewLoopEnd', 0))
+    for val, name in [(preview_entry, "previewEntry"),
+                      (preview_loop_start, "previewLoopStart"),
+                      (preview_loop_end, "previewLoopEnd")]:
+        if val < 0 or val > num_markers:
+            logger.warning("    %s value %.1f is out of range (0..%d); resetting to 0",
+                           name, val, num_markers)
+    if preview_entry < 0 or preview_entry > num_markers:
+        preview_entry = 0.0
+    if preview_loop_start < 0 or preview_loop_start > num_markers:
+        preview_loop_start = 0.0
+    if preview_loop_end < 0 or preview_loop_end > num_markers:
+        preview_loop_end = 0.0
+
     trk_content = (
         f"structure = {{ MusicTrackStructure = {{ markers = {{ {markers} }}, "
         f"signatures = {{ {sigs} }}, sections = {{ {sects} }}, "
@@ -144,9 +188,9 @@ def _write_musictrack_trk(target_dir, map_name, mt_struct, video_start_time):
         f"fadeStartBeat = {mt_struct.get('fadeStartBeat', 0)}, useFadeStartBeat = {int(mt_struct.get('useFadeStartBeat', 0))}, "
         f"fadeEndBeat = {mt_struct.get('fadeEndBeat', 0)}, useFadeEndBeat = {int(mt_struct.get('useFadeEndBeat', 0))}, "
         f"videoStartTime = {video_start_time:.6f}, "
-        f"previewEntry = {float(mt_struct.get('previewEntry', 0)):.1f}, "
-        f"previewLoopStart = {float(mt_struct.get('previewLoopStart', 0)):.1f}, "
-        f"previewLoopEnd = {float(mt_struct.get('previewLoopEnd', 0)):.1f}, "
+        f"previewEntry = {preview_entry:.1f}, "
+        f"previewLoopStart = {preview_loop_start:.1f}, "
+        f"previewLoopEnd = {preview_loop_end:.1f}, "
         f"volume = {float(mt_struct.get('volume', 0)):.6f}, "
         f"fadeInDuration = {mt_struct.get('fadeInDuration', 0)}, fadeInType = {mt_struct.get('fadeInType', 0)}, "
         f"fadeOutDuration = {mt_struct.get('fadeOutDuration', 0)}, fadeOutType = {mt_struct.get('fadeOutType', 0)}, "
@@ -863,24 +907,33 @@ def _write_cinematics_stubs(target_dir, map_name):
 # Main orchestrator
 # ---------------------------------------------------------------------------
 
-def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override=None, metadata_overrides=None):
+def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override=None,
+                        metadata_overrides=None, overrides=None):
     """Generate all UbiArt config/scene files for a map installation.
 
     Parses CKD metadata, then delegates file generation to helper functions.
+    overrides: optional dict with keys 'musictrack_path', 'songdesc_path' to
+               bypass glob searches for those CKDs.
     """
     map_lower = map_name.lower()
 
     # Find musictrack.tpl.ckd (prefer non-legacy JSON over binary main_legacy)
-    ckd_json_paths = _prefer_non_legacy(
-        glob.glob(os.path.join(ipk_dir, "**", "*musictrack*.tpl.ckd"), recursive=True))
+    if overrides and overrides.get("musictrack_path"):
+        ckd_json_paths = [overrides["musictrack_path"]]
+    else:
+        ckd_json_paths = _prefer_non_legacy(
+            glob.glob(os.path.join(ipk_dir, "**", "*musictrack*.tpl.ckd"), recursive=True))
     if not ckd_json_paths:
         logger.error("Error: Could not find musictrack.tpl.ckd")
         return None
     ckd_json_path = ckd_json_paths[0]
 
     # Find and parse songdesc.tpl.ckd for metadata (prefer non-legacy JSON)
-    songdesc_paths = _prefer_non_legacy(
-        glob.glob(os.path.join(ipk_dir, "**", "*songdesc*.tpl.ckd"), recursive=True))
+    if overrides and overrides.get("songdesc_path"):
+        songdesc_paths = [overrides["songdesc_path"]]
+    else:
+        songdesc_paths = _prefer_non_legacy(
+            glob.glob(os.path.join(ipk_dir, "**", "*songdesc*.tpl.ckd"), recursive=True))
     sd_struct = {}
     if songdesc_paths:
         try:

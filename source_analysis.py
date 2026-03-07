@@ -38,6 +38,16 @@ class SourceSpec:
     ready_for_install: bool = False
     warnings: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    # Manual mode per-asset override paths
+    musictrack_path: Optional[str] = None
+    songdesc_path: Optional[str] = None
+    dtape_path: Optional[str] = None
+    ktape_path: Optional[str] = None
+    mainsequence_path: Optional[str] = None
+    moves_dir: Optional[str] = None
+    pictos_dir: Optional[str] = None
+    menuart_dir: Optional[str] = None
+    amb_dir: Optional[str] = None
 
 
 def _normalize(path: Optional[str]) -> Optional[str]:
@@ -403,4 +413,134 @@ def analyze_manual_mode(folder: str, submode: str = "auto") -> SourceSpec:
 
     spec.ready_for_prepare = len(spec.errors) == 0
     spec.ready_for_install = spec.ready_for_prepare and bool(spec.ipk_extracted)
+    return spec
+
+
+# ---------------------------------------------------------------------------
+# Manual mode v2 — explicit per-file selection with auto-populate
+# ---------------------------------------------------------------------------
+
+def auto_populate_manual_fields(root_folder, codename=""):
+    """Scan root_folder and return a dict of auto-detected paths.
+
+    Keys match the manual mode field names.  Values are paths or None.
+    Used by the GUI to pre-fill fields when the user selects a root folder.
+    """
+    root_folder = _normalize(root_folder)
+    if not root_folder or not os.path.isdir(root_folder):
+        return {}
+
+    result = {}
+
+    if not codename:
+        codename = os.path.basename(root_folder)
+    result["codename"] = codename
+
+    # Audio and video (reuse existing helpers)
+    result["audio_path"] = _pick_audio(root_folder, codename)
+    result["video_path"] = _pick_webm(root_folder, codename)
+
+    # Musictrack CKD
+    hits = glob.glob(os.path.join(root_folder, "**", "*musictrack*.tpl.ckd"), recursive=True)
+    result["musictrack_path"] = hits[0] if hits else None
+
+    # Songdesc CKD
+    hits = glob.glob(os.path.join(root_folder, "**", "*songdesc*.tpl.ckd"), recursive=True)
+    result["songdesc_path"] = hits[0] if hits else None
+
+    # Dance tape CKD
+    hits = glob.glob(os.path.join(root_folder, "**", "*_tml_dance.?tape.ckd"), recursive=True)
+    result["dtape_path"] = hits[0] if hits else None
+
+    # Karaoke tape CKD
+    hits = glob.glob(os.path.join(root_folder, "**", "*_tml_karaoke.?tape.ckd"), recursive=True)
+    result["ktape_path"] = hits[0] if hits else None
+
+    # Mainsequence tape CKD
+    hits = glob.glob(os.path.join(root_folder, "**", "*mainsequence*.tape.ckd"), recursive=True)
+    result["mainsequence_path"] = hits[0] if hits else None
+
+    # Moves folder
+    hits = glob.glob(os.path.join(root_folder, "**", "moves"), recursive=True)
+    result["moves_dir"] = hits[0] if hits else None
+
+    # Pictos folder
+    hits = glob.glob(os.path.join(root_folder, "**", "pictos"), recursive=True)
+    result["pictos_dir"] = hits[0] if hits else None
+
+    # MenuArt folder (try textures sub-dir first, fall back to menuart)
+    hits = glob.glob(os.path.join(root_folder, "**", "menuart", "textures"), recursive=True)
+    if not hits:
+        hits = glob.glob(os.path.join(root_folder, "**", "menuart"), recursive=True)
+    result["menuart_dir"] = hits[0] if hits else None
+
+    # AMB folder
+    hits = glob.glob(os.path.join(root_folder, "**", "audio", "amb"), recursive=True)
+    result["amb_dir"] = hits[0] if hits else None
+
+    return result
+
+
+def analyze_manual_mode_v2(
+    root_folder,
+    audio_path="",
+    video_path="",
+    musictrack_path="",
+    songdesc_path="",
+    dtape_path="",
+    ktape_path="",
+    mainsequence_path="",
+    moves_dir="",
+    pictos_dir="",
+    menuart_dir="",
+    amb_dir="",
+    codename="",
+):
+    """Validate manually-specified paths and build a SourceSpec.
+
+    Unlike analyze_manual_mode (v1), this function does NOT auto-detect files.
+    Each path is provided explicitly by the caller (from GUI entry fields).
+    """
+    root_folder = _normalize(root_folder) if root_folder else ""
+    spec = SourceSpec(mode="manual", submode="manual_v2", source_path=root_folder or "")
+
+    if not root_folder or not os.path.isdir(root_folder):
+        spec.errors.append("Select a valid root folder.")
+        return spec
+
+    spec.ipk_extracted = root_folder
+    spec.codename = codename.strip() or os.path.basename(root_folder)
+
+    # Validate and assign paths
+    spec.audio_path = _normalize(audio_path)
+    spec.video_path = _normalize(video_path)
+    spec.musictrack_path = _normalize(musictrack_path)
+    spec.songdesc_path = _normalize(songdesc_path)
+    spec.dtape_path = _normalize(dtape_path)
+    spec.ktape_path = _normalize(ktape_path)
+    spec.mainsequence_path = _normalize(mainsequence_path)
+    spec.moves_dir = _normalize(moves_dir)
+    spec.pictos_dir = _normalize(pictos_dir)
+    spec.menuart_dir = _normalize(menuart_dir)
+    spec.amb_dir = _normalize(amb_dir)
+
+    # Required validations
+    if not spec.audio_path or not os.path.isfile(spec.audio_path):
+        spec.errors.append("Audio file is required.")
+    if not spec.video_path or not os.path.isfile(spec.video_path):
+        spec.errors.append("Video file (.webm) is required.")
+    if not spec.musictrack_path or not os.path.isfile(spec.musictrack_path):
+        spec.errors.append("Musictrack CKD is required (fatal for config generation).")
+
+    # Important warnings
+    if not spec.dtape_path:
+        spec.warnings.append("No dance tape specified; choreography may be missing.")
+    elif not os.path.isfile(spec.dtape_path):
+        spec.warnings.append("Dance tape path specified but file not found.")
+
+    if spec.songdesc_path and not os.path.isfile(spec.songdesc_path):
+        spec.warnings.append("Songdesc path specified but file not found.")
+
+    spec.ready_for_prepare = len(spec.errors) == 0
+    spec.ready_for_install = spec.ready_for_prepare
     return spec

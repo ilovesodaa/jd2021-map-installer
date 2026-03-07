@@ -178,6 +178,16 @@ def _parse_musictrack_from_reader(r: _Reader) -> dict:
         fade_out_type      = r.u32()
         _unknown           = r.u32()  # discarded
 
+        # Sanity-check preview fields: X360 binary CKDs sometimes store
+        # unrelated data in these positions, producing garbage floats.
+        # Valid beat indices are non-negative and well under 10000.
+        for pval in (preview_entry, preview_loop_start, preview_loop_end):
+            if pval < 0 or pval > 10000:
+                preview_entry = 0
+                preview_loop_start = 0
+                preview_loop_end = 0
+                break
+
     return {
         "COMPONENTS": [{
             "trackData": {
