@@ -1,3 +1,15 @@
 node_modules/
+<<<<<<< HEAD
 config.json
 .browser-profile/
+=======
+
+# Debug / temp
+test_dom.mjs
+tmpclaude*
+
+open_browser.mjs
+scrape_conversation.mjs
+MapDownloads/
+output/
+>>>>>>> 919e2595da78ab7988f52801d5c682c85a563a86
