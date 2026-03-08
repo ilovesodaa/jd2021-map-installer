@@ -196,7 +196,30 @@ def detect_jd_dir(provided_dir=None):
 # Offset readjustment: reconstruct state from existing downloads
 # ---------------------------------------------------------------------------
 
-def reconstruct_state_for_readjust(download_dir, jd_dir=None):
+def detect_bundle_for_readjust(download_dir):
+    """Check if a download directory contains a bundle IPK with multiple maps.
+
+    Args:
+        download_dir: Path to the map's download folder or IPK extraction folder.
+
+    Returns:
+        A sorted list of codename strings if multiple maps found, else None.
+    """
+    download_dir = os.path.abspath(download_dir)
+    if not os.path.isdir(download_dir):
+        return None
+    # Check ipk_extracted/ subdirectory first
+    ipk_dir = os.path.join(download_dir, "ipk_extracted")
+    if not os.path.isdir(ipk_dir):
+        # Maybe download_dir itself is the IPK data directory
+        ipk_dir = download_dir
+    codenames = _detect_maps_in_ipk(ipk_dir)
+    if len(codenames) > 1:
+        return codenames
+    return None
+
+
+def reconstruct_state_for_readjust(download_dir, jd_dir=None, codename=None):
     """Build a minimal PipelineState from a map's download directory.
 
     Used for re-adjusting offset on an already-installed map without
@@ -207,6 +230,7 @@ def reconstruct_state_for_readjust(download_dir, jd_dir=None):
     Args:
         download_dir: Path to the map's download folder or IPK extraction folder.
         jd_dir:       Search root for game data (auto-detected if omitted).
+        codename:     Specific map codename (for bundle IPKs with multiple maps).
 
     Returns:
         A PipelineState ready for reprocess_audio() / generate_text_files().
@@ -223,16 +247,17 @@ def reconstruct_state_for_readjust(download_dir, jd_dir=None):
 
     # --- Locate audio (JDU: .ogg at root; IPK: .wav.ckd recursive) ---
     is_ipk_source = False
+    cn_hint = codename or ""
     ogg_files = [f for f in os.listdir(download_dir)
                  if f.lower().endswith('.ogg') and 'AudioPreview' not in f]
     audio_path = os.path.join(download_dir, ogg_files[0]) if ogg_files else None
 
     if not audio_path:
-        audio_path = _pick_audio(download_dir, "")
+        audio_path = _pick_audio(download_dir, cn_hint)
     if not audio_path:
         ipk_sub = os.path.join(download_dir, "ipk_extracted")
         if os.path.isdir(ipk_sub):
-            audio_path = _pick_audio(ipk_sub, "")
+            audio_path = _pick_audio(ipk_sub, cn_hint)
     if audio_path and not ogg_files:
         is_ipk_source = True
     if not audio_path:
@@ -247,22 +272,25 @@ def reconstruct_state_for_readjust(download_dir, jd_dir=None):
     video_path = os.path.join(download_dir, webm_files[0]) if webm_files else None
 
     if not video_path:
-        video_path = _pick_webm(download_dir, "") or _pick_webm_recursive(download_dir, "")
+        video_path = _pick_webm(download_dir, cn_hint) or _pick_webm_recursive(download_dir, cn_hint)
     if not video_path:
         ipk_sub = os.path.join(download_dir, "ipk_extracted")
         if os.path.isdir(ipk_sub):
-            video_path = _pick_webm_recursive(ipk_sub, "")
+            video_path = _pick_webm_recursive(ipk_sub, cn_hint)
     if not video_path:
         raise FileNotFoundError(f"No gameplay .webm video found in {download_dir}")
 
     # --- Derive map name ---
-    map_name = None
     asset_html = os.path.join(download_dir, "assets.html")
-    if os.path.isfile(asset_html):
-        urls = map_downloader.extract_urls(asset_html)
-        map_name = map_downloader.extract_codename_from_urls(urls)
-    if not map_name:
-        map_name = os.path.basename(download_dir)
+    if codename:
+        map_name = codename
+    else:
+        map_name = None
+        if os.path.isfile(asset_html):
+            urls = map_downloader.extract_urls(asset_html)
+            map_name = map_downloader.extract_codename_from_urls(urls)
+        if not map_name:
+            map_name = os.path.basename(download_dir)
     map_name = sanitize_map_name(map_name, interactive=False)
 
     # --- Resolve game paths ---
@@ -1800,6 +1828,13 @@ def step_02_download(state):
                 webms = [f for f in webms
                          if "mappreview" not in os.path.basename(f).lower()
                          and "videopreview" not in os.path.basename(f).lower()]
+                # For bundle IPKs, filter to only videos matching this codename
+                if webms and state.codename:
+                    cn_lower = state.codename.lower()
+                    cn_matches = [f for f in webms
+                                  if cn_lower in os.path.relpath(f, state.ipk_extracted).replace("\\", "/").lower().split("/")]
+                    if cn_matches:
+                        webms = cn_matches
                 if webms:
                     state.video_path = webms[0]
 
@@ -1902,19 +1937,57 @@ def step_03_extract_scenes(state):
                 z.extractall(state.extracted_zip_dir)
 
 
+def _ipk_glob(state, pattern, **kwargs):
+    """Glob inside ipk_extracted, scoping results to the current codename.
+
+    For bundle IPKs (multiple maps), this filters results so that only
+    paths containing a directory named after state.codename are returned.
+    For single-map IPKs, all results are returned unfiltered.
+    """
+    kwargs.setdefault("recursive", True)
+    results = glob.glob(os.path.join(state.ipk_extracted, pattern), **kwargs)
+    if not getattr(state, 'is_bundle', False):
+        # Not a bundle -- return all results
+        return results
+    # Bundle: filter to only paths that pass through the codename directory
+    cn_lower = state.codename.lower()
+    filtered = []
+    for p in results:
+        # Check if the codename appears as a directory component in the path
+        rel = os.path.relpath(p, state.ipk_extracted).replace("\\", "/").lower()
+        parts = rel.split("/")
+        if cn_lower in parts:
+            filtered.append(p)
+    return filtered  # empty list is valid -- the map simply has no matching assets
+
+
 def _detect_maps_in_ipk(ipk_extracted):
     """Scan an extracted IPK directory for map codenames.
 
-    Returns a list of codename strings found under world/maps/.
+    Returns a list of codename strings found under world/maps/ or
+    world/jd20XX/ (older game bundles use a year-based directory instead
+    of 'maps').
     """
-    maps_dirs = glob.glob(os.path.join(ipk_extracted, "**", "world", "maps"), recursive=True)
     codenames = set()
+
+    # Standard layout: world/maps/<codename>/
+    maps_dirs = glob.glob(os.path.join(ipk_extracted, "**", "world", "maps"), recursive=True)
     for maps_dir in maps_dirs:
         if os.path.isdir(maps_dir):
             for entry in os.listdir(maps_dir):
                 full = os.path.join(maps_dir, entry)
                 if os.path.isdir(full) and not entry.startswith('.'):
                     codenames.add(entry)
+
+    # Legacy layout: world/jd20XX/<codename>/ (e.g. JD2015 Gold bundles)
+    jd_dirs = glob.glob(os.path.join(ipk_extracted, "**", "world", "jd*"), recursive=True)
+    for jd_dir in jd_dirs:
+        if os.path.isdir(jd_dir) and re.match(r"jd\d+", os.path.basename(jd_dir), re.I):
+            for entry in os.listdir(jd_dir):
+                full = os.path.join(jd_dir, entry)
+                if os.path.isdir(full) and not entry.startswith('.'):
+                    codenames.add(entry)
+
     return sorted(codenames)
 
 
@@ -1926,29 +1999,28 @@ def step_04_unpack_ipk(state):
     # stale content from a previous IPK that shared the same extraction dir.
     if getattr(state, "skip_ipk_unpack", False) and os.path.isdir(state.ipk_extracted) and not has_manual_ipk:
         print("[4] Skipping IPK unpack (already prepared)...")
-        return
-
-    # Clear previous extraction if it exists and we're not skipping
-    if os.path.isdir(state.ipk_extracted):
-        print(f"[4] Clearing previous IPK extraction at {os.path.basename(state.ipk_extracted)}...")
-        _safe_rmtree(state.ipk_extracted)
-    os.makedirs(state.ipk_extracted, exist_ok=True)
-
-    if getattr(state, "manual_ipk_file", None) and os.path.isfile(state.manual_ipk_file):
-        print("[4] Unpacking selected IPK file...")
-        try:
-            ipk_unpack.extract(state.manual_ipk_file, state.ipk_extracted)
-        except (AssertionError, OSError, struct.error) as e:
-            logger.warning("    Warning: IPK extraction issue: %s", e)
     else:
-        print("[4] Unpacking IPK archives...")
-        ipk_files = glob.glob(os.path.join(state.extracted_zip_dir, "*.ipk"))
-        for ipk in ipk_files:
-            print(f"    Unpacking {os.path.basename(ipk)}...")
+        # Clear previous extraction if it exists and we're not skipping
+        if os.path.isdir(state.ipk_extracted):
+            print(f"[4] Clearing previous IPK extraction at {os.path.basename(state.ipk_extracted)}...")
+            _safe_rmtree(state.ipk_extracted)
+        os.makedirs(state.ipk_extracted, exist_ok=True)
+
+        if getattr(state, "manual_ipk_file", None) and os.path.isfile(state.manual_ipk_file):
+            print("[4] Unpacking selected IPK file...")
             try:
-                ipk_unpack.extract(ipk, state.ipk_extracted)
+                ipk_unpack.extract(state.manual_ipk_file, state.ipk_extracted)
             except (AssertionError, OSError, struct.error) as e:
                 logger.warning("    Warning: IPK extraction issue: %s", e)
+        else:
+            print("[4] Unpacking IPK archives...")
+            ipk_files = glob.glob(os.path.join(state.extracted_zip_dir, "*.ipk"))
+            for ipk in ipk_files:
+                print(f"    Unpacking {os.path.basename(ipk)}...")
+                try:
+                    ipk_unpack.extract(ipk, state.ipk_extracted)
+                except (AssertionError, OSError, struct.error) as e:
+                    logger.warning("    Warning: IPK extraction issue: %s", e)
 
     # Detect bundle IPKs (multiple maps in one archive)
     detected_maps = _detect_maps_in_ipk(state.ipk_extracted)
@@ -1973,6 +2045,12 @@ def step_04_unpack_ipk(state):
             print(f"    Codename correction: {state.codename} -> {detected_maps[0]}")
             state.codename = detected_maps[0]
 
+    # Mark bundle mode so _ipk_glob() and map_builder functions can filter
+    # asset searches to the specific map's codename subtree.
+    state.is_bundle = len(detected_maps) > 1 and bool(state.codename)
+    if state.is_bundle:
+        print(f"    Bundle mode: scoping asset searches to codename '{state.codename}'")
+
     # Re-detect audio/video after extraction if not yet set (IPK mode defers
     # detection until the files are actually extracted).
     if not state.audio_path or not os.path.isfile(state.audio_path):
@@ -1988,10 +2066,18 @@ def step_04_unpack_ipk(state):
                 "Ensure the IPK contains .ogg, .wav, or .wav.ckd audio.")
 
     if not state.video_path or not os.path.isfile(state.video_path):
-        webms = glob.glob(os.path.join(state.ipk_extracted, "**", "*.webm"), recursive=True)
+        webms = _ipk_glob(state, os.path.join("**", "*.webm"))
         webms = [f for f in webms
                  if "mappreview" not in os.path.basename(f).lower()
                  and "videopreview" not in os.path.basename(f).lower()]
+        # For bundle IPKs with multiple maps, prefer the video matching the
+        # current codename so we don't accidentally pick another map's video.
+        if webms and state.codename:
+            cn_lower = state.codename.lower()
+            cn_matches = [f for f in webms
+                          if os.path.basename(f).lower().startswith(cn_lower)]
+            if cn_matches:
+                webms = cn_matches
         if webms:
             state.video_path = webms[0]
         if not state.video_path:
@@ -2038,7 +2124,7 @@ def step_05_decode_menuart(state):
         if menuart_search_dir and os.path.isdir(menuart_search_dir):
             menuart_sources = glob.glob(os.path.join(menuart_search_dir, "*.*"))
         else:
-            menuart_sources = glob.glob(os.path.join(state.ipk_extracted, "**", "menuart", "textures", "*.*"), recursive=True)
+            menuart_sources = _ipk_glob(state, os.path.join("**", "menuart", "textures", "*.*"))
         for src in menuart_sources:
             file = os.path.basename(src)
             if file.endswith(".ckd") or file.endswith(".png") or file.endswith(".jpg"):
@@ -2146,7 +2232,9 @@ def step_06_generate_configs(state):
     # Check for non-ASCII characters in metadata (Title, Artist, Credits, etc.)
     if not hasattr(state, 'metadata_overrides') or state.metadata_overrides is None:
         state.metadata_overrides = {}
-    problems = map_builder.check_metadata_encoding(state.ipk_extracted)
+    problems = map_builder.check_metadata_encoding(
+        state.ipk_extracted,
+        codename=state.codename if getattr(state, 'is_bundle', False) else None)
     if problems:
         non_ascii_fields = {k: v for k, v in problems.items() if k not in state.metadata_overrides}
         if non_ascii_fields:
@@ -2181,7 +2269,9 @@ def step_06_generate_configs(state):
     if _mt_override and os.path.isfile(_mt_override):
         mt_meta = map_builder.extract_musictrack_metadata_from_file(_mt_override)
     else:
-        mt_meta = map_builder.extract_musictrack_metadata(state.ipk_extracted)
+        mt_meta = map_builder.extract_musictrack_metadata(
+            state.ipk_extracted,
+            codename=state.codename if getattr(state, 'is_bundle', False) else None)
     if mt_meta:
         state.musictrack_start_beat = mt_meta["start_beat"]
         state.marker_preroll_ms = compute_marker_preroll(
@@ -2241,10 +2331,12 @@ def step_06_generate_configs(state):
     if getattr(state, 'override_songdesc', None):
         _overrides["songdesc_path"] = state.override_songdesc
 
+    _bundle_codename = state.codename if getattr(state, 'is_bundle', False) else None
     video_start_time = map_builder.generate_text_files(
         state.map_name, state.ipk_extracted, state.target_dir, state.v_override,
         metadata_overrides=state.metadata_overrides or None,
-        overrides=_overrides or None)
+        overrides=_overrides or None,
+        codename=_bundle_codename)
 
     if video_start_time is None:
         raise RuntimeError("Could not fetch video start time.")
@@ -2262,7 +2354,7 @@ def step_07_convert_tapes(state):
         if override_path and os.path.isfile(override_path):
             src_tapes = [override_path]
         else:
-            src_tapes = glob.glob(os.path.join(state.ipk_extracted, f"**/*_tml_{ty}.?tape.ckd"), recursive=True)
+            src_tapes = _ipk_glob(state, f"**/*_tml_{ty}.?tape.ckd")
         if src_tapes:
             dst_tape = os.path.join(state.target_dir, f"Timeline/{state.map_name}_TML_{ty.capitalize()}.{ty[0]}tape")
             tape_data = ubiart_lua.load_ckd_json(src_tapes[0])
@@ -2287,7 +2379,7 @@ def step_08_convert_cinematics(state):
         tape_files = [_mainseq_override]
     else:
         tape_files = []
-        for cine_dir in glob.glob(os.path.join(state.ipk_extracted, "**/cinematics"), recursive=True):
+        for cine_dir in _ipk_glob(state, "**/cinematics"):
             tape_files.extend(glob.glob(os.path.join(cine_dir, "*.tape.ckd")))
     cine_converted = 0
     for tape_file in tape_files:
@@ -2327,7 +2419,7 @@ def step_09_process_amb(state):
     if _amb_override and os.path.isdir(_amb_override):
         amb_dirs = [_amb_override]
     else:
-        amb_dirs = glob.glob(os.path.join(state.ipk_extracted, "**/audio/amb"), recursive=True)
+        amb_dirs = _ipk_glob(state, "**/audio/amb")
     if amb_dirs:
         print("[9] Processing ambient sound templates...")
         for amb_dir_path in amb_dirs:
@@ -2461,7 +2553,7 @@ def step_10_decode_pictos(state):
         picto_src_dir = _pictos_override
     else:
         picto_src_dir = None
-        for path in glob.glob(os.path.join(state.ipk_extracted, "**/pictos"), recursive=True):
+        for path in _ipk_glob(state, "**/pictos"):
             picto_src_dir = path
             break
     sys.stdout.flush()
@@ -2486,7 +2578,7 @@ def step_11_extract_moves(state):
             plat_dir = os.path.join(_moves_override, plat)
             moves_src = [plat_dir] if os.path.isdir(plat_dir) else []
         else:
-            moves_src = glob.glob(os.path.join(state.ipk_extracted, f"**/moves/{plat}"), recursive=True)
+            moves_src = _ipk_glob(state, f"**/moves/{plat}")
         for folder in moves_src:
             dest_moves = os.path.join(state.target_dir, f"Timeline/Moves/{plat.upper()}")
             os.makedirs(dest_moves, exist_ok=True)
@@ -2558,7 +2650,7 @@ def step_11_extract_moves(state):
     if total_copied:
         print(f"    Merged {total_copied} missing gesture/msm file(s) into PC/")
 
-    autodance_tpls = glob.glob(os.path.join(state.ipk_extracted, "**/autodance/*.tpl.ckd"), recursive=True)
+    autodance_tpls = _ipk_glob(state, "**/autodance/*.tpl.ckd")
     for f in autodance_tpls:
         dest_ad = os.path.join(state.target_dir, "Autodance")
         os.makedirs(dest_ad, exist_ok=True)
@@ -2567,7 +2659,7 @@ def step_11_extract_moves(state):
 
     # Convert autodance data CKDs (adtape, adrecording, advideo)
     for ext in ["adtape", "adrecording", "advideo"]:
-        ad_ckds = glob.glob(os.path.join(state.ipk_extracted, f"**/autodance/*.{ext}.ckd"), recursive=True)
+        ad_ckds = _ipk_glob(state, f"**/autodance/*.{ext}.ckd")
         for f in ad_ckds:
             dest_ad = os.path.join(state.target_dir, "Autodance")
             os.makedirs(dest_ad, exist_ok=True)
@@ -2575,7 +2667,7 @@ def step_11_extract_moves(state):
             json_to_lua.convert_file(f, dst_file)
 
     # Copy any other Autodance media if they exist (ogg, etc.)
-    autodance_media = glob.glob(os.path.join(state.ipk_extracted, "**/autodance/*.*"), recursive=True)
+    autodance_media = _ipk_glob(state, "**/autodance/*.*")
     for f in autodance_media:
         if f.endswith(".ckd"):
             continue
@@ -2584,7 +2676,7 @@ def step_11_extract_moves(state):
         shutil.copy2(f, os.path.join(dest_ad, os.path.basename(f)))
 
     # Convert stape CKD (sequence tape with BPM/Signature data) if available
-    stape_ckds = glob.glob(os.path.join(state.ipk_extracted, "**/*.stape.ckd"), recursive=True)
+    stape_ckds = _ipk_glob(state, "**/*.stape.ckd")
     if stape_ckds:
         dst_stape = os.path.join(state.target_dir, f"Audio/{state.map_name}.stape")
         json_to_lua.convert_file(stape_ckds[0], dst_stape)
@@ -3187,8 +3279,11 @@ def main():
 
                 # Regenerate config if video_override changed
                 map_builder.generate_text_files(
-                    state.map_name, state.ipk_extracted, state.target_dir, v_override,
-                    metadata_overrides=getattr(state, 'metadata_overrides', None))
+                    state.map_name,
+                    state.ipk_extracted,
+                    state.target_dir, v_override,
+                    metadata_overrides=getattr(state, 'metadata_overrides', None),
+                    codename=state.codename if getattr(state, 'is_bundle', False) else None)
                 reprocess_audio(state, a_offset, v_override)
                 show_ffplay_preview(state.video_path, state.audio_path, v_override, a_offset)
             except ValueError:

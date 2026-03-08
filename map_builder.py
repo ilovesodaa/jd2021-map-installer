@@ -15,6 +15,26 @@ def _prefer_non_legacy(paths):
     legacy = [p for p in paths if "main_legacy" in os.path.basename(p).lower()]
     return non_legacy + legacy
 
+
+def _filter_by_codename(paths, codename, base_dir=None):
+    """Filter paths to only those containing the codename as a directory component.
+
+    Used for bundle IPKs where the same ipk_dir contains assets for
+    multiple maps.  Returns the original list if codename is None.
+    Returns an empty list if codename is set but nothing matches (the
+    map simply doesn't have that asset).
+    """
+    if not codename:
+        return paths
+    cn_lower = codename.lower()
+    filtered = []
+    for p in paths:
+        rel = (os.path.relpath(p, base_dir) if base_dir else p).replace("\\", "/").lower()
+        parts = rel.split("/")
+        if cn_lower in parts:
+            filtered.append(p)
+    return filtered
+
 logger = get_logger("map_builder")
 
 def lua_long_string(text):
@@ -77,14 +97,15 @@ def _has_non_ascii(text):
         return True
 
 
-def check_metadata_encoding(ipk_dir):
+def check_metadata_encoding(ipk_dir, codename=None):
     """Scan CKD songdesc for non-ASCII characters in Title, Artist, Credits.
 
     Returns a dict of {field_name: original_value} for any field that contains
     non-ASCII characters.  Returns empty dict if all fields are clean.
     """
-    songdesc_paths = _prefer_non_legacy(
-        glob.glob(os.path.join(ipk_dir, "**", "*songdesc*.tpl.ckd"), recursive=True))
+    songdesc_paths = _prefer_non_legacy(_filter_by_codename(
+        glob.glob(os.path.join(ipk_dir, "**", "*songdesc*.tpl.ckd"), recursive=True),
+        codename, ipk_dir))
     if not songdesc_paths:
         return {}
 
@@ -103,15 +124,16 @@ def check_metadata_encoding(ipk_dir):
     return problems
 
 
-def extract_musictrack_metadata(ipk_dir):
+def extract_musictrack_metadata(ipk_dir, codename=None):
     """Extract musictrack structure fields needed for marker-based calculations.
 
     Returns:
         dict with keys: markers (list[int]), start_beat (int), video_start_time (float)
         Returns None if musictrack CKD cannot be found or parsed.
     """
-    ckd_paths = _prefer_non_legacy(
-        glob.glob(os.path.join(ipk_dir, "**", "*musictrack*.tpl.ckd"), recursive=True))
+    ckd_paths = _prefer_non_legacy(_filter_by_codename(
+        glob.glob(os.path.join(ipk_dir, "**", "*musictrack*.tpl.ckd"), recursive=True),
+        codename, ipk_dir))
     if not ckd_paths:
         return None
     try:
@@ -908,12 +930,13 @@ def _write_cinematics_stubs(target_dir, map_name):
 # ---------------------------------------------------------------------------
 
 def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override=None,
-                        metadata_overrides=None, overrides=None):
+                        metadata_overrides=None, overrides=None, codename=None):
     """Generate all UbiArt config/scene files for a map installation.
 
     Parses CKD metadata, then delegates file generation to helper functions.
     overrides: optional dict with keys 'musictrack_path', 'songdesc_path' to
                bypass glob searches for those CKDs.
+    codename: optional codename for bundle IPK filtering (scopes CKD lookups).
     """
     map_lower = map_name.lower()
 
@@ -921,8 +944,9 @@ def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override
     if overrides and overrides.get("musictrack_path"):
         ckd_json_paths = [overrides["musictrack_path"]]
     else:
-        ckd_json_paths = _prefer_non_legacy(
-            glob.glob(os.path.join(ipk_dir, "**", "*musictrack*.tpl.ckd"), recursive=True))
+        ckd_json_paths = _prefer_non_legacy(_filter_by_codename(
+            glob.glob(os.path.join(ipk_dir, "**", "*musictrack*.tpl.ckd"), recursive=True),
+            codename, ipk_dir))
     if not ckd_json_paths:
         logger.error("Error: Could not find musictrack.tpl.ckd")
         return None
@@ -932,8 +956,9 @@ def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override
     if overrides and overrides.get("songdesc_path"):
         songdesc_paths = [overrides["songdesc_path"]]
     else:
-        songdesc_paths = _prefer_non_legacy(
-            glob.glob(os.path.join(ipk_dir, "**", "*songdesc*.tpl.ckd"), recursive=True))
+        songdesc_paths = _prefer_non_legacy(_filter_by_codename(
+            glob.glob(os.path.join(ipk_dir, "**", "*songdesc*.tpl.ckd"), recursive=True),
+            codename, ipk_dir))
     sd_struct = {}
     if songdesc_paths:
         try:

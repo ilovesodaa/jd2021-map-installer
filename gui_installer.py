@@ -147,6 +147,10 @@ class MapInstallerGUI:
         self._last_run_from_fetch = False
         self._source_spec = None
 
+        # Multi-map navigation state (shared by bundle, batch, readjust)
+        self._nav_states = []   # list of PipelineState objects
+        self._nav_index = 0     # current index into _nav_states
+
         # Tkinter variables for sync refinement
         self.v_override_var = tk.DoubleVar(value=0.0)
         self.a_offset_var = tk.DoubleVar(value=0.0)
@@ -292,6 +296,46 @@ class MapInstallerGUI:
         # Hidden entries so _get_audio_path / _get_video_path don't error for IPK mode
         self.mode_audio_entry = ttk.Entry(f_ipk)
         self.mode_video_entry = ttk.Entry(f_ipk)
+        # Bundle map selection (hidden until a bundle IPK is detected)
+        self._bundle_frame = ttk.LabelFrame(f_ipk, text="Bundle Maps (select maps to install)")
+        self._bundle_select_all_var = tk.BooleanVar(value=True)
+        bundle_ctrl = ttk.Frame(self._bundle_frame)
+        bundle_ctrl.pack(fill="x", padx=4, pady=(2, 0))
+        ttk.Checkbutton(
+            bundle_ctrl, text="Select All",
+            variable=self._bundle_select_all_var,
+            command=self._on_bundle_select_all,
+        ).pack(side="left")
+        self._bundle_count_label = ttk.Label(bundle_ctrl, text="", foreground="#555555")
+        self._bundle_count_label.pack(side="right")
+        # Scrollable canvas with checkbuttons for each map
+        bundle_list_frame = ttk.Frame(self._bundle_frame)
+        bundle_list_frame.pack(fill="both", expand=True, padx=4, pady=(0, 4))
+        self._bundle_canvas = tk.Canvas(bundle_list_frame, height=160, highlightthickness=0)
+        self._bundle_scrollbar = ttk.Scrollbar(
+            bundle_list_frame, orient="vertical",
+            command=self._bundle_canvas.yview)
+        self._bundle_canvas.configure(yscrollcommand=self._bundle_scrollbar.set)
+        self._bundle_canvas.pack(side="left", fill="both", expand=True)
+        self._bundle_scrollbar.pack(side="right", fill="y")
+        self._bundle_inner_frame = ttk.Frame(self._bundle_canvas)
+        self._bundle_canvas_window = self._bundle_canvas.create_window(
+            (0, 0), window=self._bundle_inner_frame, anchor="nw")
+        self._bundle_inner_frame.bind(
+            "<Configure>",
+            lambda _e: self._bundle_canvas.configure(
+                scrollregion=self._bundle_canvas.bbox("all")))
+        self._bundle_canvas.bind(
+            "<Configure>",
+            lambda e: self._bundle_canvas.itemconfig(
+                self._bundle_canvas_window, width=e.width))
+        # Enable mousewheel scrolling on the canvas
+        def _on_bundle_mousewheel(event):
+            self._bundle_canvas.yview_scroll(
+                int(-1 * (event.delta / 120)), "units")
+        self._bundle_canvas.bind("<MouseWheel>", _on_bundle_mousewheel)
+        self._bundle_inner_frame.bind("<MouseWheel>", _on_bundle_mousewheel)
+        self._bundle_check_vars = []  # list of (codename, BooleanVar)
         self._mode_frames["ipk"] = f_ipk
 
         # MANUAL frame: full per-file/folder selector layout
@@ -369,6 +413,16 @@ class MapInstallerGUI:
 
         # BATCH frame: Folder only
         f_batch = ttk.Frame(self._mode_frame_parent)
+        tk.Label(
+            f_batch,
+            text="Batch installs from a folder containing map subfolders "
+                 "with asset/nohud HTML files or already-downloaded "
+                 "asset/nohud files. For bundle IPK files, use IPK mode instead.",
+            fg="#555555",
+            font=("Consolas", 8, "italic"),
+            wraplength=500,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 4))
         batch_r1 = ttk.Frame(f_batch)
         batch_r1.pack(fill="x", pady=1)
         ttk.Label(batch_r1, text="Maps Folder:", width=16, anchor="e").pack(
@@ -486,13 +540,42 @@ class MapInstallerGUI:
         # --- Left: Installation Progress ---
         prog = ttk.LabelFrame(middle, text="Installation Progress", padding=6)
         prog.pack(side="left", fill="both", padx=(0, 4))
+        self._prog_frame = prog
 
+        # Single-map step labels (hidden during batch/bundle)
+        self._step_labels_frame = ttk.Frame(prog)
+        self._step_labels_frame.pack(fill="both", expand=True)
         self.step_labels = []
         for i, name in enumerate(self.STEP_NAMES):
-            lbl = ttk.Label(prog, text=f"[  ] Step {i+1}:  {name}",
+            lbl = ttk.Label(self._step_labels_frame, text=f"[  ] Step {i+1}:  {name}",
                             font=("Consolas", 9))
             lbl.pack(anchor="w")
             self.step_labels.append(lbl)
+
+        # Batch/bundle map progress list (hidden by default)
+        self._batch_progress_frame = ttk.Frame(prog)
+        self._batch_progress_canvas = tk.Canvas(
+            self._batch_progress_frame, highlightthickness=0)
+        self._batch_progress_sb = ttk.Scrollbar(
+            self._batch_progress_frame, orient="vertical",
+            command=self._batch_progress_canvas.yview)
+        self._batch_progress_inner = ttk.Frame(self._batch_progress_canvas)
+        self._batch_progress_canvas.create_window(
+            (0, 0), window=self._batch_progress_inner, anchor="nw")
+        self._batch_progress_inner.bind(
+            "<Configure>",
+            lambda e: self._batch_progress_canvas.configure(
+                scrollregion=self._batch_progress_canvas.bbox("all")))
+        self._batch_progress_canvas.configure(
+            yscrollcommand=self._batch_progress_sb.set)
+        self._batch_progress_canvas.pack(
+            side="left", fill="both", expand=True)
+        self._batch_progress_sb.pack(side="right", fill="y")
+        self._batch_progress_canvas.bind(
+            "<MouseWheel>",
+            lambda e: self._batch_progress_canvas.yview_scroll(
+                int(-1 * (e.delta / 120)), "units"))
+        self._batch_progress_labels = []  # list of ttk.Label widgets
 
         # --- Right: Embedded Preview ---
         prev_frame = ttk.LabelFrame(middle, text="Preview", padding=4)
@@ -663,6 +746,21 @@ class MapInstallerGUI:
             actions, text="Apply & Finish", command=self._on_apply)
         self.apply_btn.pack(side="left")
 
+        # --- Map navigation row (hidden until multi-map preview) ---
+        self._nav_frame = ttk.Frame(self.sync_frame)
+        self._nav_prev_btn = ttk.Button(
+            self._nav_frame, text="< Prev Map",
+            command=self._on_nav_prev, width=12)
+        self._nav_prev_btn.pack(side="left", padx=(0, 8))
+        self._nav_label = ttk.Label(
+            self._nav_frame, text="", font=("Consolas", 10, "bold"),
+            anchor="center")
+        self._nav_label.pack(side="left", fill="x", expand=True)
+        self._nav_next_btn = ttk.Button(
+            self._nav_frame, text="Next Map >",
+            command=self._on_nav_next, width=12)
+        self._nav_next_btn.pack(side="right", padx=(8, 0))
+
         # Start with sync refinement and preview controls disabled
         self._set_sync_state("disabled")
         self._set_preview_state("disabled")
@@ -749,6 +847,8 @@ class MapInstallerGUI:
         self.mode_video_entry.delete(0, tk.END)
 
         # Reset progress and refinement controls.
+        self._hide_batch_progress()
+        self._hide_nav()
         for i in range(len(self.STEP_NAMES)):
             self._update_step_status(i, "pending")
         self.v_override_var.set(0.0)
@@ -982,6 +1082,9 @@ class MapInstallerGUI:
         else:
             self._quality_row.pack(fill="x", pady=1)
 
+        # Hide bundle map list when switching modes
+        self._hide_bundle_map_list()
+
         source_hint = "file" if mode == "ipk" else "folder"
         self.mode_status_var.set(
             f"Mode: {mode}. Select a source {source_hint} and click Analyze."
@@ -1062,6 +1165,7 @@ class MapInstallerGUI:
         elif mode == "ipk":
             # Always re-detect audio/video from the IPK directory to avoid
             # stale paths from a previous installation.
+            self._hide_bundle_map_list()
             spec = source_analysis.analyze_ipk_file_mode(source_path)
         elif mode == "manual":
             spec = source_analysis.analyze_manual_mode_v2(
@@ -1160,6 +1264,16 @@ class MapInstallerGUI:
             except Exception as e:
                 messagebox.showerror("Prepare Failed", f"Could not unpack IPK:\n{e}")
                 return
+            # Detect bundle IPKs (multiple maps inside one archive)
+            detected_maps = map_installer._detect_maps_in_ipk(spec.ipk_extracted)
+            if len(detected_maps) > 1:
+                spec.bundle_maps = detected_maps
+                spec.ready_for_install = True
+                self._show_bundle_map_list(detected_maps)
+                self.mode_status_var.set(
+                    f"Bundle IPK: {len(detected_maps)} maps found. "
+                    f"Select maps and click Install.")
+                return
             # Re-detect audio/video after fresh extraction
             from source_analysis import _pick_audio, _pick_webm
             spec.audio_path = _pick_audio(os.path.dirname(spec.ipk_file), spec.codename)
@@ -1204,9 +1318,14 @@ class MapInstallerGUI:
             self._run_batch_mode(source_root)
             return
 
-        # Always re-analyze to pick up changes (e.g. new IPK file selected)
-        self._analyze_mode_source()
-        spec = self._source_spec
+        # For bundle IPKs that are already prepared, skip re-analysis which
+        # would create a fresh SourceSpec and lose the bundle_maps list.
+        if mode == "ipk" and self._source_spec and self._source_spec.bundle_maps:
+            spec = self._source_spec
+        else:
+            # Always re-analyze to pick up changes (e.g. new IPK file selected)
+            self._analyze_mode_source()
+            spec = self._source_spec
         if not spec:
             return
         if spec.errors:
@@ -1217,6 +1336,22 @@ class MapInstallerGUI:
             self._prepare_mode_source()
             if not os.path.isdir(spec.ipk_extracted):
                 return
+            # If bundle was just detected during prepare, stop and let the
+            # user review the map selection list before clicking Install again.
+            if spec.bundle_maps:
+                return
+
+        # Bundle IPK: route to bundle install if multiple maps detected
+        if mode == "ipk" and spec.bundle_maps:
+            selected = self._get_selected_bundle_maps()
+            if not selected:
+                messagebox.showwarning(
+                    "Bundle Install",
+                    "No maps selected. Please select at least one map "
+                    "from the bundle list.")
+                return
+            self._run_bundle_ipk_install(spec, selected)
+            return
 
         if mode == "manual" and not spec.ipk_extracted:
             messagebox.showerror(
@@ -1242,33 +1377,121 @@ class MapInstallerGUI:
         self.mode_install_btn.configure(state="disabled")
         self.mode_status_var.set("Batch mode running...")
 
+        jd_dir = self.jd_dir_entry.get().strip() or os.path.dirname(os.path.abspath(__file__))
+        quality = self.quality_var.get()
+
         def _run():
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            cmd = [
-                sys.executable,
-                os.path.join(script_dir, "batch_install_maps.py"),
-                "--maps-dir",
-                root_folder,
-                "--jd-dir",
-                self.jd_dir_entry.get().strip() or script_dir,
-                "--quality",
-                self.quality_var.get(),
-            ]
-            proc = subprocess.run(cmd, capture_output=True, text=True)
+            import batch_install_maps
+
+            # Discover map folders with HTML files
+            found = batch_install_maps.collect_map_folders(root_folder)
+            if not found:
+                def _no_maps():
+                    self._pipeline_running = False
+                    self.mode_install_btn.configure(state="normal")
+                    self.mode_status_var.set("Batch: no valid map folders found.")
+                    messagebox.showwarning(
+                        "Batch",
+                        "No valid map folders found under the selected directory.\n\n"
+                        "Each map folder should contain asset/nohud HTML files\n"
+                        "or already-downloaded asset/nohud files.")
+                self.root.after(0, _no_maps)
+                return
+
+            total = len(found)
+            map_names = [name for name, _, _ in found]
+            self.root.after(0, self._show_batch_progress, map_names)
+
+            print(f"\n{'='*60}")
+            print(f" BATCH INSTALL -- {total} map(s) found")
+            print(f" Quality: {quality.upper()}")
+            print(f"{'='*60}")
+
+            # Phase 1: Download all maps while CDN links are fresh
+            print(f"\n--- PHASE 1: Downloading all maps ---")
+            states = []
+            for i, (name, asset, nohud) in enumerate(found):
+                self.root.after(0, self.mode_status_var.set,
+                                f"Downloading [{i+1}/{total}]: {name}...")
+                self.root.after(0, self._update_batch_progress,
+                                i, "running", "downloading...")
+                print(f"\n--- [{i+1}/{total}] Downloading: {name} ---")
+                try:
+                    state = batch_install_maps.create_state(
+                        name, asset, nohud, jd_dir, quality=quality)
+                    state._interactive = False
+                    batch_install_maps.run_steps(
+                        state, batch_install_maps.DOWNLOAD_STEPS)
+                    states.append((i, name, state))
+                    self.root.after(0, self._update_batch_progress,
+                                    i, "running", "downloaded")
+                    print(f"  Download OK: {name}")
+                except Exception as e:
+                    self.root.after(0, self._update_batch_progress,
+                                    i, "error", "download failed")
+                    print(f"  Download FAILED: {name}: {e}")
+
+            if not states:
+                def _dl_fail():
+                    self._pipeline_running = False
+                    self.mode_install_btn.configure(state="normal")
+                    self.mode_status_var.set("Batch: all downloads failed.")
+                    self._hide_batch_progress()
+                    messagebox.showerror("Batch", "All map downloads failed.")
+                self.root.after(0, _dl_fail)
+                return
+
+            # Phase 2: Process all downloaded maps locally
+            print(f"\n--- PHASE 2: Processing all maps ---")
+            results = []
+            completed_states = []
+            process_step_names = [name for name, _ in batch_install_maps.PROCESS_STEPS]
+            for j, (orig_idx, name, state) in enumerate(states):
+                self.root.after(0, self.mode_status_var.set,
+                                f"Processing [{j+1}/{len(states)}]: {name}...")
+                self.root.after(0, self._update_batch_progress,
+                                orig_idx, "running", "processing...")
+                print(f"\n--- [{j+1}/{len(states)}] Processing: {name} ---")
+                try:
+                    for si, (step_name, step_fn) in enumerate(
+                            batch_install_maps.PROCESS_STEPS):
+                        self.root.after(0, self._update_batch_progress,
+                                        orig_idx, "running", step_name)
+                        step_fn(state)
+                    results.append((name, True, None))
+                    completed_states.append(state)
+                    self.root.after(0, self._update_batch_progress,
+                                    orig_idx, "done")
+                    print(f"  Processing OK: {name}")
+                except Exception as e:
+                    results.append((name, False, str(e)))
+                    self.root.after(0, self._update_batch_progress,
+                                    orig_idx, "error", str(e)[:40])
+                    print(f"  Processing FAILED: {name}: {e}")
+
+            ok = [r for r in results if r[1]]
+            fail = [r for r in results if not r[1]]
+            print(f"\n{'='*60}")
+            print(f" BATCH COMPLETE: {len(ok)} OK, {len(fail)} failed")
+            print(f"{'='*60}")
 
             def _after():
                 self._pipeline_running = False
                 self.mode_install_btn.configure(state="normal")
-                if proc.stdout:
-                    print(proc.stdout)
-                if proc.stderr:
-                    print(proc.stderr)
-                if proc.returncode == 0:
-                    self.mode_status_var.set("Batch mode complete.")
-                    messagebox.showinfo("Batch", "Batch installation completed.")
+                msg = f"Installed {len(ok)} of {len(results)} maps."
+                if fail:
+                    msg += f"\n\nFailed ({len(fail)}):\n" + "\n".join(
+                        f"  - {n}: {e}" for n, _, e in fail)
+                self.mode_status_var.set(
+                    f"Batch done: {len(ok)}/{len(results)} OK")
+                if fail:
+                    messagebox.showwarning("Batch", msg)
                 else:
-                    self.mode_status_var.set("Batch mode failed.")
-                    messagebox.showerror("Batch", "Batch installation failed. Check logs output.")
+                    messagebox.showinfo("Batch", msg)
+                # Enter multi-map preview for offset adjustment
+                if completed_states:
+                    self._hide_batch_progress()
+                    self._show_nav(completed_states)
 
             self.root.after(0, _after)
 
@@ -1280,19 +1503,33 @@ class MapInstallerGUI:
         self.mode_install_btn.configure(state="disabled")
         self.mode_status_var.set(f"Batch IPK mode: {len(ipk_files)} files found...")
 
+        # Build display names for progress list
+        ipk_sorted = sorted(ipk_files)
+        from source_analysis import _extract_codename_from_ipk_name
+        display_names = []
+        for ipk_path in ipk_sorted:
+            try:
+                display_names.append(_extract_codename_from_ipk_name(ipk_path))
+            except Exception:
+                display_names.append(os.path.basename(ipk_path))
+        self._show_batch_progress(display_names)
+
         jd_dir = self.jd_dir_entry.get().strip() or None
         quality = self.quality_var.get()
+        step_names = [name for name, _ in map_installer.PIPELINE_STEPS]
 
         def _run():
             results = []
-            for idx, ipk_path in enumerate(sorted(ipk_files)):
+            completed_states = []
+            for idx, ipk_path in enumerate(ipk_sorted):
                 ipk_name = os.path.basename(ipk_path)
                 print(f"\n=== Batch IPK [{idx + 1}/{len(ipk_files)}]: {ipk_name} ===")
                 self.root.after(0, self.mode_status_var.set,
                                 f"Batch IPK [{idx + 1}/{len(ipk_files)}]: {ipk_name}...")
+                self.root.after(0, self._update_batch_progress,
+                                idx, "running", "starting...")
 
                 try:
-                    from source_analysis import _extract_codename_from_ipk_name
                     codename = _extract_codename_from_ipk_name(ipk_path)
                     source_dir = os.path.dirname(ipk_path)
                     ipk_extracted = os.path.join(source_dir, f"ipk_extracted_{codename}")
@@ -1317,13 +1554,20 @@ class MapInstallerGUI:
                     )
 
                     step_fns = [fn for _, fn in map_installer.PIPELINE_STEPS]
-                    for step_fn in step_fns:
+                    for si, step_fn in enumerate(step_fns):
+                        self.root.after(0, self._update_batch_progress,
+                                        idx, "running", step_names[si])
                         step_fn(state)
 
                     results.append((ipk_name, codename, True, None))
+                    completed_states.append(state)
+                    self.root.after(0, self._update_batch_progress,
+                                    idx, "done")
                     print(f"    OK: {codename}")
                 except Exception as e:
                     results.append((ipk_name, codename if 'codename' in dir() else "?", False, str(e)))
+                    self.root.after(0, self._update_batch_progress,
+                                    idx, "error", str(e)[:40])
                     print(f"    FAILED: {e}")
                 finally:
                     # Clean up per-map extraction directory based on cleanup setting
@@ -1354,10 +1598,308 @@ class MapInstallerGUI:
                     messagebox.showwarning("Batch IPK", msg)
                 else:
                     messagebox.showinfo("Batch IPK", msg)
+                # Enter multi-map preview for offset adjustment
+                if completed_states:
+                    self._hide_batch_progress()
+                    self._show_nav(completed_states)
 
             self.root.after(0, _after)
 
         threading.Thread(target=_run, daemon=True).start()
+
+    # ----- Bundle IPK helpers -----
+
+    def _show_bundle_map_list(self, map_names):
+        """Populate and show the bundle map selection checkboxes."""
+        # Clear existing checkbuttons
+        for widget in self._bundle_inner_frame.winfo_children():
+            widget.destroy()
+        self._bundle_check_vars = []
+        for name in map_names:
+            var = tk.BooleanVar(value=True)
+            cb = ttk.Checkbutton(
+                self._bundle_inner_frame, text=name, variable=var,
+                command=self._on_bundle_selection_changed)
+            cb.pack(anchor="w", padx=2, pady=1)
+            # Propagate mousewheel events from checkbuttons to the canvas
+            cb.bind("<MouseWheel>", lambda e: self._bundle_canvas.yview_scroll(
+                int(-1 * (e.delta / 120)), "units"))
+            self._bundle_check_vars.append((name, var))
+        self._bundle_select_all_var.set(True)
+        self._bundle_count_label.configure(
+            text=f"{len(map_names)} of {len(map_names)} selected")
+        self._bundle_frame.pack(fill="both", expand=True, pady=(4, 0))
+
+    def _hide_bundle_map_list(self):
+        """Hide the bundle map selection checkboxes."""
+        self._bundle_frame.pack_forget()
+        for widget in self._bundle_inner_frame.winfo_children():
+            widget.destroy()
+        self._bundle_check_vars = []
+
+    def _on_bundle_select_all(self):
+        """Toggle select-all for bundle map checkboxes."""
+        checked = self._bundle_select_all_var.get()
+        for _, var in self._bundle_check_vars:
+            var.set(checked)
+        self._on_bundle_selection_changed()
+
+    def _on_bundle_selection_changed(self):
+        """Update the count label when bundle checkbox selection changes."""
+        selected = sum(1 for _, var in self._bundle_check_vars if var.get())
+        total = len(self._bundle_check_vars)
+        self._bundle_count_label.configure(
+            text=f"{selected} of {total} selected")
+        # Keep the select-all checkbox in sync
+        self._bundle_select_all_var.set(selected == total)
+
+    def _get_selected_bundle_maps(self):
+        """Return the list of map codenames checked in the bundle checkboxes."""
+        return [name for name, var in self._bundle_check_vars if var.get()]
+
+    def _run_bundle_ipk_install(self, spec, selected_maps):
+        """Install selected maps from a bundle IPK sequentially."""
+        if self._pipeline_running:
+            return
+        if not selected_maps:
+            messagebox.showwarning("Bundle Install", "No maps selected.")
+            return
+
+        self._pipeline_running = True
+        self.mode_install_btn.configure(state="disabled")
+        self.mode_status_var.set(
+            f"Bundle install: 0/{len(selected_maps)} maps...")
+        self._show_batch_progress(selected_maps)
+
+        jd_dir = self.jd_dir_entry.get().strip() or None
+        quality = self.quality_var.get()
+        step_names = [name for name, _ in map_installer.PIPELINE_STEPS]
+
+        def _run():
+            results = []
+            completed_states = []
+            for idx, codename in enumerate(selected_maps):
+                print(f"\n=== Bundle [{idx + 1}/{len(selected_maps)}]: {codename} ===")
+                self.root.after(0, self.mode_status_var.set,
+                                f"Bundle [{idx + 1}/{len(selected_maps)}]: {codename}...")
+                self.root.after(0, self._update_batch_progress,
+                                idx, "running", "starting...")
+
+                try:
+                    state = map_installer.PipelineState(
+                        map_name=codename,
+                        asset_html="(ipk-bundle)",
+                        nohud_html="(ipk-bundle)",
+                        jd_dir=jd_dir,
+                        quality=quality,
+                        original_map_name=codename,
+                    )
+                    state._interactive = False
+                    state.cleanup_behavior = self._settings.get(
+                        "cleanup_behavior", "ask")
+                    map_installer.configure_manual_source(
+                        state,
+                        source_type="ipk_file",
+                        source_dir=os.path.dirname(spec.ipk_file),
+                        ipk_extracted=spec.ipk_extracted,
+                        codename=codename,
+                        manual_ipk_file=None,  # already extracted
+                    )
+                    # IPK is already extracted, skip re-extraction
+                    state.skip_ipk_unpack = True
+
+                    step_fns = [fn for _, fn in map_installer.PIPELINE_STEPS]
+                    for si, step_fn in enumerate(step_fns):
+                        self.root.after(0, self._update_batch_progress,
+                                        idx, "running", step_names[si])
+                        step_fn(state)
+
+                    results.append((codename, True, None))
+                    completed_states.append(state)
+                    self.root.after(0, self._update_batch_progress,
+                                    idx, "done")
+                    print(f"    OK: {codename}")
+                except Exception as e:
+                    results.append((codename, False, str(e)))
+                    self.root.after(0, self._update_batch_progress,
+                                    idx, "error", str(e)[:40])
+                    print(f"    FAILED: {e}")
+
+            # Print summary
+            ok = [r for r in results if r[1]]
+            fail = [r for r in results if not r[1]]
+            print(f"\n=== Bundle Install Summary ===")
+            print(f"    Installed: {len(ok)}, Failed: {len(fail)}")
+            for codename, _, _ in ok:
+                print(f"      OK: {codename}")
+            for codename, _, err in fail:
+                print(f"      FAIL: {codename}: {err}")
+
+            def _after():
+                self._pipeline_running = False
+                self.mode_install_btn.configure(state="normal")
+                msg = f"Installed {len(ok)} of {len(results)} maps."
+                if fail:
+                    msg += f"\n\nFailed ({len(fail)}):\n" + "\n".join(
+                        f"  - {c}: {e}" for c, _, e in fail)
+                self.mode_status_var.set(
+                    f"Bundle done: {len(ok)}/{len(results)} OK")
+                if fail:
+                    messagebox.showwarning("Bundle IPK", msg)
+                else:
+                    messagebox.showinfo("Bundle IPK", msg)
+                # Enter multi-map preview for offset adjustment
+                if completed_states:
+                    self._hide_batch_progress()
+                    self._show_nav(completed_states)
+
+            self.root.after(0, _after)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    # ----- Multi-map navigation (shared by bundle, batch, readjust) -----
+
+    def _show_nav(self, states):
+        """Enter multi-map preview/adjust mode with Prev/Next navigation."""
+        if not states:
+            return
+        self._nav_states = states
+        self._nav_index = 0
+        self._nav_frame.pack(fill="x", pady=(4, 0))
+        self._load_nav_map(0)
+
+    def _hide_nav(self):
+        """Exit multi-map navigation mode."""
+        self._nav_frame.pack_forget()
+        self._nav_states = []
+        self._nav_index = 0
+
+    def _load_nav_map(self, index):
+        """Load the map at index into the sync panel and preview."""
+        self._nav_index = index
+        state = self._nav_states[index]
+        self.pipeline_state = state
+        total = len(self._nav_states)
+
+        # Update nav label and buttons
+        self._nav_label.configure(
+            text=f"Map {index + 1}/{total}: {state.map_name}")
+        self._nav_prev_btn.configure(state="normal")
+        self._nav_next_btn.configure(text="Next Map >", state="normal")
+
+        # Populate sync values
+        self.v_override_var.set(
+            state.v_override if state.v_override is not None else 0.0)
+        self.a_offset_var.set(
+            state.a_offset if state.a_offset is not None else 0.0)
+        self._refresh_value_displays()
+
+        # Enable sync refinement and preview controls
+        self._set_sync_state("normal")
+        self._set_preview_state("normal")
+
+        # IPK-specific sync setup
+        is_ipk = getattr(state, 'source_type', '') == 'ipk_file'
+        if is_ipk:
+            self._ipk_sync_warning.pack(anchor="w", pady=(0, 4))
+            children = self.sync_frame.winfo_children()
+            if len(children) > 1:
+                self._ipk_sync_warning.pack_configure(after=children[0])
+            if not self.v_override_enabled_var.get():
+                self.v_override_enabled_var.set(True)
+                self._on_v_override_toggle(suppress_popup=True)
+            for w in self._ao_row_widgets:
+                w.configure(state="disabled")
+            self.pad_audio_btn.configure(state="disabled")
+            self.sync_beatgrid_btn.configure(state="disabled")
+        else:
+            self._ipk_sync_warning.pack_forget()
+
+        # Auto-start preview
+        self.preview.launch(
+            state.video_path, state.audio_path,
+            self.v_override_var.get(), self.a_offset_var.get(),
+            loop_start=getattr(state, 'preview_loop_start_sec', 0.0),
+            loop_end=getattr(state, 'preview_loop_end_sec', 0.0))
+
+        print(f"\n--- Preview: Map {index + 1}/{total}: {state.map_name} ---")
+        print(f"    VIDEO_OFFSET={state.v_override}  AUDIO_OFFSET={state.a_offset}")
+        print(f"    video={state.video_path}")
+        print(f"    audio={state.audio_path}")
+
+    def _auto_apply_current(self, callback=None):
+        """Apply offsets for the current nav map in the background, then call callback."""
+        state = self.pipeline_state
+        if not state:
+            if callback:
+                callback()
+            return
+
+        v_override = self.v_override_var.get()
+        a_offset = self.a_offset_var.get()
+
+        self.preview.kill()
+        self._nav_prev_btn.configure(state="disabled")
+        self._nav_next_btn.configure(state="disabled")
+        self.apply_btn.configure(state="disabled")
+
+        def _apply():
+            try:
+                print(f"    Auto-applying: {state.map_name} "
+                      f"VIDEO_OFFSET={v_override:.5f}, "
+                      f"AUDIO_OFFSET={a_offset:.5f}")
+                _bundle_cn = state.codename if getattr(state, 'is_bundle', False) else None
+                map_builder.generate_text_files(
+                    state.map_name, state.ipk_extracted,
+                    state.target_dir, v_override,
+                    metadata_overrides=getattr(state, 'metadata_overrides', None),
+                    codename=_bundle_cn)
+                state.v_override = v_override
+                map_installer.reprocess_audio(state, a_offset, v_override)
+                state.a_offset = a_offset
+                print(f"    Applied: {state.map_name}")
+            except Exception as e:
+                print(f"    ERROR applying {state.map_name}: {e}")
+                import traceback
+                traceback.print_exc()
+
+            def _done():
+                self.apply_btn.configure(state="normal")
+                if callback:
+                    try:
+                        callback()
+                    except Exception as e:
+                        print(f"    ERROR in nav callback: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        # Re-enable nav buttons so the user isn't stuck
+                        self._nav_prev_btn.configure(state="normal")
+                        self._nav_next_btn.configure(state="normal")
+            self.root.after(0, _done)
+
+        threading.Thread(target=_apply, daemon=True).start()
+
+    def _on_nav_prev(self):
+        """Navigate to previous map, auto-applying current offsets first."""
+        if self._nav_index <= 0:
+            target = len(self._nav_states) - 1
+        else:
+            target = self._nav_index - 1
+
+        def _go(idx=target):
+            self._load_nav_map(idx)
+        self._auto_apply_current(callback=_go)
+
+    def _on_nav_next(self):
+        """Navigate to next map, auto-applying current offsets first."""
+        if self._nav_index >= len(self._nav_states) - 1:
+            target = 0
+        else:
+            target = self._nav_index + 1
+
+        def _go(idx=target):
+            self._load_nav_map(idx)
+        self._auto_apply_current(callback=_go)
 
     def _install_from_manual_spec(self, spec):
         require_html = False
@@ -1515,6 +2057,75 @@ class MapInstallerGUI:
 
 
     # ------------------------------------------------------------------
+    # Batch/Bundle progress list
+    # ------------------------------------------------------------------
+
+    def _show_batch_progress(self, map_names):
+        """Switch progress panel from step-labels to a scrollable map list."""
+        self._step_labels_frame.pack_forget()
+
+        # Clear old labels
+        for widget in self._batch_progress_inner.winfo_children():
+            widget.destroy()
+        self._batch_progress_labels = []
+
+        for name in map_names:
+            lbl = ttk.Label(
+                self._batch_progress_inner,
+                text=f"[    ] {name}",
+                font=("Consolas", 9))
+            lbl.pack(anchor="w", padx=2, pady=1)
+            lbl.bind("<MouseWheel>", lambda e: self._batch_progress_canvas.yview_scroll(
+                int(-1 * (e.delta / 120)), "units"))
+            self._batch_progress_labels.append(lbl)
+
+        self._batch_progress_frame.pack(fill="both", expand=True)
+        self._prog_frame.configure(text="Installation Progress (Batch)")
+
+    def _update_batch_progress(self, index, status, detail=""):
+        """Update a single map entry in the batch progress list.
+
+        status: 'pending', 'running', 'done', 'error'
+        detail: optional suffix text (e.g. current step name)
+        """
+        if index < 0 or index >= len(self._batch_progress_labels):
+            return
+        lbl = self._batch_progress_labels[index]
+        glyphs = {"pending": "    ", "running": " >> ", "done": " OK ", "error": " !! "}
+        glyph = glyphs.get(status, "    ")
+        # Extract map name from label text (stored as "[....] mapname")
+        parts = lbl.cget("text").split("] ", 1)
+        name = parts[1].split("  ")[0] if len(parts) > 1 else "?"
+        suffix = f"  {detail}" if detail else ""
+        lbl.configure(text=f"[{glyph}] {name}{suffix}")
+        if status == "running":
+            lbl.configure(font=("Consolas", 9, "bold"), foreground="")
+        elif status == "done":
+            lbl.configure(font=("Consolas", 9), foreground="green")
+        elif status == "error":
+            lbl.configure(font=("Consolas", 9), foreground="red")
+        else:
+            lbl.configure(font=("Consolas", 9), foreground="")
+
+        # Auto-scroll to make the current item visible
+        if status == "running":
+            self._batch_progress_canvas.update_idletasks()
+            self._batch_progress_canvas.configure(
+                scrollregion=self._batch_progress_canvas.bbox("all"))
+            # Scroll so the running item is visible
+            total = len(self._batch_progress_labels)
+            if total > 0:
+                fraction = max(0, (index - 2)) / total
+                self._batch_progress_canvas.yview_moveto(fraction)
+
+    def _hide_batch_progress(self):
+        """Switch progress panel back to step-labels view."""
+        self._batch_progress_frame.pack_forget()
+        self._step_labels_frame.pack(fill="both", expand=True)
+        self._prog_frame.configure(text="Installation Progress")
+
+
+    # ------------------------------------------------------------------
     # Pre-flight
     # ------------------------------------------------------------------
 
@@ -1634,6 +2245,12 @@ class MapInstallerGUI:
 
         def _build():
             try:
+                # Check if this is a bundle IPK with multiple maps
+                bundle_maps = map_installer.detect_bundle_for_readjust(download_dir)
+                if bundle_maps:
+                    self.root.after(0, lambda: self._on_readjust_bundle(
+                        download_dir, jd_dir, bundle_maps))
+                    return
                 state = map_installer.reconstruct_state_for_readjust(
                     download_dir, jd_dir=jd_dir)
                 state._interactive = False
@@ -1642,6 +2259,111 @@ class MapInstallerGUI:
                 self.root.after(0, lambda: self._on_readjust_error(str(e)))
 
         threading.Thread(target=_build, daemon=True).start()
+
+    def _on_readjust_bundle(self, download_dir, jd_dir, bundle_maps):
+        """Handle readjust for a bundle IPK: show map selection, then enter nav."""
+        self.readjust_btn.configure(state="normal", text="Re-adjust Offset")
+
+        # Create a selection dialog with checkboxes
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Bundle Readjust: Select Maps")
+        dlg.geometry("350x400")
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        ttk.Label(
+            dlg,
+            text=f"{len(bundle_maps)} maps found in this bundle.\n"
+                 "Select which maps to readjust:",
+            wraplength=320, justify="left"
+        ).pack(padx=10, pady=(10, 5))
+
+        # Select All checkbox
+        select_all_var = tk.BooleanVar(value=True)
+        check_vars = []
+
+        def _toggle_all():
+            val = select_all_var.get()
+            for _, v in check_vars:
+                v.set(val)
+
+        ttk.Checkbutton(
+            dlg, text="Select All", variable=select_all_var,
+            command=_toggle_all
+        ).pack(anchor="w", padx=10)
+
+        # Scrollable frame with checkbuttons
+        canvas = tk.Canvas(dlg, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(dlg, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas)
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>",
+                   lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=5)
+        scrollbar.pack(side="right", fill="y", padx=(0, 10), pady=5)
+
+        for name in bundle_maps:
+            var = tk.BooleanVar(value=True)
+            ttk.Checkbutton(inner, text=name, variable=var).pack(anchor="w")
+            check_vars.append((name, var))
+
+        result = {"selected": None}
+
+        def _on_ok():
+            result["selected"] = [n for n, v in check_vars if v.get()]
+            dlg.destroy()
+
+        def _on_cancel():
+            dlg.destroy()
+
+        btn_frame = ttk.Frame(dlg)
+        btn_frame.pack(fill="x", padx=10, pady=(0, 10))
+        ttk.Button(btn_frame, text="Readjust Selected", command=_on_ok).pack(
+            side="left", padx=(0, 8))
+        ttk.Button(btn_frame, text="Cancel", command=_on_cancel).pack(side="left")
+
+        dlg.wait_window()
+
+        selected = result["selected"]
+        if not selected:
+            return
+
+        # Build states for each selected map in background
+        self.readjust_btn.configure(state="disabled", text="Loading...")
+
+        def _build_all():
+            states = []
+            for codename in selected:
+                try:
+                    state = map_installer.reconstruct_state_for_readjust(
+                        download_dir, jd_dir=jd_dir, codename=codename)
+                    state._interactive = False
+                    states.append(state)
+                except (FileNotFoundError, RuntimeError) as e:
+                    print(f"    Readjust skip {codename}: {e}")
+
+            def _done():
+                self.readjust_btn.configure(
+                    state="normal", text="Re-adjust Offset")
+                if not states:
+                    messagebox.showerror(
+                        "Readjust Error",
+                        "Could not reconstruct state for any selected maps.")
+                    return
+                if len(states) == 1:
+                    self._on_readjust_ready(states[0])
+                else:
+                    messagebox.showinfo(
+                        "Readjust Mode (Bundle)",
+                        f"Loaded {len(states)} maps for offset readjustment.\n\n"
+                        "Use Prev/Next to navigate between maps.\n"
+                        "Offsets are auto-applied when navigating.")
+                    self._show_nav(states)
+
+            self.root.after(0, _done)
+
+        threading.Thread(target=_build_all, daemon=True).start()
 
     def _on_readjust_ready(self, state):
         """Called on main thread when readjust state is built successfully."""
@@ -2294,8 +3016,8 @@ class MapInstallerGUI:
                 messagebox.showinfo(
                     "Complete",
                     f"Installation pipeline finished for {state.map_name}.\n\n"
-                    "IPK maps require manual Video Offset adjustment.\n"
-                    "X360 binaries do not store video timing data, so the "
+                    "IPK maps may require manual Video Offset adjustment.\n"
+                    "Some X360 binaries do not store video timing data, so the "
                     "calculated offset is an approximation.\n\n"
                     "VIDEO_OFFSET has been enabled automatically.\n"
                     "AUDIO_OFFSET is disabled (IPK audio is pre-trimmed).\n\n"
@@ -2385,6 +3107,18 @@ class MapInstallerGUI:
         if not state:
             return
 
+        # Warn if in multi-map nav mode
+        if self._nav_states:
+            total = len(self._nav_states)
+            msg = (
+                f"You have {total} maps in this session.\n\n"
+                "Apply & Finish will save the offsets for all maps "
+                "and exit the review.\n\n"
+                "Are you sure the offsets for all maps are correct?"
+            )
+            if not messagebox.askyesno("Apply & Finish", msg):
+                return
+
         self._pipeline_running = True
         self.apply_btn.configure(state="disabled")
 
@@ -2396,15 +3130,37 @@ class MapInstallerGUI:
 
         def _apply():
             try:
-                print(f"    Applying: VIDEO_OFFSET={v_override:.5f}, "
-                      f"AUDIO_OFFSET={a_offset:.5f}")
-                map_builder.generate_text_files(
-                    state.map_name, state.ipk_extracted,
-                    state.target_dir, v_override,
-                    metadata_overrides=getattr(state, 'metadata_overrides', None))
-                state.v_override = v_override
-
-                map_installer.reprocess_audio(state, a_offset, v_override)
+                if self._nav_states:
+                    # Multi-map: apply current map first, then all others
+                    # Save current map's UI offsets to its state
+                    state.v_override = v_override
+                    state.a_offset = a_offset
+                    all_states = self._nav_states[:]
+                    for i, s in enumerate(all_states):
+                        sv = s.v_override if s.v_override is not None else 0.0
+                        sa = s.a_offset if s.a_offset is not None else 0.0
+                        print(f"    Applying [{i+1}/{len(all_states)}] {s.map_name}: "
+                              f"VIDEO_OFFSET={sv:.5f}, AUDIO_OFFSET={sa:.5f}")
+                        _bundle_cn = s.codename if getattr(s, 'is_bundle', False) else None
+                        map_builder.generate_text_files(
+                            s.map_name, s.ipk_extracted,
+                            s.target_dir, sv,
+                            metadata_overrides=getattr(s, 'metadata_overrides', None),
+                            codename=_bundle_cn)
+                        map_installer.reprocess_audio(s, sa, sv)
+                    print(f"    Applied offsets for all {len(all_states)} maps.")
+                else:
+                    # Single map
+                    print(f"    Applying: VIDEO_OFFSET={v_override:.5f}, "
+                          f"AUDIO_OFFSET={a_offset:.5f}")
+                    _bundle_cn = state.codename if getattr(state, 'is_bundle', False) else None
+                    map_builder.generate_text_files(
+                        state.map_name, state.ipk_extracted,
+                        state.target_dir, v_override,
+                        metadata_overrides=getattr(state, 'metadata_overrides', None),
+                        codename=_bundle_cn)
+                    state.v_override = v_override
+                    map_installer.reprocess_audio(state, a_offset, v_override)
 
                 print("    Sync changes applied and config saved.")
 
@@ -2423,6 +3179,7 @@ class MapInstallerGUI:
                     self.preview.reset()
                     self._set_preview_state("disabled")
                     self._set_sync_state("disabled")
+                    self._hide_nav()
 
                 self.root.after(0, _done)
                 self.root.after(100, lambda: self._prompt_cleanup(state))
