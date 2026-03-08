@@ -595,7 +595,7 @@ def _write_videoscoach_files(target_dir, map_name):
 </root>''')
 
 
-def _write_menuart_files(target_dir, map_name, num_coach):
+def _write_menuart_files(target_dir, map_name, num_coach, has_autodance=True):
     """Write MenuArt actor ACTs, menuart.isc, and the main scene ISC."""
     # MenuArt Actors
     coach_arts = [f"coach_{i}" for i in range(1, num_coach + 1)] if num_coach > 0 else []
@@ -695,6 +695,14 @@ def _write_menuart_files(target_dir, map_name, num_coach):
 </root>''')
 
     # Main Scene ISC
+    _autodance_block = ""
+    if has_autodance:
+        _autodance_block = f'''
+		<ACTORS NAME="SubSceneActor">
+			<SubSceneActor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{map_name}_AUTODANCE" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="enginedata/actortemplates/subscene.tpl" RELATIVEPATH="World/MAPS/{map_name}/autodance/{map_name}_autodance.isc" EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">
+				<ENUM NAME="viewType" SEL="2" />
+			</SubSceneActor>
+		</ACTORS>'''
     with open(os.path.join(target_dir, f"{map_name}_MAIN_SCENE.isc"), "w") as f:
         f.write(f'''<?xml version="1.0" encoding="ISO-8859-1"?>
 <root>
@@ -713,12 +721,7 @@ def _write_menuart_files(target_dir, map_name, num_coach):
 			<SubSceneActor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{map_name}_TML" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="enginedata/actortemplates/subscene.tpl" RELATIVEPATH="World/MAPS/{map_name}/timeline/{map_name}_tml.isc" EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">
 				<ENUM NAME="viewType" SEL="2" />
 			</SubSceneActor>
-		</ACTORS>
-		<ACTORS NAME="SubSceneActor">
-			<SubSceneActor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{map_name}_AUTODANCE" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="enginedata/actortemplates/subscene.tpl" RELATIVEPATH="World/MAPS/{map_name}/autodance/{map_name}_autodance.isc" EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">
-				<ENUM NAME="viewType" SEL="2" />
-			</SubSceneActor>
-		</ACTORS>
+		</ACTORS>{_autodance_block}
 		<ACTORS NAME="SubSceneActor">
 			<SubSceneActor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{map_name}_VIDEO" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="enginedata/actortemplates/subscene.tpl" RELATIVEPATH="World/MAPS/{map_name}/videoscoach/{map_name}_video.isc" EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">
 				<ENUM NAME="viewType" SEL="2" />
@@ -750,7 +753,7 @@ def _write_menuart_files(target_dir, map_name, num_coach):
 </root>''')
 
 
-def _write_autodance_stubs(target_dir, map_name):
+def _write_autodance_stubs(target_dir, map_name, video_start_time=None):
     """Write Autodance ISC, TPL, and ACT stub files.
 
     Skips writing if the TPL already contains real converted data (>1KB)
@@ -763,6 +766,12 @@ def _write_autodance_stubs(target_dir, map_name):
 
     if _skip_autodance:
         return
+
+    # The game engine asserts if video_structure has Duration == 0.
+    # Provide non-zero placeholder values so the autodance recap screen
+    # doesn't crash even without real autodance data.
+    song_pos = max(int((video_start_time or 0) * 48 + 24), 24)
+    ad_duration = 16
 
     with open(os.path.join(target_dir, f"Autodance/{map_name}_autodance.isc"), "w") as f:
         f.write(f'''<?xml version="1.0" encoding="ISO-8859-1"?>
@@ -798,20 +807,47 @@ def _write_autodance_stubs(target_dir, map_name):
 					{{
 						JD_AutodanceData =
 						{{
-							recording_structure = {{}},
+							recording_structure = {{
+								NAME = "JD_AutodanceRecordingStructure",
+								JD_AutodanceRecordingStructure =
+								{{
+									records = {{
+										{{
+											NAME = "Record",
+											Record =
+											{{
+												Start = {song_pos},
+												Duration = {ad_duration},
+											}},
+										}},
+									}},
+								}},
+							}},
 							video_structure = {{
 								NAME = "JD_AutodanceVideoStructure",
 								JD_AutodanceVideoStructure =
 								{{
-									SongStartPosition = 0,
-									Duration = 0,
+									SongStartPosition = {song_pos},
+									Duration = {ad_duration},
 									ThumbnailTime = 0,
-									FadeOutDuration = 0,
+									FadeOutDuration = 3,
 									GroundPlanePath = "invalid ",
 									FirstLayerTripleBackgroundPath = "invalid ",
 									SecondLayerTripleBackgroundPath = "invalid ",
 									ThirdLayerTripleBackgroundPath = "invalid ",
-									playback_events = {{}},
+									playback_events = {{
+										{{
+											NAME = "PlaybackEvent",
+											PlaybackEvent =
+											{{
+												ClipNumber = 0,
+												StartClip = 0,
+												StartTime = 0,
+												Duration = {ad_duration},
+												Speed = 1,
+											}},
+										}},
+									}},
 								}},
 							}},
 							autodanceSoundPath = ""
@@ -930,13 +966,15 @@ def _write_cinematics_stubs(target_dir, map_name):
 # ---------------------------------------------------------------------------
 
 def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override=None,
-                        metadata_overrides=None, overrides=None, codename=None):
+                        metadata_overrides=None, overrides=None, codename=None,
+                        has_autodance=True):
     """Generate all UbiArt config/scene files for a map installation.
 
     Parses CKD metadata, then delegates file generation to helper functions.
     overrides: optional dict with keys 'musictrack_path', 'songdesc_path' to
                bypass glob searches for those CKDs.
     codename: optional codename for bundle IPK filtering (scopes CKD lookups).
+    has_autodance: whether to include autodance subscene in the main ISC.
     """
     map_lower = map_name.lower()
 
@@ -1107,8 +1145,9 @@ def generate_text_files(map_name, ipk_dir, target_dir, video_start_time_override
     _write_audio_isc(target_dir, map_name)
     _write_timeline_files(target_dir, map_name)
     _write_videoscoach_files(target_dir, map_name)
-    _write_menuart_files(target_dir, map_name, num_coach)
-    _write_autodance_stubs(target_dir, map_name)
+    _write_menuart_files(target_dir, map_name, num_coach, has_autodance)
+    if has_autodance:
+        _write_autodance_stubs(target_dir, map_name, video_start_time)
     _write_cinematics_stubs(target_dir, map_name)
 
     return video_start_time

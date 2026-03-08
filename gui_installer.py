@@ -1853,7 +1853,8 @@ class MapInstallerGUI:
                     state.map_name, state.ipk_extracted,
                     state.target_dir, v_override,
                     metadata_overrides=getattr(state, 'metadata_overrides', None),
-                    codename=_bundle_cn)
+                    codename=_bundle_cn,
+                    has_autodance=getattr(state, 'has_autodance', True))
                 state.v_override = v_override
                 map_installer.reprocess_audio(state, a_offset, v_override)
                 state.a_offset = a_offset
@@ -3146,7 +3147,8 @@ class MapInstallerGUI:
                             s.map_name, s.ipk_extracted,
                             s.target_dir, sv,
                             metadata_overrides=getattr(s, 'metadata_overrides', None),
-                            codename=_bundle_cn)
+                            codename=_bundle_cn,
+                            has_autodance=getattr(s, 'has_autodance', True))
                         map_installer.reprocess_audio(s, sa, sv)
                     print(f"    Applied offsets for all {len(all_states)} maps.")
                 else:
@@ -3158,7 +3160,8 @@ class MapInstallerGUI:
                         state.map_name, state.ipk_extracted,
                         state.target_dir, v_override,
                         metadata_overrides=getattr(state, 'metadata_overrides', None),
-                        codename=_bundle_cn)
+                        codename=_bundle_cn,
+                        has_autodance=getattr(state, 'has_autodance', True))
                     state.v_override = v_override
                     map_installer.reprocess_audio(state, a_offset, v_override)
 
