@@ -48,6 +48,8 @@ class SourceSpec:
     pictos_dir: Optional[str] = None
     menuart_dir: Optional[str] = None
     amb_dir: Optional[str] = None
+    # Bundle IPK: list of map codenames found in a multi-map IPK
+    bundle_maps: List[str] = field(default_factory=list)
 
 
 def _normalize(path: Optional[str]) -> Optional[str]:
@@ -239,7 +241,10 @@ def _pick_audio(folder: str, codename: Optional[str] = None) -> Optional[str]:
             matches = [p for p in oggs if os.path.basename(p).lower().startswith(lower)]
             if matches:
                 return matches[0]
-        return oggs[0]
+            # Don't fallback to unfiltered when codename is specified --
+            # the file might belong to a different map in a bundle.
+        else:
+            return oggs[0]
 
     # 3. Glob for any .wav at top level (excluding previews)
     wavs = [
@@ -252,7 +257,9 @@ def _pick_audio(folder: str, codename: Optional[str] = None) -> Optional[str]:
             matches = [p for p in wavs if os.path.basename(p).lower().startswith(lower)]
             if matches:
                 return matches[0]
-        return wavs[0]
+            # Don't fallback to unfiltered when codename is specified.
+        else:
+            return wavs[0]
 
     # 4. Recursive search (for extracted IPK structures with nested dirs)
     #    Try .ogg first, then .wav, then .wav.ckd
@@ -274,9 +281,18 @@ def _pick_audio(folder: str, codename: Optional[str] = None) -> Optional[str]:
             continue
         if codename:
             lower = codename.lower()
+            # Filename match
             matches = [p for p in hits if os.path.basename(p).lower().startswith(lower)]
+            # Path match: codename appears as a directory component
+            if not matches:
+                matches = [p for p in hits
+                           if os.sep + lower + os.sep in p.lower()
+                           or "/" + lower + "/" in p.lower()]
             if matches:
                 hits = matches
+            else:
+                # No match for this codename -- skip to next pattern
+                continue
         if is_ckd:
             extracted = _extract_ckd_audio(hits[0], folder)
             if extracted:

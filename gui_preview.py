@@ -298,6 +298,7 @@ class PreviewManager:
     def kill(self):
         """Immediately kill preview subprocesses (call from main thread)."""
         self._kill()
+        self._starting = False
 
     def reset(self):
         """Kill preview and reset all playback state to initial values."""
