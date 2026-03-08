@@ -2051,6 +2051,28 @@ def step_04_unpack_ipk(state):
     if state.is_bundle:
         print(f"    Bundle mode: scoping asset searches to codename '{state.codename}'")
 
+    # Detect whether the IPK contains real autodance data for this map.
+    # Many IPKs ship minimal CKDs with just {"MapName": "..."} — these
+    # are NOT valid autodance data and should be treated as "no autodance".
+    state.has_autodance = False
+    ad_tpls = _ipk_glob(state, "**/autodance/*.tpl.ckd")
+    if ad_tpls:
+        try:
+            ad_data = ubiart_lua.load_ckd_json(ad_tpls[0])
+            ad_str = json.dumps(ad_data).lower()
+            if "recording_structure" in ad_str or "video_structure" in ad_str or "playback_events" in ad_str:
+                state.has_autodance = True
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            pass
+    if not state.has_autodance:
+        # Also check for separate autodance data files (adtape, advideo, etc.)
+        for ext in ["adtape", "advideo", "adrecording"]:
+            if _ipk_glob(state, f"**/autodance/*.{ext}.ckd"):
+                state.has_autodance = True
+                break
+    if state.has_autodance:
+        print(f"    Autodance data detected for {state.codename}")
+
     # Re-detect audio/video after extraction if not yet set (IPK mode defers
     # detection until the files are actually extracted).
     if not state.audio_path or not os.path.isfile(state.audio_path):
@@ -2336,7 +2358,8 @@ def step_06_generate_configs(state):
         state.map_name, state.ipk_extracted, state.target_dir, state.v_override,
         metadata_overrides=state.metadata_overrides or None,
         overrides=_overrides or None,
-        codename=_bundle_codename)
+        codename=_bundle_codename,
+        has_autodance=getattr(state, 'has_autodance', True))
 
     if video_start_time is None:
         raise RuntimeError("Could not fetch video start time.")
@@ -2554,19 +2577,45 @@ def step_10_decode_pictos(state):
     else:
         picto_src_dir = None
         for path in _ipk_glob(state, "**/pictos"):
-            picto_src_dir = path
-            break
+            if os.path.isdir(path):
+                picto_src_dir = path
+                break
+        # Dynamic fallback: search common IPK structures if scoped search
+        # found nothing (e.g. different directory layout).
+        if not picto_src_dir:
+            for fallback_pattern in [
+                os.path.join("**", "timeline", "pictos"),
+                os.path.join("**", "pictos"),
+            ]:
+                hits = glob.glob(
+                    os.path.join(state.ipk_extracted, fallback_pattern),
+                    recursive=True)
+                if state.codename:
+                    cn_lower = state.codename.lower()
+                    hits = [d for d in hits if os.path.isdir(d)
+                            and cn_lower in os.path.relpath(
+                                d, state.ipk_extracted
+                            ).replace("\\", "/").lower().split("/")]
+                else:
+                    hits = [d for d in hits if os.path.isdir(d)]
+                if hits:
+                    picto_src_dir = hits[0]
+                    break
     sys.stdout.flush()
 
     if picto_src_dir:
         picto_dst_dir = os.path.join(state.target_dir, "Timeline/pictos")
         os.makedirs(picto_dst_dir, exist_ok=True)
-        for f in glob.glob(os.path.join(picto_src_dir, "*.png.ckd")):
+        # Copy all cooked picto files (.png.ckd, .tga.ckd, or any other .ckd)
+        copied = 0
+        for f in glob.glob(os.path.join(picto_src_dir, "*.ckd")):
             shutil.copy2(f, os.path.join(picto_dst_dir, os.path.basename(f)))
-        subprocess.run([sys.executable, os.path.join(SCRIPT_DIR, "ckd_decode.py"), "--batch", "--quiet",
-                        picto_dst_dir, picto_dst_dir], check=False, capture_output=True)
-        for f in glob.glob(os.path.join(picto_dst_dir, "*.ckd")):
-            os.remove(f)
+            copied += 1
+        if copied:
+            subprocess.run([sys.executable, os.path.join(SCRIPT_DIR, "ckd_decode.py"), "--batch", "--quiet",
+                            picto_dst_dir, picto_dst_dir], check=False, capture_output=True)
+            for f in glob.glob(os.path.join(picto_dst_dir, "*.ckd")):
+                os.remove(f)
 
 
 def step_11_extract_moves(state):
@@ -2650,30 +2699,40 @@ def step_11_extract_moves(state):
     if total_copied:
         print(f"    Merged {total_copied} missing gesture/msm file(s) into PC/")
 
-    autodance_tpls = _ipk_glob(state, "**/autodance/*.tpl.ckd")
-    for f in autodance_tpls:
-        dest_ad = os.path.join(state.target_dir, "Autodance")
-        os.makedirs(dest_ad, exist_ok=True)
-        dst_tpl = os.path.join(dest_ad, f"{state.map_name}_autodance.tpl")
-        json_to_lua.convert_file(f, dst_tpl)
+    # Convert autodance data only if the map actually has real autodance.
+    # has_autodance is detected in step_04 by checking whether the IPK's
+    # autodance CKDs contain recording_structure / video_structure data.
+    if getattr(state, 'has_autodance', False):
+        autodance_tpls = _ipk_glob(state, "**/autodance/*.tpl.ckd")
+        for f in autodance_tpls:
+            try:
+                ckd_data = ubiart_lua.load_ckd_json(f)
+                ckd_str = json.dumps(ckd_data).lower()
+                if "recording_structure" in ckd_str or "video_structure" in ckd_str or "playback_events" in ckd_str:
+                    dest_ad = os.path.join(state.target_dir, "Autodance")
+                    os.makedirs(dest_ad, exist_ok=True)
+                    dst_tpl = os.path.join(dest_ad, f"{state.map_name}_autodance.tpl")
+                    json_to_lua.convert_file(f, dst_tpl)
+            except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+                pass
 
-    # Convert autodance data CKDs (adtape, adrecording, advideo)
-    for ext in ["adtape", "adrecording", "advideo"]:
-        ad_ckds = _ipk_glob(state, f"**/autodance/*.{ext}.ckd")
-        for f in ad_ckds:
+        # Convert autodance data CKDs (adtape, adrecording, advideo)
+        for ext in ["adtape", "adrecording", "advideo"]:
+            ad_ckds = _ipk_glob(state, f"**/autodance/*.{ext}.ckd")
+            for f in ad_ckds:
+                dest_ad = os.path.join(state.target_dir, "Autodance")
+                os.makedirs(dest_ad, exist_ok=True)
+                dst_file = os.path.join(dest_ad, f"{state.map_name}.{ext}")
+                json_to_lua.convert_file(f, dst_file)
+
+        # Copy any other Autodance media if they exist (ogg, etc.)
+        autodance_media = _ipk_glob(state, "**/autodance/*.*")
+        for f in autodance_media:
+            if f.endswith(".ckd"):
+                continue
             dest_ad = os.path.join(state.target_dir, "Autodance")
             os.makedirs(dest_ad, exist_ok=True)
-            dst_file = os.path.join(dest_ad, f"{state.map_name}.{ext}")
-            json_to_lua.convert_file(f, dst_file)
-
-    # Copy any other Autodance media if they exist (ogg, etc.)
-    autodance_media = _ipk_glob(state, "**/autodance/*.*")
-    for f in autodance_media:
-        if f.endswith(".ckd"):
-            continue
-        dest_ad = os.path.join(state.target_dir, "Autodance")
-        os.makedirs(dest_ad, exist_ok=True)
-        shutil.copy2(f, os.path.join(dest_ad, os.path.basename(f)))
+            shutil.copy2(f, os.path.join(dest_ad, os.path.basename(f)))
 
     # Convert stape CKD (sequence tape with BPM/Signature data) if available
     stape_ckds = _ipk_glob(state, "**/*.stape.ckd")
@@ -3283,7 +3342,8 @@ def main():
                     state.ipk_extracted,
                     state.target_dir, v_override,
                     metadata_overrides=getattr(state, 'metadata_overrides', None),
-                    codename=state.codename if getattr(state, 'is_bundle', False) else None)
+                    codename=state.codename if getattr(state, 'is_bundle', False) else None,
+                    has_autodance=getattr(state, 'has_autodance', True))
                 reprocess_audio(state, a_offset, v_override)
                 show_ffplay_preview(state.video_path, state.audio_path, v_override, a_offset)
             except ValueError:
