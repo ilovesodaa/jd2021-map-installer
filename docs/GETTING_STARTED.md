@@ -43,7 +43,7 @@ This installs:
 Playwright requires a one-time browser download:
 
 ```bash
-playwright install chromium
+python -m playwright install chromium
 ```
 
 This fetches a headless Chromium binary used by the web extractor to scrape JDU asset pages.

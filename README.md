@@ -33,7 +33,7 @@ See **[Getting Started](docs/GETTING_STARTED.md)** for the full setup walkthroug
 pip install -r requirements.txt
 
 # 2. Install the headless browser
-playwright install chromium
+python -m playwright install chromium
 
 # 3. Run the application
 python -m jd2021_installer.main
