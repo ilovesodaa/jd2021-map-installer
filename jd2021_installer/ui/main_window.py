@@ -82,9 +82,10 @@ class MainWindow(QMainWindow):
         self._current_target: Optional[str] = None
         self._current_mode: str = "Fetch (Codename)"
 
-        self._active_thread: Optional[QThread] = None
+        self._active_threads: set[QThread] = set()
         self._active_worker: Optional[object] = None
         self._preview_worker: Optional[PreviewMediaWorker] = None
+        self._file_logger_handler: Optional[logging.Handler] = None
 
         # -- Window setup -----------------------------------------------------
         self.setWindowTitle("JD2021 Map Installer v2")
@@ -321,6 +322,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Game Dir", "Please set the game directory first.")
             return
 
+        # Start dynamic per-map logging immediately if target is available
+        self._start_file_logging(self._current_target)
+
         # Resolve the correct extractor based on mode
         extractor = self._resolve_extractor()
         if extractor is None:
@@ -349,9 +353,9 @@ class MainWindow(QMainWindow):
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda: self._cleanup_thread("extract"))
+        thread.finished.connect(lambda t=thread: self._cleanup_thread(t, "extract"))
 
-        self._active_thread = thread
+        self._active_threads.add(thread)
         self._active_worker = worker
         thread.start()
 
@@ -359,6 +363,7 @@ class MainWindow(QMainWindow):
         self._feedback_panel.update_checklist_step("Extract map data", StepStatus.ERROR)
         self.append_log(f"ERROR: {msg}")
         self._lock_ui(False)
+        self._stop_file_logging()
 
     def _on_extract_finished(self, map_data: Optional[NormalizedMapData]) -> None:
         if map_data is None:
@@ -391,9 +396,9 @@ class MainWindow(QMainWindow):
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda: self._cleanup_thread("install"))
+        thread.finished.connect(lambda t=thread: self._cleanup_thread(t, "install"))
 
-        self._active_thread = thread
+        self._active_threads.add(thread)
         self._active_worker = worker
         thread.start()
 
@@ -403,6 +408,7 @@ class MainWindow(QMainWindow):
         )
         self.append_log(f"ERROR: {msg}")
         self._lock_ui(False)
+        self._stop_file_logging()
 
     def _on_install_finished(self, success: bool) -> None:
         status = StepStatus.DONE if success else StepStatus.ERROR
@@ -411,6 +417,7 @@ class MainWindow(QMainWindow):
             self._set_status("Installation complete!")
             self.append_log("✅  Map installed successfully!")
         self._lock_ui(False)
+        self._stop_file_logging()
 
     # ==================================================================
     # SYNC REFINEMENT / PREVIEW
@@ -458,7 +465,9 @@ class MainWindow(QMainWindow):
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda t=thread: self._cleanup_thread(t, "sync"))
 
+        self._active_threads.add(thread)
         thread.start()
 
     def _on_offset_applied(self, map_data: Optional[NormalizedMapData]) -> None:
@@ -520,10 +529,42 @@ class MainWindow(QMainWindow):
         self._config_panel.setEnabled(not locked)
         self._action_panel.set_all_enabled(not locked)
 
-    def _cleanup_thread(self, label: str) -> None:
+    def _cleanup_thread(self, thread: QThread, label: str) -> None:
         logger.debug("Thread cleaned up: %s", label)
-        self._active_thread = None
+        if thread in self._active_threads:
+            self._active_threads.remove(thread)
         self._active_worker = None
+
+    def _start_file_logging(self, current_target: str) -> None:
+        """Starts a dynamic FileHandler log for this installation."""
+        if self._file_logger_handler:
+            self._stop_file_logging()
+
+        # Sanitize codename for filename
+        codename = Path(current_target).name if current_target else "unknown"
+        codename = "".join(c for c in codename if c.isalnum() or c in ("-", "_")).strip()
+
+        logs_dir = Path("logs")
+        logs_dir.mkdir(exist_ok=True)
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        log_path = logs_dir / f"install_{codename}_{timestamp}.log"
+        
+        self._file_logger_handler = logging.FileHandler(str(log_path), encoding="utf-8")
+        file_fmt = logging.Formatter(
+            "%(asctime)s [%(levelname)-5s] %(name)s: %(message)s",
+            datefmt="%H:%M:%S"
+        )
+        self._file_logger_handler.setLevel(logging.DEBUG)
+        self._file_logger_handler.setFormatter(file_fmt)
+        logging.getLogger("jd2021").addHandler(self._file_logger_handler)
+
+    def _stop_file_logging(self) -> None:
+        """Removes the active FileHandler and cleanly closes handles."""
+        if self._file_logger_handler:
+            logging.getLogger("jd2021").removeHandler(self._file_logger_handler)
+            self._file_logger_handler.close()
+            self._file_logger_handler = None
 
     def _set_status(self, text: str) -> None:
         self._status_bar.showMessage(text)

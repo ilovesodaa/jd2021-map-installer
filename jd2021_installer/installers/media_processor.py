@@ -242,3 +242,91 @@ def generate_cover_tga(
 ) -> Path:
     """Convert a cover image to TGA format for the game engine."""
     return convert_image(src_path, dst_path, target_size=size)
+
+
+# ---------------------------------------------------------------------------
+# vgmstream — Xbox 360 XMA2 audio decoding
+# ---------------------------------------------------------------------------
+
+# Default path relative to project root; can be overridden via AppConfig
+VGMSTREAM_DEFAULT_PATH = Path("tools/vgmstream/vgmstream-cli.exe")
+
+
+def is_xma2_audio(file_path: str | Path) -> bool:
+    """Quick check: does this look like an Xbox 360 .wav.ckd (XMA2) file?
+
+    Matches filenames like ``music.wav.ckd`` which contain XMA2-encoded
+    audio payloads (as opposed to ``.ogg`` or standard ``.wav``).
+    """
+    name = Path(file_path).name.lower()
+    return name.endswith(".wav.ckd")
+
+
+def decode_xma2_audio(
+    input_ckd: str | Path,
+    output_wav: str | Path,
+    vgmstream_path: Optional[str | Path] = None,
+    timeout: int = 120,
+) -> Path:
+    """Decode an Xbox 360 XMA2 audio file to WAV using vgmstream-cli.
+
+    This wraps ``vgmstream-cli.exe -o <output> <input>`` in a blocking
+    ``subprocess.run`` call.  Because it is designed to be invoked from
+    the normalizer pipeline (which already runs inside a QThread), the
+    blocking call will **not** freeze the GUI.
+
+    Args:
+        input_ckd:      Path to the ``.wav.ckd`` input file.
+        output_wav:     Path where the decoded ``.wav`` will be written.
+        vgmstream_path: Override path to vgmstream-cli.exe.
+        timeout:        Maximum seconds before the process is killed.
+
+    Returns:
+        The resolved ``output_wav`` Path on success.
+
+    Raises:
+        MediaProcessingError: If the binary is missing or decoding fails.
+    """
+    input_ckd = Path(input_ckd)
+    output_wav = Path(output_wav)
+    output_wav.parent.mkdir(parents=True, exist_ok=True)
+
+    vgm_bin = Path(vgmstream_path).resolve() if vgmstream_path else VGMSTREAM_DEFAULT_PATH.resolve()
+    if not vgm_bin.exists():
+        raise MediaProcessingError(
+            f"vgmstream-cli binary not found at {vgm_bin}. "
+            "Place vgmstream-cli.exe in tools/vgmstream/."
+        )
+
+    cmd = [str(vgm_bin), "-o", str(output_wav), str(input_ckd)]
+    logger.info("Decoding X360 audio: %s", input_ckd.name)
+    logger.debug("vgmstream cmd: %s", " ".join(cmd))
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=timeout,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        if result.stdout:
+            logger.debug("vgmstream stdout: %s", result.stdout.strip())
+        logger.info("Decoded X360 audio → %s", output_wav.name)
+        return output_wav
+    except subprocess.CalledProcessError as e:
+        raise MediaProcessingError(
+            f"vgmstream failed (exit {e.returncode}):\n"
+            f"  stdout: {e.stdout[:300]}\n  stderr: {e.stderr[:300]}"
+        )
+    except subprocess.TimeoutExpired:
+        raise MediaProcessingError(
+            f"vgmstream timed out after {timeout}s decoding {input_ckd.name}"
+        )
+    except FileNotFoundError:
+        raise MediaProcessingError(
+            f"Could not execute vgmstream at '{vgm_bin}'. "
+            "Check that the binary is not blocked by antivirus."
+        )
+

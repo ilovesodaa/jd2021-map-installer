@@ -50,6 +50,12 @@ class AppConfig(BaseModel):
     preview_fps: int = 24
     audio_preview_fade_s: float = 2.0
 
+    # Discord Fetch Mode (replaces Node.js JDH_Downloader)
+    discord_channel_url: str = ""
+    browser_profile_dir: Path = Path("./.browser-profile")
+    fetch_login_timeout_s: int = 300
+    fetch_bot_response_timeout_s: int = 60
+
     # FFmpeg configuration
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"

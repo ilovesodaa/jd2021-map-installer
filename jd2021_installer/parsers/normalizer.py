@@ -253,6 +253,29 @@ def _discover_media(directory: str, codename: Optional[str] = None) -> MapMedia:
     ogg_files = [f for f in dir_path.rglob("*.ogg") if "AudioPreview" not in f.name]
     if ogg_files:
         media.audio_path = ogg_files[0]
+    else:
+        # Fallback: look for Xbox 360 .wav.ckd (XMA2) and auto-decode
+        wav_ckd_files = [
+            f for f in dir_path.rglob("*.wav.ckd")
+            if "audiopreview" not in f.name.lower()
+        ]
+        if wav_ckd_files:
+            from jd2021_installer.installers.media_processor import (
+                decode_xma2_audio,
+                is_xma2_audio,
+            )
+            ckd_src = wav_ckd_files[0]
+            decoded_wav = ckd_src.parent / (ckd_src.stem.replace(".wav", "") + "_decoded.wav")
+            if decoded_wav.exists():
+                logger.info("Using previously decoded audio: %s", decoded_wav.name)
+                media.audio_path = decoded_wav
+            elif is_xma2_audio(ckd_src):
+                try:
+                    media.audio_path = decode_xma2_audio(ckd_src, decoded_wav)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to decode X360 audio %s: %s", ckd_src.name, e
+                    )
 
     # Cover images
     for ext in ("*.jpg", "*.png", "*.tga"):
