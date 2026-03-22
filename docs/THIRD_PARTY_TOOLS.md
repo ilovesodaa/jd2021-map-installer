@@ -1,84 +1,78 @@
 # Third-Party Tools
 
-This document lists all external tools and libraries used by the JD2021 Map Installer, where they are used, and what they do.
+This document lists all external tools and libraries used by the JD2021 Map Installer v2, where they are used, and what they do.
 
 ---
 
-## Required Dependencies
+## Python Dependencies
 
-### Python 3.6+
+All Python dependencies are listed in `requirements.txt` and installed via `pip install -r requirements.txt`.
 
-The entire pipeline is written in Python. Required for all scripts.
+### PyQt6
+
+**Purpose:** GUI framework. Provides the main window, widgets, layout managers, and the `QThread` / `QObject` concurrency model used for background processing.
+
+| Where Used | Purpose |
+|------------|---------|
+| `ui/main_window.py` | `QMainWindow`, `QSplitter`, `QTextEdit`, `QProgressBar`, `QStatusBar` |
+| `ui/workers/pipeline_workers.py` | `QObject` workers with `pyqtSignal` for progress/status/error/finished |
+| `main.py` | `QApplication` creation and event loop |
+
+### Playwright for Python
+
+**Purpose:** Headless browser automation. Replaces the legacy Node.js scraper for fetching JDU asset pages.
+
+| Where Used | Purpose |
+|------------|---------|
+| `extractors/web_playwright.py` (`scrape_live()`) | Launches headless Chromium, navigates to JDU asset pages, extracts URLs |
+
+Requires a one-time setup: `playwright install chromium`.
+
+### Pydantic
+
+**Purpose:** Data validation and settings management.
+
+| Where Used | Purpose |
+|------------|---------|
+| `core/config.py` (`AppConfig`) | Validates configuration fields (paths, quality tiers, timeouts, engine constants). Supports environment variables via `env_prefix = "JD2021_"`. |
 
 ### Pillow (PIL)
 
-**Install:** `pip install Pillow`
+**Purpose:** Image format conversion and processing.
 
 | Where Used | Purpose |
 |------------|---------|
-| `ckd_decode.py` (`dds_to_image()`) | Converts DDS data to TGA/PNG images |
-| `gui_installer.py` (`_read_video_frames()`) | Converts raw RGB24 ffmpeg output to Tkinter-displayable images |
-| `map_installer.py` (`step_05b_validate_menuart()`) | Re-saves TGA covers as uncompressed 32-bit RGBA |
+| `installers/media_processor.py` (`convert_image()`, `generate_cover_tga()`) | Image resizing, format conversion (DDS/TGA/PNG/JPG) |
 
-### FFmpeg
+### pytest / pytest-qt
 
-**Install:** Auto-installed by the pipeline if missing, or install manually and add to PATH.
-
-Auto-install location: `tools/ffmpeg/` within the project directory. Downloaded from `https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip`.
+**Purpose:** Testing framework (development only).
 
 | Where Used | Purpose |
 |------------|---------|
-| `map_installer.py` (`convert_audio()`) | OGG to 48kHz WAV conversion with optional trim/pad |
-| `map_installer.py` (`generate_intro_amb()`) | Generates intro AMB WAV with fade-out |
-| `map_installer.py` (`extract_amb_audio()`) | Extracts real audio from OGG for AMB placeholders |
-| `map_installer.py` (`show_ffplay_preview()`) | ffmpeg pipe for sync preview (video + audio muxing) |
-| `gui_installer.py` (`_launch_preview()`) | ffmpeg RGB24 pipe for embedded video preview |
-
-### FFplay
-
-**Install:** Bundled with FFmpeg. Optional but recommended.
-
-| Where Used | Purpose |
-|------------|---------|
-| `map_installer.py` (`show_ffplay_preview()`) | CLI sync preview window (receives ffmpeg pipe) |
-| `gui_installer.py` (`_launch_preview()`) | Audio-only playback for GUI embedded preview |
-
-Without FFplay, sync preview is unavailable but map installation works normally.
-
-### FFprobe
-
-**Install:** Bundled with FFmpeg. Optional.
-
-| Where Used | Purpose |
-|------------|---------|
-| `map_installer.py` (CLI sync option 2) | Detects video and audio duration for padding calculation |
-| `gui_installer.py` | Detects audio duration for seekbar range |
-
-Without FFprobe, the "pad audio to match video length" sync option and the GUI seek bar duration display are unavailable.
+| `tests/` | Unit tests for normalizer, models, and pipeline logic |
+| `conftest.py` | Qt application fixture, sample data factories |
 
 ---
 
-## Bundled Dependencies
+## System Dependencies
 
-These are included in the repository and do not need separate installation.
+### FFmpeg
 
-### XTX-Extractor
+**Purpose:** Audio and video processing (conversion, trimming, preview generation).
 
-**Location:** `xtx_extractor/` in project root
+| Where Used | Purpose |
+|------------|---------|
+| `installers/media_processor.py` (`run_ffmpeg()`) | OGG → WAV conversion, audio preview with fade-out, video preview clip |
+| `installers/media_processor.py` (`copy_video()`) | Video file management |
 
-**Source:** [github.com/aboood40091/XTX-Extractor](https://github.com/aboood40091/XTX-Extractor)
+### FFprobe
 
-**Purpose:** Deswizzles Nintendo Switch XTX texture data to DDS format. Called by `ckd_decode.py` when processing NX-platform CKD textures.
+**Purpose:** Media duration detection.
 
-**How it works:** Reads the NvFD header structure from XTX data, deswizzles tiled texture data based on format-specific block sizes, and produces a standard DDS header + payload.
-
-### ubiart-archive-tools (IPK format)
-
-**Integrated into:** `ipk_unpack.py`
-
-**Source:** [github.com/PartyService/ubiart-archive-tools](https://github.com/PartyService/ubiart-archive-tools)
-
-**Purpose:** Unpacks UbiArt `.ipk` archive files. The extraction logic is integrated directly into `ipk_unpack.py`.
+| Where Used | Purpose |
+|------------|---------|
+| `installers/media_processor.py` (`get_video_duration()`) | Determines video duration for preview generation |
 
 ---
 
@@ -88,24 +82,36 @@ These tools were used as references during development. Their logic has been por
 
 ### JDTools by BLDS
 
-Tape processing logic was analyzed and ported into `ubiart_lua.py`. Contributions include:
-- Cinematic curve handling (`vector2dNew()` serialization)
+Tape processing logic was analyzed and ported into the binary CKD parser. Contributions include:
+- Cinematic curve handling
 - MotionClip color conversion (`[a,r,g,b]` floats to `0xRRGGBBAA` hex)
 - Ambient sound template processing
-- Lua serialization approach
 
 ### UBIART-AMB-CUTTER by RN-JK
 
-The AMB extraction algorithm was used as a reference for implementing automated AMB audio generation in `map_installer.py`. Specifically:
+**Source:** [github.com/RN-JK/UBIART-AMB-CUTTER](https://github.com/RN-JK/UBIART-AMB-CUTTER)
+
+AMB extraction algorithm used as a reference:
 - Marker tick-to-millisecond formula (`markers[idx] / 48.0`)
 - SoundSetClip splitting logic
-- The 85ms calibration constant for OGG codec decode latency
 
 ### JustDanceTools
 
 **Source:** [github.com/WodsonKun/JustDanceTools](https://github.com/WodsonKun/JustDanceTools)
 
-Used for various UbiArt and Just Dance specific file format understanding.
+Used for UbiArt and Just Dance specific file format understanding.
+
+### ferris_dancing
+
+**Source:** [github.com/Kriskras99/ferris_dancing](https://github.com/Kriskras99/ferris_dancing)
+
+Rust-based binary CKD parser used as a reference for field order validation and format verification.
+
+### ubiart-archive-tools
+
+**Source:** [github.com/PartyService/ubiart-archive-tools](https://github.com/PartyService/ubiart-archive-tools)
+
+IPK archive format reference. The extraction logic is integrated directly into `extractors/archive_ipk.py`.
 
 ---
 
@@ -116,11 +122,11 @@ Used for various UbiArt and Just Dance specific file format understanding.
 **Author:** [rama0dev](https://github.com/rama0dev)
 
 Not a code dependency, but the primary source of JDU asset data. The bot provides two HTML exports per map:
-- **Asset HTML:** Contains URLs for CKD textures, IPK archives, OGG audio, and scene ZIPs
-- **NOHUD HTML:** Contains the URL for the gameplay WebM video
+- **Asset HTML:** URLs for CKD textures, IPK archives, OGG audio, and scene ZIPs
+- **NOHUD HTML:** URL for the gameplay WebM video
 
 Links expire approximately 30 minutes after the bot responds.
 
 ### Ubisoft CDN
 
-The actual asset files are hosted on Ubisoft's CDN (`jd-s3.cdn.ubi.com`). SSL certificate verification is disabled in `map_downloader.py` for compatibility with some systems that fail to verify the CDN's certificates.
+Asset files are hosted on Ubisoft's CDN (`jd-s3.cdn.ubi.com`). SSL certificate verification is disabled in `extractors/web_playwright.py` for compatibility with some systems.

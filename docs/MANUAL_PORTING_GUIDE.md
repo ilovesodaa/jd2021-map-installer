@@ -1,6 +1,6 @@
 # Manual Map Porting Guide (Just Dance 2021 PC)
 
-This guide provides a technical breakdown of manually porting a Just Dance Unlimited (JDU) map into the Just Dance 2021 PC engine (UbiArt). The automated pipeline (`map_installer.py`) handles all of this — this guide exists for those who need to understand what the automation does, reproduce a step manually, or debug a problem.
+This guide provides a technical breakdown of manually porting a Just Dance Unlimited (JDU) map into the Just Dance 2021 PC engine (UbiArt). The automated pipeline (`the installer pipeline`) handles all of this — this guide exists for those who need to understand what the automation does, reproduce a step manually, or debug a problem.
 
 ---
 
@@ -162,7 +162,7 @@ JDU uses JSON natively, but JD2021 PC expects Lua. The conversion involves both 
 - Floats should use 6 decimal places for consistency
 - Strings must escape `"`, `\n`, and `\r`
 
-**UbiArt-specific processing (handled by `ubiart_lua.py`):**
+**UbiArt-specific processing (handled by ``parsers/binary_ckd.py``):**
 - **MotionClip Color**: Convert `[a, r, g, b]` float arrays to hex strings (e.g., `"0x0e8cd3ff"`)
 - **MotionPlatformSpecifics**: Convert platform dict to KEY/VAL array format
 - **Tracks array**: Build `Tracks = { {TapeTrack = {id = X}}, ... }` from unique TrackIds across all clips
@@ -233,7 +233,7 @@ The first sample of the WAV corresponds to marker 0 = beat `startBeat`. If `star
 
 ## Appendix: Batch Preparation
 
-If you plan to convert many maps, prepare a single parent directory where each child folder contains the two HTML exports (`assets.html` and `nohud.html`) captured from JDHelper. The `batch_install_maps.py` script will scan this directory and process each valid map folder using two-phase execution (download all first, then process all).
+If you plan to convert many maps, prepare a single parent directory where each child folder contains the two HTML exports (`assets.html` and `nohud.html`) captured from JDHelper. The `the installer` script will scan this directory and process each valid map folder using two-phase execution (download all first, then process all).
 
 ```
 my_maps/
@@ -246,7 +246,7 @@ my_maps/
 ```
 
 ```bash
-python batch_install_maps.py "C:\path\to\my_maps"
+python the installer "C:\path\to\my_maps"
 ```
 
-If the script cannot find your JD installation automatically, pass `--jd-dir "C:\path\to\jd21"` to `map_installer.py` directly, or ensure `jd21/` is in the project root.
+If the script cannot find your JD installation automatically, pass `--jd-dir "C:\path\to\jd21"` to `the installer pipeline` directly, or ensure `jd21/` is in the project root.

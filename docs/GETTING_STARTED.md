@@ -1,14 +1,12 @@
 # Getting Started
 
-This guide walks you through setting up the project from scratch.
+This guide walks you through setting up the JD2021 Map Installer v2 from scratch.
 
 ---
 
-## Step 1 — Install System Dependencies
+## Step 1 — Install Python
 
-### Python 3.6+
-
-Download from <https://www.python.org/downloads/>
+Download **Python 3.10+** from <https://www.python.org/downloads/>
 
 During installation, check **"Add Python to PATH"**.
 
@@ -18,204 +16,122 @@ Verify after installing:
 python --version
 ```
 
-### Pillow (Python image library)
+---
 
-```
-pip install Pillow
+## Step 2 — Install Dependencies
+
+From the project root, install all Python packages:
+
+```bash
+pip install -r requirements.txt
 ```
 
-> **Note on FFmpeg:** The installer checks for FFmpeg during the Pre-flight Check. If it is not found on your system, the installer will offer to download and install it automatically into the project's `tools/ffmpeg/` folder — no manual setup required.
+This installs:
+
+| Package | Purpose |
+|---------|---------|
+| **PyQt6** | GUI framework |
+| **playwright** | Headless browser for JDU web scraping |
+| **Pydantic** | Configuration and data validation |
+| **Pillow** | Image format conversion (DDS/TGA/PNG) |
+| **pytest / pytest-qt** | Testing (development only) |
 
 ---
 
-## Step 2 — Obtain Just Dance 2021 PC
+## Step 3 — Install the Headless Browser
 
-You need a **Just Dance 2021 PC development build**. This is not publicly available for download — you need to obtain it through the Just Dance modding community.
+Playwright requires a one-time browser download:
 
-Once you have it, place it inside the project root in a folder named `jd21/`:
-
-```
-projectRoot/
-└── jd21/
-    └── data/
-        └── World/
-            └── ...
-└── map_installer.py
-└── ...
+```bash
+playwright install chromium
 ```
 
-The script auto-detects the `jd21` folder if it is in the project root. If yours is elsewhere, you can pass `--jd-dir "C:\path\to\jd21"` when running the installer.
+This fetches a headless Chromium binary used by the web extractor to scrape JDU asset pages.
 
 ---
 
-## Step 3 — Verify Your Folder Structure
+## Step 4 — Obtain Just Dance 2021 PC
 
-After completing steps 1–2, your project root should look like this:
+You need a **Just Dance 2021 PC development build**. This is not publicly available — you need to obtain it through the Just Dance modding community.
+
+---
+
+## Step 5 — Verify Your Folder Structure
+
+After completing the previous steps, your project should look like this:
 
 ```
 projectRoot/
-├── map_installer.py
-├── map_builder.py
-├── map_downloader.py
-├── gui_installer.py
-├── ckd_decode.py
-├── ipk_unpack.py
-├── json_to_lua.py
-├── ubiart_lua.py
-├── batch_install_maps.py
-├── xtx_extractor/           <- bundled, no download needed
-├── README.md
+├── jd2021_installer/
+│   ├── __init__.py
+│   ├── main.py              ← Application entry point
+│   ├── core/
+│   │   ├── config.py        ← Pydantic AppConfig
+│   │   ├── exceptions.py    ← Typed exception hierarchy
+│   │   └── models.py        ← NormalizedMapData and sub-models
+│   ├── extractors/
+│   │   ├── base.py           ← BaseExtractor ABC
+│   │   ├── web_playwright.py ← Web/HTML extractor
+│   │   └── archive_ipk.py   ← IPK archive extractor
+│   ├── parsers/
+│   │   ├── normalizer.py    ← Raw files → NormalizedMapData
+│   │   └── binary_ckd.py    ← Binary CKD parser
+│   ├── installers/
+│   │   ├── game_writer.py   ← UbiArt config file generator
+│   │   └── media_processor.py ← FFmpeg/Pillow wrappers
+│   └── ui/
+│       ├── main_window.py   ← PyQt6 MainWindow
+│       ├── widgets/
+│       └── workers/
+│           └── pipeline_workers.py ← QThread workers
+├── tests/
 ├── docs/
-│   ├── GETTING_STARTED.md
-│   ├── ARCHITECTURE.md
-│   ├── PIPELINE_REFERENCE.md
-│   ├── GUI_REFERENCE.md
-│   ├── CLI_REFERENCE.md
-│   ├── AUDIO_TIMING.md
-│   ├── TROUBLESHOOTING.md
-│   ├── DATA_FORMATS.md
-│   ├── MAP_CONFIG_FORMAT.md
-│   ├── ASSETS.md
-│   ├── VIDEO.md
-│   ├── GAME_CONFIG_REFERENCE.md
-│   ├── THIRD_PARTY_TOOLS.md
-│   ├── KNOWN_GAPS.md
-│   ├── MANUAL_PORTING_GUIDE.md
-│   ├── JDU_DATA_MAPPING.md
-│   ├── JDU_UNUSED_DATA_OPPORTUNITIES.md
-│   └── MOBILE_SCORING_RESTORATION.md
-└── jd21/                    <- your JD2021 PC install from Step 2
+├── requirements.txt
+├── pytest.ini
+└── README.md
 ```
-
-All required tools (`ipk_unpack.py`, `xtx_extractor/`) are already included in the repository — no separate downloads are needed.
 
 ---
 
-## Step 4 — Get Map Data from JDHelper
+## Step 6 — Get Map Data from JDHelper
 
-Each map install requires **two HTML files** exported from the **JDHelper** Discord bot (one for the JDU assets, one for the NOHUD video). Asset links expire quickly, so do this right before running the installer.
+Each map install requires **two HTML files** exported from the **JDHelper** Discord bot (one for JDU assets, one for the NOHUD video). Asset links expire quickly, so do this right before running the installer.
 
-1. Add JDHelper to a Discord server (or find a server that already has it)
-2. Use the bot to query the song you want — one command for **JDU assets**, one for **NOHUD video**
-3. Open Discord in a **browser** (Chrome or Edge recommended)
-4. Open DevTools with `F12` or `Ctrl+Shift+I`
-5. Click the **element selector** icon (top-left of the DevTools panel)
-
-   ![Selector Tool](img/selector_tool.png)
-
-6. Hover over the bot's response message in Discord. The empty space at the right side is usually easier to work with.
-
-   ![Hover Message](img/hover_message.png)
-
+1. Add JDHelper to a Discord server (or find a server that already has it).
+2. Use the bot to query the song you want — one command for **JDU assets**, one for **NOHUD video**.
+3. Open Discord in a **browser** (Chrome or Edge recommended).
+4. Open DevTools with `F12` or `Ctrl+Shift+I`.
+5. Click the **element selector** icon (top-left of DevTools).
+6. Hover over the bot's response message in Discord.
 7. In the DOM tree, find the `div` with an ID starting with `message-accessories-...`
-8. Right-click it → **Copy** → **Copy element**
-
-   ![Copy Element](img/copy_element.png)
-
+8. Right-click → **Copy** → **Copy element**.
 9. Paste into a text file and save as:
    - `assets.html` — for the JDU assets query
    - `nohud.html` — for the NOHUD video query
 
-> **Note:** Asset links expire shortly after the bot responds. Run the installer immediately after saving the files.
+> **Note:** Asset links expire approximately 30 minutes after the bot responds. Run the installer immediately after saving the files.
 
 ---
 
-## Step 5 — Run the Installer
-
-### GUI (Recommended)
-
-Double-click `gui_installer.py` or run:
+## Step 7 — Run the Installer
 
 ```bash
-python gui_installer.py
+python -m jd2021_installer.main
 ```
 
-1. Browse to your **Asset HTML** and **NOHUD HTML** files — the map name is auto-detected from the asset URLs.
-2. Select a **Video Quality** tier (default: Ultra HD).
-3. Click **Pre-flight Check** to verify dependencies. If FFmpeg is missing, the GUI will offer to auto-install it.
-4. Click **Install Map**.
-5. After installation, use the **Sync Refinement** panel to fine-tune audio/video timing with live FFplay preview.
-6. Click **Apply & Finish** to save your settings.
-
-Sync settings are saved per map — on reinstall, they are reloaded automatically.
-
-### CLI
-
-```bash
-python map_installer.py --asset-html assets.html --nohud-html nohud.html
-```
-
-The map name is auto-detected from the asset URLs. To override it manually:
-
-```bash
-python map_installer.py --map-name YourMapName --asset-html assets.html --nohud-html nohud.html
-```
-
-If the auto-detection can't find your JD installation:
-
-```bash
-python map_installer.py --asset-html assets.html --nohud-html nohud.html --jd-dir "C:\path\to\jd21"
-```
-
-### Batch Installation (Multiple Maps)
-
-If you have several maps to install, organize folders like this:
-
-```
-maps/
-  SongA/
-    assets.html
-    nohud.html
-  SongB/
-    assets.html
-    nohud.html
-```
-
-Then run:
-
-```bash
-python batch_install_maps.py "C:\path\to\maps"
-```
-
-The batch installer uses two-phase execution: Phase 1 downloads all maps first (while CDN links are fresh), then Phase 2 processes them locally. Use `--skip-existing` to skip already-installed maps, or `--only MapA MapB` to install specific maps.
-
----
-
-## What the Installer Does
-
-| Step | Description |
-| ------ | ------------- |
-| **[1]** | Pre-install cleanup (remove previous map installation from game directory) |
-| **[2]** | Clean previous build output (target dir, cache, extracted dirs) |
-| **[3]** | Download assets (IPKs, ZIPs, WebMs, textures) from JDU servers |
-| **[4]** | Extract scene archives |
-| **[5]** | Unpack IPK archives |
-| **[6]** | Decode menu art textures (CKD → PNG/TGA) |
-| **[7]** | Validate MenuArt covers (format check and case matching) |
-| **[8]** | Generate UbiArt config files (scenes, templates, tracks, manifests) |
-| **[9]** | Convert choreography and karaoke tapes to Lua |
-| **[10]** | Convert cinematic tapes to Lua |
-| **[11]** | Process ambient sound templates from IPK |
-| **[12]** | Decode pictograms |
-| **[13]** | Extract move files and autodance data |
-| **[14]** | Convert audio to 48kHz WAV and generate intro AMB for pre-roll coverage |
-| **[15]** | Copy gameplay video |
-| **[16]** | Register the map in SkuScene |
-| **Interactive** | Audio/video sync fine-tuning with live FFplay preview (intro AMB regenerates on each adjustment) |
+1. Click **Load HTML / URLs** and select your asset and NOHUD HTML files.
+2. Or click **Load IPK Archive** for Xbox 360 `.ipk` files.
+3. Click **Install Map** to run the full extraction → normalization → installation pipeline.
+4. Monitor progress in the log panel and progress bar.
 
 ---
 
 ## Further Reading
 
-- **[README.md](../README.md)** — Project overview, feature list, and limitations
-- **[Architecture](ARCHITECTURE.md)** — Internal component map, data flow, and design decisions
-- **[Pipeline Reference](PIPELINE_REFERENCE.md)** — Detailed breakdown of each pipeline step
-- **[GUI Reference](GUI_REFERENCE.md)** — GUI controls and sync refinement panel
-- **[CLI Reference](CLI_REFERENCE.md)** — CLI arguments, batch mode, and preflight checks
+- **[README.md](../README.md)** — Project overview, features, and limitations
+- **[Architecture](ARCHITECTURE.md)** — Component map, concurrency model, and data flow
+- **[Pipeline Reference](PIPELINE_REFERENCE.md)** — Extract → Normalize → Install pipeline phases
+- **[GUI Reference](GUI_REFERENCE.md)** — PyQt6 main window and controls
 - **[Audio Timing](AUDIO_TIMING.md)** — How `videoStartTime` causes pre-roll silence and how the AMB intro fix works
 - **[Troubleshooting](TROUBLESHOOTING.md)** — Common errors and their solutions
-- **[Data Formats](DATA_FORMATS.md)** — Binary and text file format reference (CKD, IPK, ISC, etc.)
-- **[Asset HTML Files](ASSETS.md)** — Format and contents of `assets.html` and `nohud.html`, CDN URL anatomy, and what the pipeline downloads from each
-- **[Video Reference](VIDEO.md)** — Quality tiers, selection/fallback behaviour, and NOHUD file analysis
-- **[JDU Data Mapping](JDU_DATA_MAPPING.md)** — Field-level mapping between JDU JSON and JD2021 PC
-- **[Manual Porting Guide](MANUAL_PORTING_GUIDE.md)** — How to manually port a map without scripts
+- **[Third-Party Tools](THIRD_PARTY_TOOLS.md)** — External dependencies
