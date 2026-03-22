@@ -3,3 +3,4 @@ docs/todo/
 cache/
 installer_settings.json
 logs/
+.browser-profile/

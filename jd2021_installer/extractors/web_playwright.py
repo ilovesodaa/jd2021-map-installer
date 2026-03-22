@@ -19,6 +19,7 @@ import ssl
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 from urllib.parse import unquote, urlparse
@@ -206,8 +207,13 @@ def download_files(
                     req, timeout=config.download_timeout_s
                 ) as response:
                     with open(target, "wb") as f:
-                        f.write(response.read())
-                break
+                        chunk_size = 1024 * 1024  # 1MB chunks
+                        while True:
+                            chunk = response.read(chunk_size)
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                    break
             except urllib.error.HTTPError as e:
                 if e.code == 429:
                     retry_after = int(
@@ -230,6 +236,7 @@ def download_files(
             except Exception as e:
                 if attempt < config.max_retries:
                     delay = config.retry_base_delay_s * (2 ** (attempt - 1))
+                    logger.warning("Download error: %s -- retrying in %ds...", e, delay)
                     time.sleep(delay)
                 else:
                     logger.error("Failed to download %s: %s", fname, e)
@@ -530,10 +537,51 @@ class WebPlaywrightExtractor(BaseExtractor):
 
         self._codename = extract_codename_from_urls(all_urls) or self._codename
         download_files(all_urls, output_dir, self._quality, self._config)
+
+        # -- Post-download: extract MAIN_SCENE_*.zip (mirrors V1 step_03) ---
+        self._extract_scene_zips(output_dir)
+
         return output_dir
 
     def get_codename(self) -> Optional[str]:
         return self._codename
+
+    @staticmethod
+    def _extract_scene_zips(output_dir: Path) -> None:
+        """Extract MAIN_SCENE_*.zip files, preferring DURANGO platform.
+
+        Mirrors V1 ``step_03_extract_scenes``.  After downloading, the
+        normalizer expects loose ``.ckd`` files — not a ZIP.
+        """
+        scene_zips: list[str] = []
+        for f in os.listdir(output_dir):
+            if "SCENE" in f.upper() and f.endswith(".zip"):
+                scene_zips.append(f)
+
+        if not scene_zips:
+            logger.debug("No scene ZIPs found in %s — skipping extraction.", output_dir)
+            return
+
+        # Prefer DURANGO > NX > SCARLETT > any
+        selected: Optional[str] = None
+        for plat in SCENE_PLATFORM_PREFERENCE:
+            matches = [z for z in scene_zips if f"_MAIN_SCENE_{plat}" in z.upper()]
+            if matches:
+                selected = matches[0]
+                break
+
+        if selected:
+            zip_path = output_dir / selected
+            logger.info("Extracting scene ZIP: %s", selected)
+            with zipfile.ZipFile(zip_path, "r") as z:
+                z.extractall(output_dir)
+        else:
+            # Fallback: extract all scene ZIPs
+            for f in scene_zips:
+                zip_path = output_dir / f
+                logger.info("Extracting scene ZIP (fallback): %s", f)
+                with zipfile.ZipFile(zip_path, "r") as z:
+                    z.extractall(output_dir)
 
     # ------------------------------------------------------------------
     # Live Discord scraping  (async, called via asyncio.run from QThread)

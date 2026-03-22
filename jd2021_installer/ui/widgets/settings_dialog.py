@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QCheckBox,
     QComboBox,
+    QLineEdit,
     QVBoxLayout,
     QHBoxLayout,
     QPushButton,
@@ -28,7 +29,7 @@ class SettingsDialog(QDialog):
     def __init__(self, config: AppConfig, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Installer Settings")
-        self.setFixedSize(520, 360)
+        self.setFixedSize(520, 420)
         self.setModal(True)
         
         # We work on a copy of the config, and only return it if Save is clicked.
@@ -120,6 +121,22 @@ class SettingsDialog(QDialog):
         quality_row.addStretch()
         layout.addLayout(quality_row)
 
+        # discord_channel_url
+        discord_row = QHBoxLayout()
+        discord_label = QLabel("Discord Channel URL:")
+        discord_row.addWidget(discord_label)
+
+        self.txt_discord_url = QLineEdit()
+        self.txt_discord_url.setText(self._config.discord_channel_url)
+        self.txt_discord_url.setPlaceholderText("https://discord.com/channels/...")
+        self.txt_discord_url.setToolTip(
+            "The URL of the Discord channel where the JDU asset bot lives.\n"
+            "Required for Fetch (Codename) mode.\n"
+            "Copy from your browser's address bar while in the channel."
+        )
+        discord_row.addWidget(self.txt_discord_url)
+        layout.addLayout(discord_row)
+
         layout.addStretch()
 
         # Buttons
@@ -145,6 +162,7 @@ class SettingsDialog(QDialog):
         self._config.show_preflight_success_popup = self.cb_preflight_popup.isChecked()
         self._config.show_quickstart_on_launch = self.cb_quickstart.isChecked()
         self._config.video_quality = self.combo_quality.currentText()
+        self._config.discord_channel_url = self.txt_discord_url.text().strip()
         
         self.accept()
 
