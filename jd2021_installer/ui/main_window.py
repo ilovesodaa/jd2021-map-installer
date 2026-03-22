@@ -9,12 +9,11 @@ Layout
 ::
 
     ┌───────────────── QSplitter ────────────────────┐
-    │  Left Panel               │  Right Panel       │
-    │  ─────────────            │  ──────────────    │
-    │  ModeSelectorWidget       │  ProgressLogWidget │
-    │  ConfigWidget             │                    │
-    │  ActionWidget             │                    │
-    │  SyncRefinementWidget     │                    │
+    │  Top: Install Panel (Mode, Config, Action)     │
+    ├───────────────── QSplitter ────────────────────┤
+    │  Left: Progress           │  Right: Preview    │
+    ├───────────────── QSplitter ────────────────────┤
+    │  Bottom: Log Console      │  Sync Refinement   │
     └───────────────────────────┴────────────────────┘
     [                 QProgressBar (status bar)       ]
 """
@@ -24,6 +23,7 @@ from __future__ import annotations
 import logging
 import shutil
 import sys
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -35,7 +35,9 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QStatusBar,
     QVBoxLayout,
+    QHBoxLayout,
     QWidget,
+    QLabel,
 )
 
 from jd2021_installer.core.config import AppConfig
@@ -47,6 +49,7 @@ from jd2021_installer.ui.widgets import (
     ProgressLogWidget,
     StepStatus,
     SyncRefinementWidget,
+    LogConsoleWidget,
 )
 from jd2021_installer.ui.workers.media_workers import (
     PreviewMediaWorker,
@@ -74,7 +77,7 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         # -- Application state ------------------------------------------------
-        self._config = AppConfig()
+        self._config = self._load_settings()
         self._current_map: Optional[NormalizedMapData] = None
         self._current_target: Optional[str] = None
         self._current_mode: str = "Fetch (Codename)"
@@ -95,6 +98,34 @@ class MainWindow(QMainWindow):
         self._status_bar.showMessage("Ready")
 
     # ==================================================================
+    # SETTINGS PERSISTENCE
+    # ==================================================================
+
+    def _load_settings(self) -> AppConfig:
+        settings_file = Path("installer_settings.json")
+        if settings_file.exists():
+            try:
+                with settings_file.open("r") as f:
+                    data = json.load(f)
+                return AppConfig(**data)
+            except Exception as e:
+                logger.error("Failed to load settings: %s", e)
+        return AppConfig()
+
+    def _save_settings(self) -> None:
+        settings_file = Path("installer_settings.json")
+        try:
+            # handle pydantic v2 vs v1
+            if hasattr(self._config, "model_dump"):
+                data = self._config.model_dump(mode="json")
+            else:
+                data = json.loads(self._config.json())
+            with settings_file.open("w") as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            logger.error("Failed to save settings: %s", e)
+
+    # ==================================================================
     # UI COMPOSITION  (Phase 3)
     # ==================================================================
 
@@ -103,34 +134,61 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         root_layout = QVBoxLayout(central)
 
-        # Primary splitter: left (controls) | right (feedback)
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        root_layout.addWidget(splitter)
-
-        # -- Left panel -------------------------------------------------------
-        left_panel = QWidget()
-        left_layout = QVBoxLayout(left_panel)
-
+        # -- Top: Install Panel -----------------------------------------------
+        top_panel = QWidget()
+        top_layout = QVBoxLayout(top_panel)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        
         self._mode_selector = ModeSelectorWidget()
-        left_layout.addWidget(self._mode_selector)
+        top_layout.addWidget(self._mode_selector)
 
         self._config_panel = ConfigWidget()
-        left_layout.addWidget(self._config_panel)
+        top_layout.addWidget(self._config_panel)
 
         self._action_panel = ActionWidget()
-        left_layout.addWidget(self._action_panel)
+        top_layout.addWidget(self._action_panel)
+        
+        root_layout.addWidget(top_panel)
 
-        self._sync_refinement = SyncRefinementWidget()
-        left_layout.addWidget(self._sync_refinement)
-
-        left_layout.addStretch()
-        splitter.addWidget(left_panel)
-
-        # -- Right panel -------------------------------------------------------
+        # -- Middle & Bottom Splitters ----------------------------------------
+        main_splitter = QSplitter(Qt.Orientation.Vertical)
+        
+        # Middle: Progress (Left) | Preview (Right)
+        middle_splitter = QSplitter(Qt.Orientation.Horizontal)
+        
         self._feedback_panel = ProgressLogWidget()
-        splitter.addWidget(self._feedback_panel)
-
-        splitter.setSizes([380, 680])
+        middle_splitter.addWidget(self._feedback_panel)
+        
+        preview_panel = QWidget()
+        preview_layout = QVBoxLayout(preview_panel)
+        preview_label = QLabel("Preview functionality handled by FFplay window")
+        preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview_layout.addWidget(preview_label)
+        middle_splitter.addWidget(preview_panel)
+        
+        middle_splitter.setSizes([380, 680])
+        main_splitter.addWidget(middle_splitter)
+        
+        # Bottom: Log Console (Left) | Sync Refinement (Right)
+        bottom_splitter = QSplitter(Qt.Orientation.Horizontal)
+        
+        self._log_console = LogConsoleWidget()
+        # Wire root logger to our console
+        logging.getLogger().addHandler(self._log_console.log_handler)
+        bottom_splitter.addWidget(self._log_console)
+        
+        self._sync_refinement = SyncRefinementWidget()
+        bottom_splitter.addWidget(self._sync_refinement)
+        
+        bottom_splitter.setSizes([600, 460])
+        main_splitter.addWidget(bottom_splitter)
+        
+        root_layout.addWidget(main_splitter, stretch=1)
+        
+        # Apply loaded settings to config panel
+        if self._config.game_directory:
+            self._config_panel.set_game_directory(str(self._config.game_directory))
+        self._config_panel.set_video_quality(self._config.video_quality)
 
     # ==================================================================
     # SIGNAL / SLOT WIRING  (Phase 4)
@@ -175,9 +233,11 @@ class MainWindow(QMainWindow):
     def _on_game_dir_changed(self, path: str) -> None:
         self._config.game_directory = Path(path)
         self._set_status(f"Game directory: {path}")
+        self._save_settings()
 
     def _on_quality_changed(self, quality: str) -> None:
         self._config.video_quality = quality
+        self._save_settings()
 
     # -- Pre-flight ---------------------------------------------------------
 
@@ -218,10 +278,10 @@ class MainWindow(QMainWindow):
             if reply == QMessageBox.StandardButton.Yes:
                 shutil.rmtree(cache, ignore_errors=True)
                 cache.mkdir(parents=True, exist_ok=True)
-                self._feedback_panel.append_log("Cache cleared.")
+                self.append_log("Cache cleared.")
                 self._set_status("Cache cleared.")
         else:
-            self._feedback_panel.append_log("No cache directory to clear.")
+            self.append_log("No cache directory to clear.")
 
     # -- Reset state --------------------------------------------------------
 
@@ -267,7 +327,7 @@ class MainWindow(QMainWindow):
         # Wire signals
         thread.started.connect(worker.run)
         worker.progress.connect(self._feedback_panel.set_progress)
-        worker.status.connect(self._feedback_panel.append_log)
+        worker.status.connect(self.append_log)
         worker.error.connect(self._on_extract_error)
         worker.finished.connect(lambda data: self._on_extract_finished(data))
         worker.finished.connect(thread.quit)
@@ -281,7 +341,7 @@ class MainWindow(QMainWindow):
 
     def _on_extract_error(self, msg: str) -> None:
         self._feedback_panel.update_checklist_step("Extract map data", StepStatus.ERROR)
-        self._feedback_panel.append_log(f"ERROR: {msg}")
+        self.append_log(f"ERROR: {msg}")
         self._lock_ui(False)
 
     def _on_extract_finished(self, map_data: Optional[NormalizedMapData]) -> None:
@@ -309,7 +369,7 @@ class MainWindow(QMainWindow):
 
         thread.started.connect(worker.run)
         worker.progress.connect(self._feedback_panel.set_progress)
-        worker.status.connect(self._feedback_panel.append_log)
+        worker.status.connect(self.append_log)
         worker.error.connect(self._on_install_error)
         worker.finished.connect(lambda ok: self._on_install_finished(ok))
         worker.finished.connect(thread.quit)
@@ -325,7 +385,7 @@ class MainWindow(QMainWindow):
         self._feedback_panel.update_checklist_step(
             "Install to game directory", StepStatus.ERROR
         )
-        self._feedback_panel.append_log(f"ERROR: {msg}")
+        self.append_log(f"ERROR: {msg}")
         self._lock_ui(False)
 
     def _on_install_finished(self, success: bool) -> None:
@@ -333,7 +393,7 @@ class MainWindow(QMainWindow):
         self._feedback_panel.update_checklist_step("Install to game directory", status)
         if success:
             self._set_status("Installation complete!")
-            self._feedback_panel.append_log("✅  Map installed successfully!")
+            self.append_log("✅  Map installed successfully!")
         self._lock_ui(False)
 
     # ==================================================================
@@ -349,11 +409,11 @@ class MainWindow(QMainWindow):
                     seek_seconds=self._current_map.effective_video_start_time / 1000.0,
                 )
                 self._preview_worker.error.connect(
-                    lambda msg: self._feedback_panel.append_log(f"Preview error: {msg}")
+                    lambda msg: self.append_log(f"Preview error: {msg}")
                 )
                 self._preview_worker.start()
             else:
-                self._feedback_panel.append_log("No video available for preview.")
+                self.append_log("No video available for preview.")
                 self._sync_refinement._btn_preview.setChecked(False)
         else:
             if self._preview_worker:
@@ -376,8 +436,8 @@ class MainWindow(QMainWindow):
         worker.moveToThread(thread)
 
         thread.started.connect(worker.run)
-        worker.status.connect(self._feedback_panel.append_log)
-        worker.error.connect(lambda msg: self._feedback_panel.append_log(f"ERROR: {msg}"))
+        worker.status.connect(self.append_log)
+        worker.error.connect(lambda msg: self.append_log(f"ERROR: {msg}"))
         worker.finished.connect(self._on_offset_applied)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
@@ -423,9 +483,9 @@ class MainWindow(QMainWindow):
             return IPKExtractor(ipk_path)
 
         if idx == MODE_FETCH:
-            from jd2021_installer.extractors.web_playwright import WebExtractor
+            from jd2021_installer.extractors.web_playwright import WebPlaywrightExtractor
 
-            return WebExtractor(
+            return WebPlaywrightExtractor(
                 codenames=[c.strip() for c in (self._current_target or "").split(",") if c.strip()],
                 config=self._config,
             )
@@ -455,8 +515,8 @@ class MainWindow(QMainWindow):
     # -- Public convenience methods (kept for compatibility) ----------------
 
     def append_log(self, text: str) -> None:
-        """Append text to the feedback log (delegated to ProgressLogWidget)."""
-        self._feedback_panel.append_log(text)
+        """Append text to the GUI log console."""
+        self._log_console.append_log(text)
 
     def set_progress(self, value: int) -> None:
         """Set the progress bar value (delegated to ProgressLogWidget)."""
