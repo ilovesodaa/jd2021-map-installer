@@ -46,13 +46,13 @@ from jd2021_installer.ui.widgets import (
     ActionWidget,
     ConfigWidget,
     ModeSelectorWidget,
+    PreviewWidget,
     ProgressLogWidget,
     StepStatus,
     SyncRefinementWidget,
     LogConsoleWidget,
 )
 from jd2021_installer.ui.workers.media_workers import (
-    PreviewMediaWorker,
     SyncRefinementWorker,
 )
 from jd2021_installer.ui.workers.pipeline_workers import (
@@ -84,7 +84,6 @@ class MainWindow(QMainWindow):
 
         self._active_threads: set[QThread] = set()
         self._active_worker: Optional[object] = None
-        self._preview_worker: Optional[PreviewMediaWorker] = None
         self._file_logger_handler: Optional[logging.Handler] = None
 
         # -- Window setup -----------------------------------------------------
@@ -160,12 +159,8 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right_col)
         right_layout.setContentsMargins(4, 0, 0, 0)
 
-        preview_panel = QWidget()
-        preview_layout = QVBoxLayout(preview_panel)
-        preview_label = QLabel("Preview functionality handled by FFplay window")
-        preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        preview_layout.addWidget(preview_label)
-        right_layout.addWidget(preview_panel, stretch=2)
+        self._preview_widget = PreviewWidget()
+        right_layout.addWidget(self._preview_widget, stretch=2)
 
         self._sync_refinement = SyncRefinementWidget()
         right_layout.addWidget(self._sync_refinement, stretch=0)
@@ -424,24 +419,29 @@ class MainWindow(QMainWindow):
     # ==================================================================
 
     def _on_preview_toggle(self, start: bool) -> None:
-        """Start or stop the FFplay preview."""
+        """Start or stop the embedded FFmpeg preview."""
         if start:
             if self._current_map and self._current_map.media.video_path:
-                self._preview_worker = PreviewMediaWorker(
-                    media_path=self._current_map.media.video_path,
-                    seek_seconds=self._current_map.effective_video_start_time / 1000.0,
+                video = str(self._current_map.media.video_path)
+                audio = str(self._current_map.media.audio_path) if self._current_map.media.audio_path else None
+                if not audio:
+                    self.append_log("No audio available for preview.")
+                    self._sync_refinement._btn_preview.setChecked(False)
+                    return
+
+                v_override = self._current_map.effective_video_start_time / 1000.0
+                a_offset = self._sync_refinement._audio_spin.value() / 1000.0
+
+                self._preview_widget.launch(
+                    video, audio,
+                    v_override=v_override,
+                    a_offset=a_offset,
                 )
-                self._preview_worker.error.connect(
-                    lambda msg: self.append_log(f"Preview error: {msg}")
-                )
-                self._preview_worker.start()
             else:
                 self.append_log("No video available for preview.")
                 self._sync_refinement._btn_preview.setChecked(False)
         else:
-            if self._preview_worker:
-                self._preview_worker.stop()
-                self._preview_worker = None
+            self._preview_widget.stop()
 
     def _on_apply_offset(self, offset_ms: float) -> None:
         """Apply the combined offset to the current map data."""

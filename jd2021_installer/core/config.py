@@ -33,7 +33,7 @@ class AppConfig(BaseModel):
     show_quickstart_on_launch: bool = True
 
     # Download settings
-    download_timeout_s: int = 60
+    download_timeout_s: int = 600
     max_retries: int = 3
     retry_base_delay_s: int = 2
     inter_request_delay_s: float = 0.5
@@ -85,4 +85,4 @@ QUALITY_PATTERNS = {
 }
 
 # Per-platform mainscene ZIP preference order
-SCENE_PLATFORM_PREFERENCE = ["DURANGO", "NX", "SCARLETT"]
+SCENE_PLATFORM_PREFERENCE = ["DURANGO", "SCARLETT", "NX"]

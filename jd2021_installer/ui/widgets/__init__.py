@@ -8,6 +8,7 @@ All widgets are imported here for convenient access::
         ActionWidget,
         ProgressLogWidget,
         SyncRefinementWidget,
+        PreviewWidget,
     )
 """
 
@@ -17,6 +18,7 @@ from jd2021_installer.ui.widgets.feedback_panel import ProgressLogWidget, StepSt
 from jd2021_installer.ui.widgets.mode_selector import ModeSelectorWidget
 from jd2021_installer.ui.widgets.sync_refinement import SyncRefinementWidget
 from jd2021_installer.ui.widgets.log_console import LogConsoleWidget
+from jd2021_installer.ui.widgets.preview_widget import PreviewWidget
 
 __all__ = [
     "ActionWidget",
@@ -26,4 +28,5 @@ __all__ = [
     "StepStatus",
     "SyncRefinementWidget",
     "LogConsoleWidget",
+    "PreviewWidget",
 ]
