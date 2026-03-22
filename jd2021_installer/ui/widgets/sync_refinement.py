@@ -40,6 +40,7 @@ class SyncRefinementWidget(QWidget):
     offset_changed = pyqtSignal(float)       # combined offset in ms
     preview_requested = pyqtSignal(bool)      # True = start, False = stop
     apply_requested = pyqtSignal(float)       # combined offset to apply
+    pad_audio_requested = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -111,6 +112,11 @@ class SyncRefinementWidget(QWidget):
         self._btn_preview.setToolTip("Start/stop the FFplay preview window")
         self._btn_preview.clicked.connect(self._on_preview_toggled)
         preview_row.addWidget(self._btn_preview)
+
+        self._btn_pad = QPushButton("Pad Audio")
+        self._btn_pad.setToolTip("Auto-calculate audio offset to match video duration")
+        self._btn_pad.clicked.connect(self.pad_audio_requested.emit)
+        preview_row.addWidget(self._btn_pad)
 
         self._btn_apply = QPushButton("✔  Apply Offset")
         self._btn_apply.setObjectName("btn_apply_offset")

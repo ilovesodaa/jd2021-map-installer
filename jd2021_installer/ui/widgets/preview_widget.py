@@ -44,6 +44,29 @@ PREVIEW_FPS = 24
 _CFLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
+class _AspectRatioLabel(QLabel):
+    """A QLabel that automatically scales its pixmap while maintaining aspect ratio on resize."""
+    def __init__(self, text: str = "") -> None:
+        super().__init__(text)
+        self._base_pixmap = QPixmap()
+
+    def setPixmap(self, pixmap: QPixmap) -> None:
+        self._base_pixmap = pixmap
+        super().setPixmap(self._scaled_pixmap())
+
+    def resizeEvent(self, event) -> None:
+        if not self._base_pixmap.isNull():
+            super().setPixmap(self._scaled_pixmap())
+        super().resizeEvent(event)
+
+    def _scaled_pixmap(self) -> QPixmap:
+        return self._base_pixmap.scaled(
+            self.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Frame reader thread (runs ffmpeg, emits QPixmap frames)
 # ---------------------------------------------------------------------------
@@ -228,7 +251,7 @@ class PreviewWidget(QWidget):
         root.setSpacing(4)
 
         # -- Video canvas ---------------------------------------------------
-        self._canvas = QLabel("No Preview")
+        self._canvas = _AspectRatioLabel("No Preview")
         self._canvas.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._canvas.setMinimumSize(480, 270)
         self._canvas.setSizePolicy(

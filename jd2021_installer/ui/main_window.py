@@ -58,6 +58,7 @@ from jd2021_installer.ui.workers.media_workers import (
 from jd2021_installer.ui.workers.pipeline_workers import (
     ExtractAndNormalizeWorker,
     InstallMapWorker,
+    ApplyAndFinishWorker,
 )
 
 logger = logging.getLogger("jd2021.ui.main_window")
@@ -199,6 +200,8 @@ class MainWindow(QMainWindow):
         # -- Sync refinement signals ----------------------------------------
         self._sync_refinement.preview_requested.connect(self._on_preview_toggle)
         self._sync_refinement.apply_requested.connect(self._on_apply_offset)
+        self._sync_refinement.offset_changed.connect(self._on_offset_spin_changed)
+        self._sync_refinement.pad_audio_requested.connect(self._on_pad_audio)
 
     # ==================================================================
     # SLOT IMPLEMENTATIONS
@@ -443,17 +446,59 @@ class MainWindow(QMainWindow):
         else:
             self._preview_widget.stop()
 
+    def _on_offset_spin_changed(self, offset_ms: float) -> None:
+        """Auto-restart preview when offsets change."""
+        if self._preview_widget.is_playing and self._current_map and self._current_map.media.video_path:
+            v_override = self._current_map.effective_video_start_time / 1000.0
+            a_offset = self._sync_refinement._audio_spin.value() / 1000.0
+            
+            # Restart at current playback position
+            self._preview_widget.launch(
+                str(self._current_map.media.video_path),
+                str(self._current_map.media.audio_path) if self._current_map.media.audio_path else None,
+                v_override=v_override,
+                a_offset=a_offset,
+                start_time=self._preview_widget._position,
+            )
+
+    def _on_pad_audio(self) -> None:
+        """Autofill Audio Offset by probing differences in media lengths."""
+        if not self._current_map or not self._current_map.media.audio_path or not self._current_map.media.video_path:
+            self.append_log("Both audio and video required to pad audio.")
+            return
+
+        from jd2021_installer.installers.media_processor import get_video_duration
+        try:
+            self.append_log("Probing media durations for Auto Pad...")
+            v_dur = get_video_duration(self._current_map.media.video_path, self._config)
+            a_dur = get_video_duration(self._current_map.media.audio_path, self._config)
+            diff_ms = (v_dur - a_dur) * 1000.0
+            
+            self._sync_refinement.set_offsets(audio_ms=diff_ms, video_ms=self._sync_refinement._video_spin.value())
+            self.append_log(f"Auto Pad Audio computed {diff_ms:+.1f} ms difference.")
+        except Exception as e:
+            self.append_log(f"Pad audio failed to compute duration: {e}")
+
     def _on_apply_offset(self, offset_ms: float) -> None:
         """Apply the combined offset to the current map data."""
         if self._current_map is None:
             QMessageBox.warning(self, "No Map", "Load a map before applying offsets.")
             return
 
-        worker = SyncRefinementWorker(
+        if not self._config.game_directory:
+            QMessageBox.warning(self, "No Game Dir", "Cannot apply without a game directory set.")
+            return
+
+        # V2 native behavior: We modify the video_start_time_override directly.
+        # This replaces V1's ffmpeg hard-padding logic, relying strictly on UbiArt configuration.
+        original = self._current_map.music_track.video_start_time
+        self._current_map.video_start_time_override = original + offset_ms
+
+        worker = ApplyAndFinishWorker(
             map_data=self._current_map,
-            offset_ms=offset_ms,
-            persist=True,
+            target_dir=Path(self._config.game_directory),
             cache_dir=self._config.cache_directory,
+            config=self._config,
         )
         thread = QThread()
         worker.moveToThread(thread)
@@ -465,17 +510,17 @@ class MainWindow(QMainWindow):
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda t=thread: self._cleanup_thread(t, "sync"))
+        thread.finished.connect(lambda t=thread: self._cleanup_thread(t, "apply_finish"))
 
         self._active_threads.add(thread)
+        self._active_worker = worker
         thread.start()
 
-    def _on_offset_applied(self, map_data: Optional[NormalizedMapData]) -> None:
-        if map_data:
-            self._current_map = map_data
+    def _on_offset_applied(self, success: bool) -> None:
+        if success and self._current_map:
             self._set_status(
-                f"Offset applied — effective start: "
-                f"{map_data.effective_video_start_time:.2f} ms"
+                f"Offset applied & Map updated — effective start: "
+                f"{self._current_map.effective_video_start_time:.2f} ms"
             )
 
     # ==================================================================
@@ -513,6 +558,7 @@ class MainWindow(QMainWindow):
             return WebPlaywrightExtractor(
                 codenames=[c.strip() for c in (self._current_target or "").split(",") if c.strip()],
                 config=self._config,
+                quality=self._config.video_quality,
             )
 
         # HTML, Batch, Manual are not fully implemented yet

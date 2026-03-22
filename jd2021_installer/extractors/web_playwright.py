@@ -536,12 +536,18 @@ class WebPlaywrightExtractor(BaseExtractor):
             raise WebExtractionError("No URLs provided for extraction")
 
         self._codename = extract_codename_from_urls(all_urls) or self._codename
-        download_files(all_urls, output_dir, self._quality, self._config)
+        if self._codename:
+            map_output_dir = output_dir / self._codename
+        else:
+            map_output_dir = output_dir
+
+        map_output_dir.mkdir(parents=True, exist_ok=True)
+        download_files(all_urls, map_output_dir, self._quality, self._config)
 
         # -- Post-download: extract MAIN_SCENE_*.zip (mirrors V1 step_03) ---
-        self._extract_scene_zips(output_dir)
+        self._extract_scene_zips(map_output_dir)
 
-        return output_dir
+        return map_output_dir
 
     def get_codename(self) -> Optional[str]:
         return self._codename
