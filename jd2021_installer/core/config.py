@@ -25,6 +25,13 @@ class AppConfig(BaseModel):
         pattern=r"^(ULTRA_HD|ULTRA|HIGH_HD|HIGH|MID_HD|MID|LOW_HD|LOW)$",
     )
 
+    # UI/UX settings
+    skip_preflight: bool = False
+    suppress_offset_notification: bool = False
+    cleanup_behavior: str = Field(default="ask", pattern=r"^(ask|delete|keep)$")
+    show_preflight_success_popup: bool = True
+    show_quickstart_on_launch: bool = True
+
     # Download settings
     download_timeout_s: int = 60
     max_retries: int = 3

@@ -249,6 +249,7 @@ class WebPlaywrightExtractor(BaseExtractor):
         asset_html: Optional[str | Path] = None,
         nohud_html: Optional[str | Path] = None,
         urls: Optional[List[str]] = None,
+        codenames: Optional[List[str]] = None,
         quality: str = "ULTRA_HD",
         config: Optional[AppConfig] = None,
     ) -> None:
@@ -257,7 +258,8 @@ class WebPlaywrightExtractor(BaseExtractor):
         self._urls = urls or []
         self._quality = quality
         self._config = config or AppConfig()
-        self._codename: Optional[str] = None
+        self._codenames = codenames or []
+        self._codename: Optional[str] = self._codenames[0] if self._codenames else None
 
     def extract(self, output_dir: Path) -> Path:
         """Download files from URLs or HTML pages into output_dir."""

@@ -132,58 +132,49 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
-        root_layout = QVBoxLayout(central)
+        root_layout = QHBoxLayout(central)
 
-        # -- Top: Install Panel -----------------------------------------------
-        top_panel = QWidget()
-        top_layout = QVBoxLayout(top_panel)
-        top_layout.setContentsMargins(0, 0, 0, 0)
+        # -- Column 1 (Left): Fixed width ------------------------------------
+        left_col = QWidget()
+        left_col.setFixedWidth(450)
+        left_layout = QVBoxLayout(left_col)
+        left_layout.setContentsMargins(0, 0, 0, 0)
         
         self._mode_selector = ModeSelectorWidget()
-        top_layout.addWidget(self._mode_selector)
+        left_layout.addWidget(self._mode_selector)
 
         self._config_panel = ConfigWidget()
-        top_layout.addWidget(self._config_panel)
+        left_layout.addWidget(self._config_panel)
 
         self._action_panel = ActionWidget()
-        top_layout.addWidget(self._action_panel)
-        
-        root_layout.addWidget(top_panel)
+        left_layout.addWidget(self._action_panel)
 
-        # -- Middle & Bottom Splitters ----------------------------------------
-        main_splitter = QSplitter(Qt.Orientation.Vertical)
-        
-        # Middle: Progress (Left) | Preview (Right)
-        middle_splitter = QSplitter(Qt.Orientation.Horizontal)
-        
         self._feedback_panel = ProgressLogWidget()
-        middle_splitter.addWidget(self._feedback_panel)
+        left_layout.addWidget(self._feedback_panel)
         
+        root_layout.addWidget(left_col)
+
+        # -- Column 2 (Right): Expanding -------------------------------------
+        right_col = QWidget()
+        right_layout = QVBoxLayout(right_col)
+        right_layout.setContentsMargins(4, 0, 0, 0)
+
         preview_panel = QWidget()
         preview_layout = QVBoxLayout(preview_panel)
         preview_label = QLabel("Preview functionality handled by FFplay window")
         preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         preview_layout.addWidget(preview_label)
-        middle_splitter.addWidget(preview_panel)
-        
-        middle_splitter.setSizes([380, 680])
-        main_splitter.addWidget(middle_splitter)
-        
-        # Bottom: Log Console (Left) | Sync Refinement (Right)
-        bottom_splitter = QSplitter(Qt.Orientation.Horizontal)
-        
+        right_layout.addWidget(preview_panel, stretch=2)
+
+        self._sync_refinement = SyncRefinementWidget()
+        right_layout.addWidget(self._sync_refinement, stretch=0)
+
         self._log_console = LogConsoleWidget()
         # Wire root logger to our console
         logging.getLogger().addHandler(self._log_console.log_handler)
-        bottom_splitter.addWidget(self._log_console)
-        
-        self._sync_refinement = SyncRefinementWidget()
-        bottom_splitter.addWidget(self._sync_refinement)
-        
-        bottom_splitter.setSizes([600, 460])
-        main_splitter.addWidget(bottom_splitter)
-        
-        root_layout.addWidget(main_splitter, stretch=1)
+        right_layout.addWidget(self._log_console, stretch=1)
+
+        root_layout.addWidget(right_col, stretch=1)
         
         # Apply loaded settings to config panel
         if self._config.game_directory:
@@ -205,11 +196,8 @@ class MainWindow(QMainWindow):
         self._action_panel.install_requested.connect(self._on_install_requested)
         self._action_panel.preflight_requested.connect(self._on_preflight)
         self._action_panel.clear_cache_requested.connect(self._on_clear_cache)
-        self._action_panel.readjust_offset_requested.connect(
-            lambda: self._sync_refinement.setVisible(
-                not self._sync_refinement.isVisible()
-            )
-        )
+        self._action_panel.readjust_offset_requested.connect(self._on_readjust)
+        self._action_panel.settings_requested.connect(self._on_settings)
         self._action_panel.reset_state_requested.connect(self._on_reset_state)
 
         # -- Sync refinement signals ----------------------------------------
@@ -282,6 +270,34 @@ class MainWindow(QMainWindow):
                 self._set_status("Cache cleared.")
         else:
             self.append_log("No cache directory to clear.")
+
+    # -- Actions ------------------------------------------------------------
+
+    def _on_settings(self) -> None:
+        from jd2021_installer.ui.widgets.settings_dialog import SettingsDialog
+        dialog = SettingsDialog(self._config, self)
+        if dialog.exec():
+            self._config = dialog.get_config()
+            self._save_settings()
+            self._config_panel.set_video_quality(self._config.video_quality)
+            self._set_status("Settings saved.")
+
+    def _on_readjust(self) -> None:
+        from PyQt6.QtWidgets import QFileDialog
+        from jd2021_installer.parsers.normalizer import normalize
+        folder = QFileDialog.getExistingDirectory(self, "Select map output directory to readjust offset")
+        if folder:
+            try:
+                map_data = normalize(folder)
+                self._current_map = map_data
+                self._current_target = folder
+                self._sync_refinement.setVisible(True)
+                vo = map_data.music_track.video_start_time
+                self._sync_refinement.set_offsets(video_ms=vo)
+                self.append_log(f"Loaded {map_data.codename} for offset readjustment.")
+                self._set_status(f"Readjusting offset for {map_data.codename}")
+            except Exception as e:
+                QMessageBox.warning(self, "Load Error", f"Failed to load map data:\n{e}")
 
     # -- Reset state --------------------------------------------------------
 
@@ -474,13 +490,13 @@ class MainWindow(QMainWindow):
         idx = self._mode_selector.current_mode_index
 
         if idx == MODE_IPK:
-            from jd2021_installer.extractors.archive_ipk import IPKExtractor
+            from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor
 
             ipk_path = Path(self._current_target)  # type: ignore[arg-type]
             if not ipk_path.is_file():
                 QMessageBox.warning(self, "Invalid Path", f"IPK not found: {ipk_path}")
                 return None
-            return IPKExtractor(ipk_path)
+            return ArchiveIPKExtractor(ipk_path)
 
         if idx == MODE_FETCH:
             from jd2021_installer.extractors.web_playwright import WebPlaywrightExtractor
