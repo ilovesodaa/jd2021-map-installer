@@ -1,0 +1,18 @@
+{
+    "game_directory": "D:\\jd2021pc\\jd21",
+    "download_directory": "downloads",
+    "cache_directory": "cache",
+    "video_quality": "ULTRA",
+    "download_timeout_s": 60,
+    "max_retries": 3,
+    "retry_base_delay_s": 2,
+    "inter_request_delay_s": 0.5,
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "ticks_per_ms": 48,
+    "max_jd_version": 2021,
+    "min_jd_version": 2014,
+    "preview_fps": 24,
+    "audio_preview_fade_s": 2.0,
+    "ffmpeg_path": "ffmpeg",
+    "ffprobe_path": "ffprobe"
+}
