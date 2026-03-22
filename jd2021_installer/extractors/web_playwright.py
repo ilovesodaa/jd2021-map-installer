@@ -1,9 +1,10 @@
 """Playwright-based web extractor for JDU map assets.
 
-Replaces the original Node.js scraper. Uses playwright-python's async
-API to fetch map data HTML pages and download associated media files.
+Replaces the original Node.js JDH_Downloader script (fetch.mjs).
+Uses playwright-python's async API to automate Discord slash commands
+(``/assets`` and ``/nohud``) and download associated media files.
 
-The extractor runs Playwright in a background thread (via asyncio)
+The extractor runs Playwright in a background thread (via ``asyncio.run()``)
 so it can be safely dispatched from a QThread worker without blocking
 the Qt event loop.
 """
@@ -35,6 +36,14 @@ logger = logging.getLogger("jd2021.extractors.web_playwright")
 
 # SSL workaround for Ubisoft CDN
 ssl._create_default_https_context = ssl._create_unverified_context
+
+# Discord DOM selectors (must be updated if Discord changes its UI)
+_SEL_TEXTBOX = '[role="textbox"][data-slate-editor="true"]'
+_SEL_AUTOCOMPLETE_OPTION = '[role="option"]'
+_SEL_MESSAGE_ACCESSORIES = 'div[id^="message-accessories-"]'
+
+# CDN link validation pattern
+_CDN_PATTERN = re.compile(r'href="(https?://jd-s3\.cdn\.ubi\.com[^"]+)"', re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -233,15 +242,252 @@ def download_files(
 
 
 # ---------------------------------------------------------------------------
+# Discord automation helpers  (ported from V1 fetch.mjs)
+# ---------------------------------------------------------------------------
+
+async def _wait_for_login(page, timeout_s: int = 300) -> None:
+    """Wait for Discord login — detects the chat textbox."""
+    textbox = page.locator(_SEL_TEXTBOX)
+    try:
+        await textbox.wait_for(timeout=15_000)
+        logger.info("Already logged in to Discord.")
+    except Exception:
+        logger.info(
+            "Please log in to Discord in the browser window. "
+            "Waiting up to %d seconds...", timeout_s
+        )
+        await textbox.wait_for(timeout=timeout_s * 1000)
+        logger.info("Login detected.")
+        await page.wait_for_timeout(3000)
+
+
+async def _get_last_accessory_id(page) -> Optional[str]:
+    """Return the DOM id of the last message-accessories element."""
+    accessories = page.locator(_SEL_MESSAGE_ACCESSORIES)
+    count = await accessories.count()
+    if count == 0:
+        return None
+    return await accessories.nth(count - 1).get_attribute("id")
+
+
+async def _send_slash_command(
+    page, *, command: str, choices: List[str], codename: str
+) -> None:
+    """Automate the Discord slash-command picker UI.
+
+    1. Focus textbox, type ``/<command>``
+    2. Click matching autocomplete option
+    3. Click each ``choice`` (e.g. "jdu") in dropdown params
+    4. Type the codename, press Enter
+    """
+    textbox = page.locator(_SEL_TEXTBOX)
+    await textbox.click()
+    await page.wait_for_timeout(200)
+
+    # Type command
+    await page.keyboard.type(f"/{command}", delay=30)
+
+    cmd_option = (
+        page.locator(_SEL_AUTOCOMPLETE_OPTION)
+        .filter(has_text=re.compile(command, re.IGNORECASE))
+        .first
+    )
+    try:
+        await cmd_option.wait_for(timeout=8000)
+        await cmd_option.click()
+        logger.info("Selected /%s command.", command)
+    except Exception:
+        raise WebExtractionError(
+            f"Could not find /{command} in the autocomplete. "
+            "Make sure the bot is in this server and the command exists."
+        )
+
+    await page.wait_for_timeout(300)
+
+    # Handle dropdown choices (e.g. game = "jdu")
+    for choice in choices:
+        choice_option = (
+            page.locator(_SEL_AUTOCOMPLETE_OPTION)
+            .filter(has_text=re.compile(rf"^\s*{re.escape(choice)}\s*$", re.IGNORECASE))
+            .first
+        )
+        try:
+            await choice_option.wait_for(timeout=8000)
+            await choice_option.click()
+            logger.info("Selected choice: %s", choice)
+        except Exception:
+            # Looser match fallback
+            loose = (
+                page.locator(_SEL_AUTOCOMPLETE_OPTION)
+                .filter(has_text=choice)
+                .first
+            )
+            try:
+                await loose.wait_for(timeout=3000)
+                await loose.click()
+                logger.info("Selected choice (loose): %s", choice)
+            except Exception:
+                raise WebExtractionError(
+                    f'Could not find "{choice}" in the parameter options.'
+                )
+        await page.wait_for_timeout(200)
+
+    # Type codename and send
+    await page.keyboard.type(codename, delay=20)
+    logger.info("Typed codename: %s", codename)
+    await page.wait_for_timeout(200)
+    await page.keyboard.press("Enter")
+    logger.info("Command sent.")
+
+
+async def _wait_for_new_embed(
+    page, previous_last_id: Optional[str], timeout_s: int = 60
+) -> str:
+    """Poll for a new message-accessories element (the bot's response).
+
+    Waits until the element is stable (no "Loading" text, has children)
+    for 3 consecutive checks.
+    """
+    logger.info("Waiting for bot response...")
+    deadline = asyncio.get_event_loop().time() + timeout_s
+
+    while asyncio.get_event_loop().time() < deadline:
+        result = await page.evaluate(
+            """(prevId) => {
+                const all = document.querySelectorAll('div[id^="message-accessories-"]');
+                if (all.length === 0) return null;
+                const last = all[all.length - 1];
+                const textContent = last.textContent || '';
+                return {
+                    id: last.id,
+                    hasChildren: last.children.length > 0,
+                    isLoading: textContent.includes('Loading'),
+                };
+            }""",
+            previous_last_id,
+        )
+
+        if (
+            result
+            and result["id"] != previous_last_id
+            and result["hasChildren"]
+            and not result["isLoading"]
+        ):
+            # Stability check: 3 × 500 ms
+            stable = True
+            for _ in range(3):
+                await page.wait_for_timeout(500)
+                latest = await page.evaluate(
+                    """() => {
+                        const all = document.querySelectorAll(
+                            'div[id^="message-accessories-"]');
+                        if (all.length === 0) return null;
+                        const last = all[all.length - 1];
+                        const tc = last.textContent || '';
+                        return {
+                            id: last.id,
+                            hasChildren: last.children.length > 0,
+                            isLoading: tc.includes('Loading'),
+                        };
+                    }"""
+                )
+                if (
+                    not latest
+                    or latest["id"] != result["id"]
+                    or not latest["hasChildren"]
+                    or latest["isLoading"]
+                ):
+                    stable = False
+                    break
+            if stable:
+                logger.info("Bot response detected (%s).", result["id"])
+                return result["id"]
+
+        await page.wait_for_timeout(500)
+
+    raise WebExtractionError(
+        "Timed out waiting for the bot response. "
+        "The bot might be offline or the command may have failed."
+    )
+
+
+async def _extract_embed_html(page, accessory_id: str) -> str:
+    """Extract the outerHTML of the identified embed element."""
+    await page.wait_for_timeout(1500)  # Let rendering finish
+
+    html = await page.evaluate(
+        """(id) => {
+            const el = document.getElementById(id);
+            return el ? el.outerHTML : null;
+        }""",
+        accessory_id,
+    )
+    if not html:
+        raise WebExtractionError(
+            f'Could not find element with id "{accessory_id}" in the DOM.'
+        )
+    return html
+
+
+def _has_valid_cdn_links(html: str) -> bool:
+    """Return True if the embed contains valid jd-s3.cdn.ubi.com links."""
+    return bool(_CDN_PATTERN.search(html))
+
+
+async def _fetch_command_with_retry(
+    page,
+    *,
+    command: str,
+    choices: List[str],
+    codename: str,
+    label: str,
+    max_retries: int = 2,
+    bot_timeout_s: int = 60,
+) -> str:
+    """Send a slash command, wait for bot response, extract and validate HTML.
+
+    Retries up to ``max_retries`` times if the response has no valid CDN links.
+    """
+    for attempt in range(max_retries + 1):
+        if attempt > 0:
+            logger.info("Retrying %s (attempt %d/%d)...", label, attempt + 1, max_retries + 1)
+            await page.wait_for_timeout(3000)
+
+        pre_id = await _get_last_accessory_id(page)
+        await _send_slash_command(page, command=command, choices=choices, codename=codename)
+        embed_id = await _wait_for_new_embed(page, pre_id, timeout_s=bot_timeout_s)
+        html = await _extract_embed_html(page, embed_id)
+
+        if _has_valid_cdn_links(html):
+            logger.info("Extracted %s embed HTML.", label)
+            return html
+
+        logger.warning(
+            "%s response has no valid CDN links (bot may have returned an error).",
+            label,
+        )
+
+    raise WebExtractionError(
+        f"{label} response contained no valid download links after "
+        f"{max_retries + 1} attempts.\n"
+        "The bot may not have data for this codename."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Web extractor class
 # ---------------------------------------------------------------------------
 
 class WebPlaywrightExtractor(BaseExtractor):
-    """Extractor that downloads map data from JDU web pages.
+    """Extractor that downloads JDU map data via Discord bot automation.
 
-    Can operate in two modes:
-    1. From pre-saved HTML files (legacy workflow)
-    2. Using Playwright to scrape live pages (future implementation)
+    Operates in two modes:
+    1. **From pre-saved HTML files** — legacy workflow, uses local
+       ``assets.html`` / ``nohud.html``.
+    2. **Live Fetch** — launches a persistent-profile Chromium browser,
+       automates Discord slash commands (``/assets jdu <codename>`` and
+       ``/nohud <codename>``), captures the bot's embed HTML, then
+       downloads the CDN URLs.
     """
 
     def __init__(
@@ -269,26 +515,124 @@ class WebPlaywrightExtractor(BaseExtractor):
         if self._nohud_html and Path(self._nohud_html).exists():
             all_urls.extend(extract_urls_from_file(self._nohud_html))
 
+        # Live fetch: scrape Discord for each codename
+        if not all_urls and self._codenames:
+            for codename in self._codenames:
+                try:
+                    scraped = asyncio.run(self._scrape_codename(codename))
+                    all_urls.extend(scraped)
+                except Exception as e:
+                    logger.error("Failed to scrape codename '%s': %s", codename, e)
+                    raise
+
         if not all_urls:
             raise WebExtractionError("No URLs provided for extraction")
 
-        self._codename = extract_codename_from_urls(all_urls)
+        self._codename = extract_codename_from_urls(all_urls) or self._codename
         download_files(all_urls, output_dir, self._quality, self._config)
         return output_dir
 
     def get_codename(self) -> Optional[str]:
         return self._codename
 
+    # ------------------------------------------------------------------
+    # Live Discord scraping  (async, called via asyncio.run from QThread)
+    # ------------------------------------------------------------------
+
+    async def _scrape_codename(self, codename: str) -> List[str]:
+        """Full fetch flow for one codename: launch browser → login →
+        ``/assets`` → ``/nohud`` → save HTML → return extracted URLs.
+        """
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            raise WebExtractionError(
+                "playwright is not installed. "
+                "Run: pip install playwright && playwright install chromium"
+            )
+
+        channel_url = self._config.discord_channel_url
+        if not channel_url:
+            raise WebExtractionError(
+                "discord_channel_url is not configured. "
+                "Set it in your installer_settings.json or via the Settings dialog."
+            )
+
+        profile_dir = str(self._config.browser_profile_dir.resolve())
+
+        async with async_playwright() as p:
+            context = await p.chromium.launch_persistent_context(
+                profile_dir,
+                headless=False,
+                viewport={"width": 1280, "height": 800},
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+
+            page = context.pages[0] if context.pages else await context.new_page()
+
+            try:
+                logger.info("Fetching codename: %s", codename)
+
+                # Navigate to Discord channel
+                logger.info("Navigating to Discord channel...")
+                await page.goto(channel_url, wait_until="domcontentloaded")
+                await _wait_for_login(page, self._config.fetch_login_timeout_s)
+
+                # Wait for channel messages to load
+                try:
+                    await (
+                        page.locator(_SEL_MESSAGE_ACCESSORIES)
+                        .first
+                        .wait_for(timeout=15_000)
+                    )
+                except Exception:
+                    pass  # Channel might be empty
+
+                bot_timeout = self._config.fetch_bot_response_timeout_s
+
+                # Step 1: /assets jdu <codename>
+                logger.info("[1/2] /assets jdu %s", codename)
+                assets_html = await _fetch_command_with_retry(
+                    page,
+                    command="assets",
+                    choices=["jdu"],
+                    codename=codename,
+                    label="assets",
+                    bot_timeout_s=bot_timeout,
+                )
+                await page.wait_for_timeout(500)
+
+                # Step 2: /nohud <codename>
+                logger.info("[2/2] /nohud %s", codename)
+                nohud_html = await _fetch_command_with_retry(
+                    page,
+                    command="nohud",
+                    choices=[],
+                    codename=codename,
+                    label="nohud",
+                    bot_timeout_s=bot_timeout,
+                )
+
+                # Save HTML to output dir for caching / debugging
+                output_dir = self._config.cache_directory / codename
+                output_dir.mkdir(parents=True, exist_ok=True)
+                (output_dir / "assets.html").write_text(assets_html, encoding="utf-8")
+                (output_dir / "nohud.html").write_text(nohud_html, encoding="utf-8")
+                logger.info("Saved HTML to %s", output_dir)
+
+            finally:
+                await context.close()
+
+        # Extract all URLs from both pages
+        all_urls = extract_urls_from_html(assets_html) + extract_urls_from_html(nohud_html)
+        self._codename = extract_codename_from_urls(all_urls) or codename
+        return all_urls
+
     async def scrape_live(self, page_url: str) -> List[str]:
-        """Use Playwright to scrape a live page for asset URLs.
+        """Legacy method — kept for backward compatibility.
 
-        This is the future replacement for the Node.js scraper.
-
-        Args:
-            page_url: URL of the JDU asset page.
-
-        Returns:
-            List of extracted asset URLs.
+        For a simple URL scrape (non-Discord), navigates to the URL and
+        extracts href links from the page content.
         """
         try:
             from playwright.async_api import async_playwright

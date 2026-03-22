@@ -1,3 +1,5 @@
 __pycache__
 docs/todo/
 cache/
+installer_settings.json
+logs/
