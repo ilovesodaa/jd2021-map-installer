@@ -45,24 +45,24 @@ Created automatically when settings are saved for the first time via the GUI Set
 
 ## Where Settings Are Applied
 
-### GUI (`gui_installer.py`)
+### GUI (`the GUI (`ui/main_window.py`)`)
 - **Startup**: Loads settings, applies `default_quality` to dropdown, enables Install button if `skip_preflight` is set
 - **Pre-flight Check button**: Skips checks if `skip_preflight` is enabled
 - **Pipeline complete**: Suppresses notification popup if `suppress_offset_notification` is set
 - **Post-apply cleanup**: Auto-cleans without dialog if `auto_cleanup_downloads` is set
 - **Settings dialog**: Opens a Toplevel window to edit all settings with Save/Cancel
 
-### CLI (`map_installer.py`)
+### CLI (`the installer pipeline`)
 - **Quality default**: `--quality` flag defaults to `default_quality` setting
 - **Pre-flight**: Skipped if `skip_preflight` is enabled
 
-### Batch (`batch_install_maps.py`)
+### Batch (`the installer`)
 - **Quality default**: `--quality` flag defaults to `default_quality` setting
 - **Pre-flight**: Skipped if `skip_preflight` is enabled
 
 ---
 
-## API Functions (`map_installer.py`)
+## API Functions (`the installer pipeline`)
 
 | Function | Description |
 |----------|-------------|
@@ -81,7 +81,7 @@ Click "Re-adjust Offset" and select the map's download folder. The sync refineme
 
 ### CLI
 ```bash
-python map_installer.py --readjust path/to/MapDownloads/SomeMap
+python the installer pipeline --readjust path/to/MapDownloads/SomeMap
 ```
 
 The `reconstruct_state_for_readjust()` function builds a minimal pipeline state from:

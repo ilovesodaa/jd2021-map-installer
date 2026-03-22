@@ -20,7 +20,7 @@ This guide covers common errors and their solutions, derived from the error hand
 - **"JD2021 game data not found"**: Game path resolution failed. Checked: `search_root/jd21/`, `search_root` itself, `SCRIPT_DIR/jd21/`, recursive scan. Solutions: use shorter path without spaces/accents, avoid Program Files, point directly at `jd21/` folder.
 - **"SkuScene_Maps_PC_All.isc not found"**: Game data incomplete or wrong directory.
 - **"Cannot write to game directory"**: Permission error. Try running as admin or moving game to non-protected path.
-- **"ipk_unpack.py not found"**: Project scripts not in correct directory.
+- **"`extractors/archive_ipk.py` not found"**: Project scripts not in correct directory.
 - **"Pillow not installed"**: Run `pip install Pillow`.
 - **"xtx_extractor/ package not found"**: Missing bundled dependency — re-clone the repository.
 - **ffplay not found (warning)**: Sync preview unavailable but installation works.
@@ -41,7 +41,7 @@ This guide covers common errors and their solutions, derived from the error hand
 - **"Failed to deswizzle XTX texture data"**: xtx_extractor couldn't process the Nintendo Switch texture. Raw XTX saved as fallback.
 - **"Pillow can't decode this DDS format"**: Uncommon DDS format. Raw DDS saved for manual conversion with ImageMagick.
 - **Missing cover TGA files**: Step 05b logs `[MISS]` for each. Map loads but with blank cover art. If `cover_generic` exists but `cover_online` doesn't (or vice versa), Step 05b auto-copies.
-- **X360 tiled textures appear garbled**: `ckd_decode.py` detects X360 GPU descriptors (52-byte header) and applies tiled-to-linear conversion for DXT1/DXT3/DXT5. If the texture still appears garbled, the format may be unsupported (e.g., non-block-compressed).
+- **X360 tiled textures appear garbled**: `the CKD texture decoder` detects X360 GPU descriptors (52-byte header) and applies tiled-to-linear conversion for DXT1/DXT3/DXT5. If the texture still appears garbled, the format may be unsupported (e.g., non-block-compressed).
 
 ## Audio/Sync Issues
 
@@ -66,7 +66,7 @@ IPK maps have unique sync characteristics:
 - **"Not a binary CKD / wrong magic"**: File does not start with the expected UbiArt cooked header bytes. May be a JSON CKD instead — the pipeline falls back to JSON parsing automatically via `helpers.load_ckd_json()`.
 - **Missing musictrack fields**: Binary CKD parser expects markers, startBeat, endBeat, videoStartTime in a specific field order. If the CKD is from an unsupported game version, fields may be at unexpected offsets.
 - **Karaoke lyrics on separate lines**: Previously caused by reading class 80 fields in the wrong order. Fixed — `binary_ckd_parser.py` now reads `IsEndOfLine` first, then `ContentType`, `StartTimeTolerance`, `EndTimeTolerance`, `SemitoneTolerance`.
-- **Autodance assertion "no valid video structure for song"**: Previously caused by empty `video_structure = {}`. Fixed — `map_builder.py` now generates a minimal valid `JD_AutodanceVideoStructure`.
+- **Autodance assertion "no valid video structure for song"**: Previously caused by empty `video_structure = {}`. Fixed — ``installers/game_writer.py`` now generates a minimal valid `JD_AutodanceVideoStructure`.
 
 ## IPK-Specific Issues
 

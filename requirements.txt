@@ -1,1 +1,7 @@
-Pillow>=9.0
+# JD2021 Map Installer v2 - Dependencies
+PyQt6>=6.5
+Pillow>=10.0
+playwright>=1.40
+pydantic>=2.0
+pytest>=7.0
+pytest-qt>=4.2

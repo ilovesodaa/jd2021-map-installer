@@ -176,7 +176,7 @@ The `.ilu` `volume = 0` field is a **dB offset** (0 = unity gain), not a mute fl
 
 ## 7. Pipeline Integration
 
-`generate_intro_amb` and `extract_amb_audio` in `map_installer.py` handle all AMB cases:
+`generate_intro_amb` and `extract_amb_audio` in `the installer pipeline` handle all AMB cases:
 
 **Case 1 — Map has existing intro AMB from IPK** (`*_intro.tpl.ckd` found in extracted archive):
 - IPK processing generates the `.tpl`/`.ilu` and creates a silent placeholder WAV

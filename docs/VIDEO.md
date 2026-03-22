@@ -6,7 +6,7 @@ This document covers the NOHUD video quality system in the JD2021 Map Installer:
 
 ## Available Quality Tiers
 
-The pipeline supports 8 video quality tiers, defined in `map_downloader.py:72`. Each tier corresponds to a specific URL/filename suffix pattern on the JDU CDN.
+The pipeline supports 8 video quality tiers, defined in ``extractors/web_playwright.py`:72`. Each tier corresponds to a specific URL/filename suffix pattern on the JDU CDN.
 
 | Tier | Suffix Pattern | Description |
 |------|---------------|-------------|
@@ -47,11 +47,11 @@ Before downloading, the pipeline checks if a video of a **different** quality al
 | **CLI (interactive)** | Prompts: `[R]euse existing / [D]ownload new / [S]top` |
 | **GUI/Batch (non-interactive)** | Silently reuses existing video |
 
-The batch installer additionally auto-detects the quality of any existing video file (`detect_existing_quality()` in `batch_install_maps.py:79`) and uses that quality instead of the global default, preventing unnecessary re-downloads.
+The batch installer additionally auto-detects the quality of any existing video file (`detect_existing_quality()` in `the installer:79`) and uses that quality instead of the global default, preventing unnecessary re-downloads.
 
 ### Post-Download Fallback
 
-If the video fails to download (HTTP 403/404 — expired links), the pipeline searches for any existing `.webm` file on disk using the same quality fallback chain through `find_best_video_file()` (`map_downloader.py:90`).
+If the video fails to download (HTTP 403/404 — expired links), the pipeline searches for any existing `.webm` file on disk using the same quality fallback chain through `find_best_video_file()` (``extractors/web_playwright.py`:90`).
 
 ---
 
@@ -64,13 +64,13 @@ Select from the **Video Quality** dropdown in the Configuration section. Options
 ### CLI (Single Map)
 
 ```bash
-python map_installer.py --asset-html assets.html --nohud-html nohud.html --quality high_hd
+python the installer pipeline --asset-html assets.html --nohud-html nohud.html --quality high_hd
 ```
 
 ### CLI (Batch)
 
 ```bash
-python batch_install_maps.py MapDownloads --quality ultra
+python the installer MapDownloads --quality ultra
 ```
 
 The batch quality applies to all maps unless an existing video of a different quality is already downloaded, in which case the existing quality is used.

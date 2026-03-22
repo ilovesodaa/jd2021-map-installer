@@ -1,95 +1,91 @@
-# JD2021 Map Installer
+# JD2021 Map Installer v2
 
-An automated pipeline for extracting, building, and installing JDU (Just Dance Unlimited) maps into Just Dance 2021 PC. Supports both server-fetched maps (HTML/Fetch mode) and legacy Xbox 360 IPK archives.
-
-<img src="docs/img/gui_installer_screenshot.png" alt="Screenshot" style="max-width: 600px; width: 100%; height: auto; display: block; margin: 0 auto;" />
+A pure Python GUI application built on **PyQt6** for extracting, building, and installing JDU (Just Dance Unlimited) maps into Just Dance 2021 PC. Supports both server-fetched maps (HTML / live Playwright scraping) and legacy Xbox 360 IPK archives.
 
 ## Features
 
-- **Full Playable Extraction**: Downloads and parses `MAIN_SCENE_*.zip` assets dynamically based on provided HTML configuration files.
-- **IPK Archive Support**: Extracts and installs maps from Xbox 360 `.ipk` archives. Handles binary CKD parsing, XMA2 audio decoding (via vgmstream), X360 texture untiling, and automatic video offset synthesis from musictrack markers.
-- **GUI & CLI Installers**: Provides both a graphical interface (`gui_installer.py`) with live preview, sync refinement panel, and progress tracking, and a full CLI installer (`map_installer.py`) for scripted or headless use.
-- **Multiple Source Modes**: GUI supports HTML, Fetch, IPK, Manual, and Batch modes with an Analyze/Prepare/Install workflow.
-- **Automatic Map Name Detection**: Derives the map codename from JDU asset URLs or IPK filenames automatically.
-- **Video Quality Selection**: Choose from 8 quality tiers (Ultra HD down to Low) in both GUI and CLI. Hidden automatically for IPK mode (single quality).
-- **Map Config Persistence**: Saves sync refinement settings (video offset, audio offset, quality) per map. On reinstall, previously saved configs are automatically reloaded.
-- **Multiformat Texture Support**: Automatically strips `.ckd` headers and converts internal texture formats (compressed DDS, Nintendo Switch XTX, and Xbox 360 tiled textures) into standard formats (PNG/TGA/JPG) for UI usage.
-- **Binary CKD Parser**: Parses legacy binary (cooked) CKD files from Xbox 360/Wii archives — musictracks, songdescs, choreography/karaoke tapes, cinematic tapes, autodance templates, and sound components. Falls back transparently when JSON parsing fails.
-- **UbiArt-Aware Tape Conversion**: Converts choreography, karaoke, and cinematic tapes from JDU JSON to engine-compatible Lua with proper MotionClip color hex encoding, platform-specific motion data (KEY/VAL), `Tracks` array generation, and cinematic curve processing (`vector2dNew`) with actor path resolution.
-- **Cinematic & Ambient Sound Support**: Processes cinematic tapes with curve data and ambient sound templates into engine-ready `.ilu`/`.tpl` pairs. Generates synthetic TPL/ILU for orphan WAV CKDs (e.g., AMB files inside IPK archives without matching template files).
-- **Pre-Roll Audio Coverage**: Generates an intro AMB that covers the silence window caused by negative `videoStartTime`. Sources audio from the same OGG/WAV as the main track. For IPK maps, audio is left untrimmed (markers encode preroll natively) and only the video offset is adjusted.
-- **Full DefaultColors Extraction**: Extracts all song theme colors (`lyrics`, `theme`, `songColor_1A/1B/2A/2B`, and any extras) from JDU metadata with case-insensitive key matching and hex conversion.
-- **Cross-Platform Gesture Merging**: Automatically merges gesture files (`.gesture`, `.msm`) from all platform folders (including X360) into PC/. Only copies Kinect-compatible `.gesture` files (from DURANGO/SCARLETT/X360) and substitutes ORBIS-exclusive variants with the nearest Kinect equivalent.
-- **Autodance Generation**: Converts cooked autodance data (CKD) into native Autodance camera logic (`.act` / `.isc` / `.tpl`) with full recording/video structures and FX parameters.
-- **Audio Sync Tools**: Provides a built-in syncing loop with interactive FFplay preview. For IPK maps, VIDEO_OFFSET is auto-enabled with a warning that manual adjustment is required (X360 binaries do not store video timing data).
+- **PyQt6 Dark-Themed GUI** — Modern split-panel interface with live log output, progress bar, and status bar. All heavy work runs on background `QThread` workers so the UI never freezes.
+- **Headless Playwright Integration** — Replaces the legacy Node.js scraper. Uses `playwright-python` to fetch JDU asset pages via headless Chromium, or processes pre-saved HTML files.
+- **QThread Concurrent Processing** — Extraction, normalization, and installation run in dedicated `QObject` workers that communicate with the main window exclusively through Qt signals (`progress`, `status`, `error`, `finished`).
+- **Typed Data Pipeline** — The Extract → Normalize → Install pipeline produces a single canonical `NormalizedMapData` dataclass regardless of source format (web or IPK).
+- **Pydantic Configuration** — All application settings (paths, quality tiers, timeouts, engine constants) are managed through a validated `AppConfig` model with environment variable support.
+- **Full Binary CKD Parser** — Stateless parser for legacy binary (cooked) CKD files: musictracks, songdescs, choreography / karaoke tapes, cinematic tapes, autodance templates, and sound components.
+- **IPK Archive Support** — Extracts maps from Xbox 360 `.ipk` archives with zlib / lzma decompression and path-traversal protection.
+- **Video Quality Selection** — Choose from 8 quality tiers (Ultra HD down to Low) with automatic fallback.
+- **Media Processing** — FFmpeg / Pillow wrappers for video transcoding, audio conversion, preview generation, and image format conversion.
 
-## Core Scripts
+## Module Overview
 
-- `gui_installer.py`: Graphical interface. Provides source mode selection (HTML/IPK/Manual/Batch), Analyze/Prepare workflow, auto-detected map name, video quality selection, real-time progress, sync refinement with FFplay preview, IPK-specific sync warnings, and map config persistence.
-- `map_installer.py`: The main orchestrator. Handles downloading, unzipping, IPK unpacking, binary CKD parsing, tape conversion, audio/video synchronization, intro AMB generation, asset conversion, and engine integration. Can be used standalone via CLI.
-- `map_builder.py`: Autogenerates the UbiArt `.isc`, `.tpl`, `.act`, `.trk`, and `.mpd` configurations for the map, including enriched SongDesc metadata and full DefaultColors extraction from CKD data.
-- `map_downloader.py`: Scrapes and downloads all necessary IPKs, ZIPs, WebMs, and CKD assets from JDU server mapping HTML files.
-- `binary_ckd_parser.py`: Parses legacy binary (cooked) CKD files from Xbox 360 and older UbiArt archives. Supports musictrack, songdesc, choreography/karaoke tapes, cinematic tapes, autodance templates, and sound component formats.
-- `source_analysis.py`: Analyzes source folders and IPK files to determine installation mode, detect audio/video files (`.ogg`, `.wav`, `.wav.ckd`), and extract codenames. Auto-decodes `.wav.ckd` files using CKD header stripping and vgmstream fallback.
-- `ubiart_lua.py`: UbiArt-aware Lua converter for tapes and game data. Handles MotionClip color encoding, MotionPlatformSpecifics KEY/VAL conversion, cinematic curve processing with `vector2dNew()`, ActorIndices-to-ActorPaths resolution, `Tracks` array generation, and ambient sound template processing.
-- `json_to_lua.py`: Generic JSON-to-Lua converter used for non-tape files (autodance templates, stape data). For tape conversion, see `ubiart_lua.py`.
-- `ckd_decode.py`: Decodes compressed CKD textures (strips 44-byte UbiArt header, handles DDS, XTX/Nintendo Switch, and X360 tiled texture formats).
-- `gui_preview.py`: Manages embedded FFplay preview for the GUI sync refinement workflow.
-- `gui_settings.py`: Settings dialog, quickstart hint, and post-install cleanup logic.
-- `helpers.py`: Shared utilities including `load_ckd_json()` (with binary CKD fallback), CKD header constants, and tooltip delay.
-- `batch_install_maps.py`: Two-phase batch installer. Downloads all maps first (while CDN links are fresh), then processes them locally. Supports `--skip-existing`, `--only`, `--exclude`/`--ignore`, `--ignore-non-ascii`, and `--auto-strip` filters.
+| Package | Purpose |
+|---------|---------|
+| `core/` | Data models (`NormalizedMapData`, tapes, clips), Pydantic `AppConfig`, and typed exception hierarchy |
+| `extractors/` | `BaseExtractor` ABC, `WebPlaywrightExtractor` (HTML + live scraping), `ArchiveIPKExtractor` (IPK archives) |
+| `parsers/` | `normalizer` (raw files → `NormalizedMapData`), `binary_ckd` (stateless binary CKD parser) |
+| `installers/` | `game_writer` (UbiArt `.trk/.tpl/.act/.isc` generation), `media_processor` (FFmpeg / Pillow) |
+| `ui/` | `MainWindow` (PyQt6), `workers/pipeline_workers.py` (QThread-based workers) |
+
+## Quick Start
+
+See **[Getting Started](docs/GETTING_STARTED.md)** for the full setup walkthrough.
+
+```bash
+# 1. Install Python dependencies
+pip install -r requirements.txt
+
+# 2. Install the headless browser
+playwright install chromium
+
+# 3. Run the application
+python -m jd2021_installer.main
+```
 
 ## Documentation
 
 ### Setup and Usage
 
-- **[Getting Started](docs/GETTING_STARTED.md)** — Full setup walkthrough: dependencies, third-party tools, obtaining JD2021 PC, and running the installer.
-- **[GUI Reference](docs/GUI_REFERENCE.md)** — GUI controls, source modes, sync refinement panel, embedded preview, and post-install cleanup.
-- **[CLI Reference](docs/CLI_REFERENCE.md)** — CLI arguments, interactive sync loop, batch mode, and preflight checks.
-- **[Asset HTML Files](docs/ASSETS.md)** — Format and contents of `assets.html` and `nohud.html`, CDN URL anatomy, and what the pipeline downloads from each.
-- **[Video Reference](docs/VIDEO.md)** — Quality tiers, fallback behavior, persistence, and NOHUD file analysis.
-- **[Troubleshooting](docs/TROUBLESHOOTING.md)** — Common errors and solutions derived from code analysis.
+- **[Getting Started](docs/GETTING_STARTED.md)** — Dependencies, setup, and running the installer
+- **[GUI Reference](docs/GUI_REFERENCE.md)** — PyQt6 main window layout, controls, and thread lifecycle
+- **[Asset HTML Files](docs/ASSETS.md)** — Format and contents of `assets.html` and `nohud.html`
+- **[Video Reference](docs/VIDEO.md)** — Quality tiers, fallback behavior, and persistence
+- **[Troubleshooting](docs/TROUBLESHOOTING.md)** — Common errors and solutions
 
 ### Architecture and Internals
 
-- **[Architecture](docs/ARCHITECTURE.md)** — Internal component map, PipelineState, data flow, dual interface pattern, and design decisions.
-- **[Pipeline Reference](docs/PIPELINE_REFERENCE.md)** — Every pipeline step: inputs, outputs, failure modes, and skip conditions.
-- **[Audio Timing & Pre-Roll Silence](docs/AUDIO_TIMING.md)** — The `videoStartTime` synchronization model, the AMB intro solution, and IPK-specific audio handling.
-- **[Data Formats](docs/DATA_FORMATS.md)** — Binary and text file format reference (CKD, IPK, ISC, TRK, TPL, etc.).
+- **[Architecture](docs/ARCHITECTURE.md)** — Component map, concurrency model, and data flow
+- **[Pipeline Reference](docs/PIPELINE_REFERENCE.md)** — Extract → Normalize → Install phases and QThread orchestration
+- **[Audio Timing & Pre-Roll Silence](docs/AUDIO_TIMING.md)** — The `videoStartTime` synchronization model
+- **[Data Formats](docs/DATA_FORMATS.md)** — Binary and text file format reference (CKD, IPK, ISC, TRK, TPL, etc.)
 
 ### Data References
 
-- **[JDU Data Mapping](docs/JDU_DATA_MAPPING.md)** — Field-level mapping between JDU JSON payloads and JD2021 PC engine files.
-- **[Map Config Format](docs/MAP_CONFIG_FORMAT.md)** — Per-map sync configuration JSON schema.
-- **[Game Config Reference](docs/GAME_CONFIG_REFERENCE.md)** — JD2021 PC game configuration files and modding-relevant settings.
-- **[Third-Party Tools](docs/THIRD_PARTY_TOOLS.md)** — External dependencies, bundled tools, and referenced projects.
+- **[JDU Data Mapping](docs/JDU_DATA_MAPPING.md)** — Field-level mapping between JDU JSON payloads and JD2021 PC engine files
+- **[Map Config Format](docs/MAP_CONFIG_FORMAT.md)** — Per-map sync configuration JSON schema
+- **[Game Config Reference](docs/GAME_CONFIG_REFERENCE.md)** — JD2021 PC game configuration files
+- **[Third-Party Tools](docs/THIRD_PARTY_TOOLS.md)** — External dependencies and referenced projects
 
 ### Guides and Research
 
-- **[Manual Porting Guide](docs/MANUAL_PORTING_GUIDE.md)** — How to manually port a map without using the scripts; full map directory structure.
-- **[Unused Data Opportunities](docs/JDU_UNUSED_DATA_OPPORTUNITIES.md)** — Catalog of JDU data fields not currently used.
-- **[Known Gaps](docs/KNOWN_GAPS.md)** — Remaining limitations and potential improvements.
-- **[Mobile Scoring Restoration](docs/MOBILE_SCORING_RESTORATION.md)** — Binary patching research for phone controller scoring.
+- **[Manual Porting Guide](docs/MANUAL_PORTING_GUIDE.md)** — How to manually port a map without using the scripts
+- **[Unused Data Opportunities](docs/JDU_UNUSED_DATA_OPPORTUNITIES.md)** — Catalog of JDU data fields not currently used
+- **[Known Gaps](docs/KNOWN_GAPS.md)** — Remaining limitations and potential improvements
 
 ## Limitations
 
 - **JD2021 PC only** — maps installed by this pipeline target the PC development build and are not compatible with console versions.
-- **IPK video offset is approximate** — Xbox 360 binary CKDs store `videoStartTime = 0.0`. The pipeline synthesizes a reasonable default from musictrack markers, but per-map video lead-in varies and cannot be derived from the binary data. Manual VIDEO_OFFSET adjustment is expected for IPK maps.
-- **Some background AMB sounds remain silent** — AMB sounds that play mid-song (SoundSetClips with `StartTime > 0`) are kept as silent placeholders; their audio is hosted on JDU servers and cannot be downloaded. AMBs that play during the intro (SoundSetClips with `StartTime <= 0`) are automatically populated with real audio. Orphan WAV CKDs found inside IPK archives get synthetic TPL/ILU wrappers.
-- **JDHelper required for HTML/Fetch modes** — asset HTML files must be exported from the JDHelper Discord bot. Links expire quickly after the bot responds.
-- **WAV scheduling jitter (fallback maps only)** — when musictrack marker data is available, intro AMB duration is derived precisely from the audio data. When marker data is absent, a heuristic tail of 1.355s is used.
-- **No multi-audio-track support** — maps with more than one audio stream are not supported.
+- **IPK video offset is approximate** — Xbox 360 binary CKDs store `videoStartTime = 0.0`. The pipeline synthesizes a reasonable default from musictrack markers, but manual adjustment may be required.
+- **Some background AMB sounds remain silent** — mid-song AMB sounds that are hosted on JDU servers cannot be downloaded; only intro AMBs are generated with real audio.
+- **JDHelper required for HTML modes** — asset HTML files must be exported from the JDHelper Discord bot. Links expire quickly after the bot responds.
 
 ## Credits
 
 This project utilizes several essential third-party tools from the Just Dance modding community:
 
-- **[JustDanceTools](https://github.com/WodsonKun/JustDanceTools)**: DeserializerSuite for binary CKD format reference, MediaTool for audio crop formula validation, and various UbiArt file manipulations.
-- **[XTX-Extractor](https://github.com/aboood40091/XTX-Extractor)**: For extracting textures from Switch-specific XTX containers.
-- **[ubiart-archive-tools](https://github.com/PartyService/ubiart-archive-tools)**: For unpacking and packing UbiArt `.ipk` archives.
-- **JDTools by BLDS**: Tape processing logic analysis, vgmstream for XMA2 audio decoding, and QuickBMS scripts for CKD-to-raw conversion.
-- **[ferris_dancing](https://github.com/Kriskras99/ferris_dancing)**: Rust-based binary CKD parser used as a reference for field order validation and format verification.
-- **[UBIART-AMB-CUTTER](https://github.com/RN-JK/UBIART-AMB-CUTTER)**: AMB extraction algorithm (marker tick-to-millisecond formula and SoundSetClip splitting logic) used as a reference for implementing the automated AMB audio generation.
-- **Just Dance Helper**: For providing a way to get JDU assets and NOHUD videos from Discord. Built by [rama0dev](https://github.com/rama0dev).
+- **[JustDanceTools](https://github.com/WodsonKun/JustDanceTools)** — DeserializerSuite for binary CKD format reference, MediaTool for audio crop formula validation.
+- **[XTX-Extractor](https://github.com/aboood40091/XTX-Extractor)** — For extracting textures from Switch-specific XTX containers.
+- **[ubiart-archive-tools](https://github.com/PartyService/ubiart-archive-tools)** — IPK archive format reference.
+- **JDTools by BLDS** — Tape processing logic analysis, vgmstream for XMA2 audio decoding.
+- **[ferris_dancing](https://github.com/Kriskras99/ferris_dancing)** — Rust-based binary CKD parser used as a reference for field order validation.
+- **[UBIART-AMB-CUTTER](https://github.com/RN-JK/UBIART-AMB-CUTTER)** — AMB extraction algorithm reference.
+- **Just Dance Helper** — For providing JDU assets and NOHUD videos from Discord. Built by [rama0dev](https://github.com/rama0dev).
 
 Special thanks to the authors and contributors of these tools for making Just Dance modding possible.
