@@ -95,15 +95,27 @@ def json_to_lua(data: Dict[str, Any]) -> str:
 def _load_ckd_json(ckd_path: Path) -> Dict[str, Any]:
     """Load a CKD file as JSON. Handles the common UbiArt CKD JSON format.
     
-    Uses raw_decode to handle files with trailing garbage data (Extra data errors).
+    Uses raw_decode to handle files with trailing garbage and 
+    binary headers before the JSON start.
     """
-    content = ckd_path.read_text(encoding="utf-8-sig", errors="replace")
     try:
+        content_bytes = ckd_path.read_bytes()
+        if not content_bytes:
+            return {}
+            
+        # Try to find JSON start '{' to handle leading binary junk (e.g. from some IPK tools)
+        start_idx = content_bytes.find(b'{')
+        if start_idx == -1:
+            logger.warning("No JSON object found in CKD %s (it might be binary)", ckd_path.name)
+            return {}
+            
+        content = content_bytes[start_idx:].decode("utf-8-sig", errors="replace").strip()
         decoder = json.JSONDecoder()
-        obj, _ = decoder.raw_decode(content.strip())
+        obj, _ = decoder.raw_decode(content)
         return obj
-    except json.JSONDecodeError:
-        return json.loads(content)
+    except Exception as e:
+        logger.debug("Non-critical tape parsing error for %s: %s", ckd_path.name, e)
+        return {}
 
 
 def convert_tape_file(ckd_path: Path, output_path: Path) -> bool:

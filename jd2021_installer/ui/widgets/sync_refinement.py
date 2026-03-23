@@ -95,6 +95,7 @@ class SyncRefinementWidget(QWidget):
 
         # -- Increment Buttons Row ------------------------------------------
         # V1 Parity: +/- 1000, 100, 10, 1 (ms)
+        self._video_buttons = []
         inc_row_audio = QHBoxLayout()
         inc_row_audio.addWidget(QLabel("Adj Audio:"))
         
@@ -115,6 +116,7 @@ class SyncRefinementWidget(QWidget):
             btn.setStyleSheet("font-size: 10px; padding: 2px;")
             btn.clicked.connect(lambda _, d=delta: self._adjust_video(d))
             inc_row_video.addWidget(btn)
+            self._video_buttons.append(btn)
             
         inc_row_video.addStretch()
         group_layout.addLayout(inc_row_video)
@@ -215,6 +217,9 @@ class SyncRefinementWidget(QWidget):
     def set_video_editable(self, editable: bool) -> None:
         """Enable or disable the video offset checkbox/spinbox entirely."""
         self._video_check.setEnabled(editable)
+        for btn in self._video_buttons:
+            btn.setEnabled(editable)
+            
         # If disabled, we still keep the value but the user can't change it
         if not editable:
             self._video_spin.setEnabled(False)

@@ -428,7 +428,7 @@ class PreviewWidget(QWidget):
         self.preview_started.emit()
 
     def stop(self) -> None:
-        """Stop any running preview subprocess safely."""
+        """Stop any running preview subprocess safely and reset to black."""
         if self._worker is not None:
             self._worker.request_stop()
         
@@ -443,6 +443,17 @@ class PreviewWidget(QWidget):
 
         self._worker = None
         self._thread = None
+        self._position = 0.0
+        self._lbl_time.setText("0:00")
+        self._seek_slider.setValue(0)
+        
+        # Reset canvas to black ("No Preview" state)
+        self._canvas.clear()
+        self._canvas.setText("No Preview")
+        self._canvas.setStyleSheet(
+            "background-color: #111; color: #666; "
+            "font-size: 13px; border-radius: 6px;"
+        )
 
         if self._playing:
             self._playing = False

@@ -143,9 +143,16 @@ def _write_songdesc(target: Path, name: str, sd: SongDescription,
         "songColor_2B": dc.song_color_2b,
     }
     # Merge to ensure uniqueness and prevent Engine crash (zserializerobjectcontainers.h)
+    # Using case-insensitive merge to avoid duplicate keys like 'lyrics' vs 'Lyrics'
     merged_colors = color_fallbacks.copy()
+    existing_keys_lower = {k.lower(): k for k in merged_colors.keys()}
     for key, val in dc.extra.items():
-        merged_colors[key] = val
+        k_lower = key.lower()
+        if k_lower in existing_keys_lower:
+            # Overwrite existing key with the case-preserved original key name
+            merged_colors[existing_keys_lower[k_lower]] = val
+        else:
+            merged_colors[key] = val
 
     colors_lua = ""
     for key, val in merged_colors.items():
@@ -727,7 +734,7 @@ def _write_autodance_stubs(target: Path, name: str, vst: float = 0.0) -> None:
 \t\t\t\tNAME = "JD_AutodanceComponent_Template",
 \t\t\t\tJD_AutodanceComponent_Template =
 \t\t\t\t{{
-\t\t\t\t\tsong = "{name}",
+\t\t\t\t\tsong = "{name.lower()}",
 \t\t\t\t\tautodanceData =
 \t\t\t\t\t{{
 \t\t\t\t\t\tJD_AutodanceData =
