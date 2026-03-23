@@ -122,15 +122,17 @@ def _write_songdesc(target: Path, name: str, sd: SongDescription,
     tags_lua = tags_lua.rstrip(",")
 
     # PhoneImages
+    # V1 Parity: Always use lowercase for the maps/menuart path
+    map_lower = name.lower()
     if sd.phone_images:
         phone_str = ""
         for k, v in sd.phone_images.items():
             phone_str += f'\n\t\t\t\t\t\t{{\n\t\t\t\t\t\t\tKEY = "{k}",\n\t\t\t\t\t\t\tVAL = "{v}"\n\t\t\t\t\t\t}},'
         phone_str = phone_str.rstrip(",")
     else:
-        phone_str = f'\n\t\t\t\t\t\t{{\n\t\t\t\t\t\t\tKEY = "cover",\n\t\t\t\t\t\t\tVAL = "World/MAPS/{name}/MenuArt/textures/{name_lower}_cover_phone.jpg"\n\t\t\t\t\t\t}}'
+        phone_str = f'\n\t\t\t\t\t\t{{\n\t\t\t\t\t\t\tKEY = "cover",\n\t\t\t\t\t\t\tVAL = "world/maps/{map_lower}/menuart/textures/{map_lower}_cover_phone.jpg"\n\t\t\t\t\t\t}}'
         for i in range(1, num_coach + 1):
-            phone_str += f',\n\t\t\t\t\t\t{{\n\t\t\t\t\t\t\tKEY = "coach{i}",\n\t\t\t\t\t\t\tVAL = "World/MAPS/{name}/MenuArt/textures/{name_lower}_coach_{i}_phone.png"\n\t\t\t\t\t\t}}'
+            phone_str += f',\n\t\t\t\t\t\t{{\n\t\t\t\t\t\t\tKEY = "coach{i}",\n\t\t\t\t\t\t\tVAL = "world/maps/{map_lower}/menuart/textures/{map_lower}_coach_{i}_phone.png"\n\t\t\t\t\t\t}}'
 
     # DefaultColors
     dc = sd.default_colors
@@ -224,14 +226,14 @@ params =
 \t\t}}
 \t}}
 }}'''
-    (target / "SongDesc.tpl").write_text(tpl, encoding="utf-8")
+    (target / "songdesc.tpl").write_text(tpl, encoding="utf-8")
 
     act = f'''params =
 {{
     NAME = "Actor",
     Actor =
     {{
-        LUA = "World/MAPS/{name}/SongDesc.tpl",
+        LUA = "world/maps/{name.lower()}/songdesc.tpl",
         COMPONENTS =
         {{
             {{
@@ -243,14 +245,14 @@ params =
         }}
     }}
 }}'''
-    (target / "SongDesc.act").write_text(act, encoding="utf-8")
+    (target / "songdesc.act").write_text(act, encoding="utf-8")
 
 
 def _write_audio_isc(target: Path, name: str) -> None:
     """Write musictrack.tpl, sequence.tpl, .stape, and audio.isc."""
     # musictrack.tpl
     (target / f"Audio/{name}_musictrack.tpl").write_text(
-        f'''includeReference("world/maps/{name}/audio/{name}.trk")
+        f'''includeReference("world/maps/{name.lower()}/audio/{name}.trk")
 params =
 {{
 \tNAME = "Actor_Template",
@@ -266,7 +268,7 @@ params =
 \t\t\t\t\t{{
 \t\t\t\t\t\tMusicTrackData =
 \t\t\t\t\t\t{{
-\t\t\t\t\t\t\tpath = "world/maps/{name}/audio/{name}.wav",
+\t\t\t\t\t\t\tpath = "world/maps/{name.lower()}/audio/{name}.wav",
 \t\t\t\t\t\t\turl = "jmcs://jd-contents/{name}/{name}.ogg",
 \t\t\t\t\t\t\tstructure = structure
 \t\t\t\t\t\t}}
@@ -301,7 +303,7 @@ params =
                                         TapeEntry =
                                         {{
                                             Label = "TML_Sequence",
-                                            Path = "world/maps/{name}/audio/{name}.stape"
+                                            Path = "world/maps/{name.lower()}/audio/{name}.stape"
                                         }}
                                     }}
                                 }}
@@ -332,14 +334,14 @@ params =
 <root>
 \t<Scene ENGINE_VERSION="55299" GRIDUNIT="0.500000" DEPTH_SEPARATOR="0" NEAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000" FAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000">
 \t\t<ACTORS NAME="Actor">
-\t\t\t<Actor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="MusicTrack" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="world/maps/{name}/audio/{name}_musictrack.tpl">
+\t\t\t<Actor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="MusicTrack" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="world/maps/{name.lower()}/audio/{name}_musictrack.tpl">
 \t\t\t\t<COMPONENTS NAME="MusicTrackComponent">
 \t\t\t\t\t<MusicTrackComponent />
 \t\t\t\t</COMPONENTS>
 \t\t\t</Actor>
 \t\t</ACTORS>
 \t\t<ACTORS NAME="Actor">
-\t\t\t<Actor RELATIVEZ="0.000001" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{name}_sequence" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="world/maps/{name}/audio/{name}_sequence.tpl">
+\t\t\t<Actor RELATIVEZ="0.000001" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{name}_sequence" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="world/maps/{name.lower()}/audio/{name}_sequence.tpl">
 \t\t\t\t<COMPONENTS NAME="TapeCase_Component">
 \t\t\t\t\t<TapeCase_Component />
 \t\t\t\t</COMPONENTS>
@@ -387,7 +389,7 @@ def _write_timeline_files(target: Path, name: str) -> None:
                                         TapeEntry =
                                         {{
                                             Label = "TML_{tpl_name}",
-                                            Path = "world/maps/{name}/timeline/{name}_TML_{ty}.{ty[0].lower()}tape"
+                                            Path = "world/maps/{name.lower()}/timeline/{name}_TML_{ty}.{ty[0].lower()}tape"
                                         }}
                                     }}
                                 }}
@@ -406,7 +408,7 @@ def _write_timeline_files(target: Path, name: str) -> None:
     NAME = "Actor",
     Actor =
     {{
-        LUA = "world/maps/{name}/timeline/{name}_TML_{ty}.tpl",
+        LUA = "world/maps/{name.lower()}/timeline/{name}_TML_{ty}.tpl",
         COMPONENTS =
         {{
             {{
@@ -425,14 +427,14 @@ def _write_timeline_files(target: Path, name: str) -> None:
 <root>
     <Scene>
         <ACTORS NAME="Actor">
-            <Actor name="TML_Dance" RELATIVEZ="0.0" SCALE="1.0 1.0" xFLIPPED="0" USERFRIENDLY="TML_Dance" POS2D="0 0" ANGLE="0.0" INSTANCEDATAFILE="world/maps/{name}/timeline/{name}_TML_Dance.act" LUA="world/maps/{name}/timeline/{name}_TML_Dance.tpl">
+            <Actor name="TML_Dance" RELATIVEZ="0.0" SCALE="1.0 1.0" xFLIPPED="0" USERFRIENDLY="TML_Dance" POS2D="0 0" ANGLE="0.0" INSTANCEDATAFILE="world/maps/{name.lower()}/timeline/{name}_TML_Dance.act" LUA="world/maps/{name.lower()}/timeline/{name}_TML_Dance.tpl">
                 <COMPONENTS NAME="TapeCase_Component">
                     <TapeCase_Component />
                 </COMPONENTS>
             </Actor>
         </ACTORS>
         <ACTORS NAME="Actor">
-            <Actor name="TML_Karaoke" RELATIVEZ="0.0" SCALE="1.0 1.0" xFLIPPED="0" USERFRIENDLY="TML_Karaoke" POS2D="0 0" ANGLE="0.0" INSTANCEDATAFILE="world/maps/{name}/timeline/{name}_TML_Karaoke.act" LUA="world/maps/{name}/timeline/{name}_TML_Karaoke.tpl">
+            <Actor name="TML_Karaoke" RELATIVEZ="0.0" SCALE="1.0 1.0" xFLIPPED="0" USERFRIENDLY="TML_Karaoke" POS2D="0 0" ANGLE="0.0" INSTANCEDATAFILE="world/maps/{name.lower()}/timeline/{name}_TML_Karaoke.act" LUA="world/maps/{name.lower()}/timeline/{name}_TML_Karaoke.tpl">
                 <COMPONENTS NAME="TapeCase_Component">
                     <TapeCase_Component />
                 </COMPONENTS>
@@ -589,7 +591,7 @@ def _write_menuart_files(target: Path, name: str, num_coach: int) -> None:
 <root>
 \t<Scene ENGINE_VERSION="140999" GRIDUNIT="0.500000" DEPTH_SEPARATOR="0" NEAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000" FAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000" viewFamily="1">
 \t\t<ACTORS NAME="Actor">
-\t\t\t<Actor RELATIVEZ="0.000000" SCALE="0.300000 0.300000" xFLIPPED="0" USERFRIENDLY="{name}_cover_generic" POS2D="266.087555 197.629959" ANGLE="0.000000" INSTANCEDATAFILE="world/maps/{name}/menuart/actors/{name}_cover_generic.act" LUA="enginedata/actortemplates/tpl_materialgraphiccomponent2d.tpl">
+\t\t\t<Actor RELATIVEZ="0.000000" SCALE="0.300000 0.300000" xFLIPPED="0" USERFRIENDLY="{name}_cover_generic" POS2D="266.087555 197.629959" ANGLE="0.000000" INSTANCEDATAFILE="world/maps/{name.lower()}/menuart/actors/{name}_cover_generic.act" LUA="enginedata/actortemplates/tpl_materialgraphiccomponent2d.tpl">
 \t\t\t\t<COMPONENTS NAME="MaterialGraphicComponent">
 \t\t\t\t\t<MaterialGraphicComponent colorComputerTagId="0" renderInTarget="0" disableLight="0" disableShadow="-1" AtlasIndex="0" customAnchor="0.000000 0.000000" SinusAmplitude="0.000000 0.000000 0.000000" SinusSpeed="1.000000" AngleX="0.000000" AngleY="0.000000">
 \t\t\t\t\t\t<PrimitiveParameters>
@@ -599,7 +601,7 @@ def _write_menuart_files(target: Path, name: str, num_coach: int) -> None:
 \t\t\t\t\t\t<material>
 \t\t\t\t\t\t\t<GFXMaterialSerializable ATL_Channel="0" shaderPath="world/_common/matshader/multitexture_1layer.msh" stencilTest="0" alphaTest="4294967295" alphaRef="4294967295">
 \t\t\t\t\t\t\t\t<textureSet>
-\t\t\t\t\t\t\t\t\t<GFXMaterialTexturePathSet diffuse="world/maps/{name}/menuart/textures/{name}_cover_generic.tga" />
+\t\t\t\t\t\t\t\t\t<GFXMaterialTexturePathSet diffuse="world/maps/{name.lower()}/menuart/textures/{name.lower()}_cover_generic.tga" />
 \t\t\t\t\t\t\t\t</textureSet>
 \t\t\t\t\t\t\t</GFXMaterialSerializable>
 \t\t\t\t\t\t</material>
@@ -609,7 +611,7 @@ def _write_menuart_files(target: Path, name: str, num_coach: int) -> None:
 \t\t\t</Actor>
 \t\t</ACTORS>
 \t\t<ACTORS NAME="Actor">
-\t\t\t<Actor RELATIVEZ="0.000000" SCALE="0.300000 0.300000" xFLIPPED="0" USERFRIENDLY="{name}_cover_online" POS2D="-150.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="world/maps/{name}/menuart/actors/{name}_cover_online.act" LUA="enginedata/actortemplates/tpl_materialgraphiccomponent2d.tpl">
+\t\t\t<Actor RELATIVEZ="0.000000" SCALE="0.300000 0.300000" xFLIPPED="0" USERFRIENDLY="{name}_cover_online" POS2D="-150.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="world/maps/{name.lower()}/menuart/actors/{name}_cover_online.act" LUA="enginedata/actortemplates/tpl_materialgraphiccomponent2d.tpl">
 \t\t\t\t<COMPONENTS NAME="MaterialGraphicComponent">
 \t\t\t\t\t<MaterialGraphicComponent colorComputerTagId="0" renderInTarget="0" disableLight="0" disableShadow="-1" AtlasIndex="0" customAnchor="0.000000 0.000000" SinusAmplitude="0.000000 0.000000 0.000000" SinusSpeed="1.000000" AngleX="0.000000" AngleY="0.000000">
 \t\t\t\t\t\t<PrimitiveParameters>
@@ -619,7 +621,7 @@ def _write_menuart_files(target: Path, name: str, num_coach: int) -> None:
 \t\t\t\t\t\t<material>
 \t\t\t\t\t\t\t<GFXMaterialSerializable ATL_Channel="0" shaderPath="world/_common/matshader/multitexture_1layer.msh" stencilTest="0" alphaTest="4294967295" alphaRef="4294967295">
 \t\t\t\t\t\t\t\t<textureSet>
-\t\t\t\t\t\t\t\t\t<GFXMaterialTexturePathSet diffuse="world/maps/{name}/menuart/textures/{name}_cover_online.tga" />
+\t\t\t\t\t\t\t\t\t<GFXMaterialTexturePathSet diffuse="world/maps/{name.lower()}/menuart/textures/{name.lower()}_cover_online.tga" />
 \t\t\t\t\t\t\t\t</textureSet>
 \t\t\t\t\t\t\t</GFXMaterialSerializable>
 \t\t\t\t\t\t</material>
@@ -638,7 +640,7 @@ def _write_main_scene_isc(target: Path, name: str, has_autodance: bool = True) -
     if has_autodance:
         autodance_block = f'''
 \t\t<ACTORS NAME="SubSceneActor">
-\t\t\t<SubSceneActor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{name}_AUTODANCE" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="enginedata/actortemplates/subscene.tpl" RELATIVEPATH="world/maps/{name}/autodance/{name}_autodance.isc" EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">
+\t\t\t<SubSceneActor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{name}_AUTODANCE" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="enginedata/actortemplates/subscene.tpl" RELATIVEPATH="world/maps/{name.lower()}/autodance/{name}_autodance.isc" EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">
 \t\t\t\t<ENUM NAME="viewType" SEL="2" />
 \t\t\t</SubSceneActor>
 \t\t</ACTORS>'''
@@ -648,34 +650,34 @@ def _write_main_scene_isc(target: Path, name: str, has_autodance: bool = True) -
 <root>
 \t<Scene ENGINE_VERSION="81615" GRIDUNIT="2.000000" DEPTH_SEPARATOR="0" NEAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000" FAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000">
 \t\t<ACTORS NAME="SubSceneActor">
-\t\t\t<SubSceneActor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{name}_AUDIO" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="enginedata/actortemplates/subscene.tpl" RELATIVEPATH="world/maps/{name}/audio/{name}_audio.isc" EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">
+\t\t\t<SubSceneActor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{name}_AUDIO" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="enginedata/actortemplates/subscene.tpl" RELATIVEPATH="world/maps/{name.lower()}/audio/{name}_audio.isc" EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">
 \t\t\t\t<ENUM NAME="viewType" SEL="2" />
 \t\t\t</SubSceneActor>
 \t\t</ACTORS>
 \t\t<ACTORS NAME="SubSceneActor">
-\t\t\t<SubSceneActor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{name}_CINE" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="enginedata/actortemplates/subscene.tpl" RELATIVEPATH="world/maps/{name}/cinematics/{name}_cine.isc" EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">
+\t\t\t<SubSceneActor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{name}_CINE" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="enginedata/actortemplates/subscene.tpl" RELATIVEPATH="world/maps/{name.lower()}/cinematics/{name}_cine.isc" EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">
 \t\t\t\t<ENUM NAME="viewType" SEL="2" />
 \t\t\t</SubSceneActor>
 \t\t</ACTORS>
 \t\t<ACTORS NAME="SubSceneActor">
-\t\t\t<SubSceneActor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{name}_TML" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="enginedata/actortemplates/subscene.tpl" RELATIVEPATH="world/maps/{name}/timeline/{name}_tml.isc" EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">
+\t\t\t<SubSceneActor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{name}_TML" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="enginedata/actortemplates/subscene.tpl" RELATIVEPATH="world/maps/{name.lower()}/timeline/{name}_tml.isc" EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">
 \t\t\t\t<ENUM NAME="viewType" SEL="2" />
 \t\t\t</SubSceneActor>
 \t\t</ACTORS>{autodance_block}
 \t\t<ACTORS NAME="SubSceneActor">
-\t\t\t<SubSceneActor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{name}_VIDEO" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="enginedata/actortemplates/subscene.tpl" RELATIVEPATH="world/maps/{name}/videoscoach/{name}_video.isc" EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">
+\t\t\t<SubSceneActor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{name}_VIDEO" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="enginedata/actortemplates/subscene.tpl" RELATIVEPATH="world/maps/{name.lower()}/videoscoach/{name}_video.isc" EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">
 \t\t\t\t<ENUM NAME="viewType" SEL="2" />
 \t\t\t</SubSceneActor>
 \t\t</ACTORS>
 \t\t<ACTORS NAME="Actor">
-\t\t\t<Actor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{name} Main" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="world/maps/{name}/songdesc.act" LUA="world/maps/{name}/songdesc.tpl">
+\t\t\t<Actor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{name} Main" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="world/maps/{name.lower()}/songdesc.act" LUA="world/maps/{name.lower()}/songdesc.tpl">
 \t\t\t\t<COMPONENTS NAME="JD_SongDescComponent">
 \t\t\t\t\t<JD_SongDescComponent />
 \t\t\t\t</COMPONENTS>
 \t\t\t</Actor>
 \t\t</ACTORS>
 \t\t<ACTORS NAME="SubSceneActor">
-\t\t\t<SubSceneActor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{name}_menuart" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="enginedata/actortemplates/subscene.tpl" RELATIVEPATH="world/maps/{name}/menuart/{name}_menuart.isc" EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">
+\t\t\t<SubSceneActor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{name}_menuart" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="enginedata/actortemplates/subscene.tpl" RELATIVEPATH="world/maps/{name.lower()}/menuart/{name}_menuart.isc" EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">
 \t\t\t\t<ENUM NAME="viewType" SEL="3" />
 \t\t\t</SubSceneActor>
 \t\t</ACTORS>
@@ -706,15 +708,17 @@ def _write_autodance_stubs(target: Path, name: str, vst: float = 0.0) -> None:
     # Non-zero placeholder values so the autodance recap screen doesn't crash
     # V1 Parity: song_pos must be in ticks (seconds * 1000 * 48)
     TICKS_PER_MS = 48
+    # Ensure even negative VST results in a valid (minimum 24) tick value
     song_pos = max(int(vst * 1000.0 * TICKS_PER_MS + 24), 24)
     ad_duration = 16
+    map_low = name.lower()
 
-    (target / f"Autodance/{name}_autodance.isc").write_text(
+    (target / f"autodance/{name}_autodance.isc").write_text(
         f'''<?xml version="1.0" encoding="ISO-8859-1"?>
 <root>
 \t<Scene ENGINE_VERSION="81615" GRIDUNIT="0.500000" DEPTH_SEPARATOR="0" NEAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000" FAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000">
 \t\t<ACTORS NAME="Actor">
-\t\t\t<Actor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{name}_autodance" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="world/maps/{name}/autodance/{name}_autodance.act" LUA="world/maps/{name}/autodance/{name}_autodance.tpl">
+\t\t\t<Actor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{name}_autodance" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="world/maps/{map_low}/autodance/{name}_autodance.act" LUA="world/maps/{map_low}/autodance/{name}_autodance.tpl">
 \t\t\t\t<COMPONENTS NAME="JD_AutodanceComponent">
 \t\t\t\t\t<JD_AutodanceComponent />
 \t\t\t\t</COMPONENTS>
@@ -853,7 +857,7 @@ def _write_cinematics_stubs(target: Path, name: str) -> None:
                 NAME = "MasterTape_Template",
                 MasterTape_Template =
                 {{
-                    TapePath = "World/MAPS/{name}/Cinematics/{name}_MainSequence.tape"
+                    TapePath = "world/maps/{name.lower()}/cinematics/{name}_MainSequence.tape"
                 }}
             }}
         }}
@@ -866,7 +870,7 @@ def _write_cinematics_stubs(target: Path, name: str) -> None:
     NAME = "Actor",
     Actor =
     {{
-        LUA = "World/MAPS/{name}/cinematics/{name}_mainsequence.tpl",
+        LUA = "world/maps/{name.lower()}/cinematics/{name}_mainsequence.tpl",
         COMPONENTS =
         {{
             {{

@@ -471,7 +471,7 @@ appendTable(component.SoundComponent_Template.soundList,DESCRIPTOR)'''
 \t}}
 }}
 includeReference("EngineData/Misc/Components/SoundComponent.ilu")
-includeReference("world/maps/{map_name}/audio/amb/{intro_name}.ilu")'''
+includeReference("world/maps/{map_name.lower()}/audio/amb/{intro_name}.ilu")'''
 
         (amb_dir / f"{intro_name}.ilu").write_text(ilu_content, encoding="utf-8")
         (amb_dir / f"{intro_name}.tpl").write_text(tpl_content, encoding="utf-8")
@@ -486,7 +486,7 @@ includeReference("world/maps/{map_name}/audio/amb/{intro_name}.ilu")'''
                 f'\t\t<ACTORS NAME="Actor">\n'
                 f'\t\t\t<Actor RELATIVEZ="0.000002" SCALE="1.000000 1.000000" xFLIPPED="0"'
                 f' USERFRIENDLY="{intro_name}" POS2D="0.000000 0.000000" ANGLE="0.000000"'
-                f' INSTANCEDATAFILE="" LUA="world/maps/{map_name}/audio/amb/{intro_name}.tpl">\n'
+                f' INSTANCEDATAFILE="" LUA="world/maps/{map_name.lower()}/audio/amb/{intro_name}.tpl">\n'
                 f'\t\t\t\t<COMPONENTS NAME="SoundComponent">\n'
                 f'\t\t\t\t\t<SoundComponent />\n'
                 f'\t\t\t\t</COMPONENTS>\n'
@@ -590,6 +590,7 @@ def extract_ckd_audio_v1(ckd_path: str | Path, output_dir: str | Path) -> Option
     """
     ckd_path = Path(ckd_path)
     output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
     
     try:
         data = ckd_path.read_bytes()
@@ -599,6 +600,22 @@ def extract_ckd_audio_v1(ckd_path: str | Path, output_dir: str | Path) -> Option
     if len(data) <= CKD_HEADER_SIZE:
         return None
 
+    base = ckd_path.stem
+    if base.lower().endswith(".wav") or base.lower().endswith(".ogg"):
+        base = base[:-4]
+
+    # V1 Parity: Try vgmstream on the RAW CKD file first (some newer versions support it)
+    vgm_raw_out = output_dir / f"{base}_raw_vgm.wav"
+    try:
+        decoded = decode_xma2_audio(ckd_path, vgm_raw_out)
+        if decoded and is_valid_wav(decoded):
+            logger.info("Decoded raw CKD directly via vgmstream: %s", decoded.name)
+            return str(decoded)
+    except Exception:
+        if vgm_raw_out.exists():
+            vgm_raw_out.unlink()
+
+    # Fallback: Strip header and try again
     payload = data[CKD_HEADER_SIZE:]
     ext = None
 
@@ -617,29 +634,47 @@ def extract_ckd_audio_v1(ckd_path: str | Path, output_dir: str | Path) -> Option
             payload = data[ogg_offset:]
             ext = ".ogg"
         else:
-            # Proprietary format (XMA, etc.) -- use the existing decode_xma2_audio wrapper
-            base = ckd_path.stem
-            if base.lower().endswith(".wav") or base.lower().endswith(".ogg"):
-                base = base[:-4]
+            # Proprietary format (XMA, etc.) -- strip header to temp file and try vgmstream
+            temp_payload = output_dir / f"{base}_payload.bin"
+            temp_payload.write_bytes(payload)
             out_path = output_dir / (base + "_decoded.wav")
             
             try:
-                # Use V2's decode_xma2_audio which uses vgmstream
-                return str(decode_xma2_audio(ckd_path, out_path))
+                decoded = decode_xma2_audio(temp_payload, out_path)
+                if decoded and is_valid_wav(decoded):
+                    return str(decoded)
             except Exception as e:
-                logger.warning("vgmstream fallback failed for %s: %s", ckd_path.name, e)
-                return None
+                logger.warning("vgmstream fallback failed for payload %s: %s", ckd_path.name, e)
+            finally:
+                if temp_payload.exists():
+                    temp_payload.unlink()
+            return None
 
     # Standard OGG/WAV payload found
-    output_dir.mkdir(parents=True, exist_ok=True)
-    base = ckd_path.stem
-    if base.lower().endswith(".wav") or base.lower().endswith(".ogg"):
-        base = base[:-4]
     out_path = output_dir / (base + ext)
-
     out_path.write_bytes(payload)
     logger.info("Extracted %s payload from CKD: %s", ext.upper()[1:], out_path.name)
     return str(out_path)
+
+
+def is_valid_wav(path: str | Path) -> bool:
+    """Check if the file is a valid 48kHz Stereo WAV.
+    
+    Ported from V1 metadata checks.
+    """
+    path = Path(path)
+    if not path.is_file() or path.suffix.lower() != ".wav":
+        return False
+    try:
+        with wave.open(str(path), "rb") as wf:
+            n_channels = wf.getnchannels()
+            sample_rate = wf.getframerate()
+            is_valid = (n_channels == 2 and sample_rate == 48000)
+            if not is_valid:
+                logger.debug("WAV validation failed for %s: %dch %dHz", path.name, n_channels, sample_rate)
+            return is_valid
+    except Exception:
+        return False
 
 
 def is_xma2_audio(file_path: str | Path) -> bool:

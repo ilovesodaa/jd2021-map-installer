@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -90,3 +91,20 @@ def deep_scan_for_game_dir(search_root: Path) -> Optional[Path]:
         
     logger.info("Deep scan complete. No JD2021 game directory found.")
     return None
+
+
+def infer_codename(path: Path) -> str:
+    """Infer a map codename from a file or directory path, cleaning platform suffixes.
+
+    Ported from V1 source_analysis.py:_extract_codename_from_ipk_name.
+    """
+    # Use stem if it's a file, otherwise name if it's a directory
+    base = path.stem if path.is_file() else path.name
+    
+    # Strip platform suffixes: _x360, _durango, _scarlett, _nx, _orbis, _prospero, _pc
+    # Also handle some common garbage like (1), - Copy, etc.
+    cleaned = re.sub(r"(_(x360|durango|scarlett|nx|orbis|prospero|pc))+$", "", base, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*\((\d+)\)$", "", cleaned) # Remove (1), (2)
+    
+    logger.debug("Inferred codename '%s' from path: %s", cleaned, path)
+    return cleaned
