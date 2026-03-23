@@ -75,7 +75,7 @@ def _prefer_non_legacy(paths: List[str]) -> List[str]:
 def _filter_by_codename(
     paths: List[str], codename: Optional[str], base_dir: Optional[str] = None
 ) -> List[str]:
-    """Filter paths to those containing codename as a directory component."""
+    """Filter paths to those containing codename as a directory component or in filename."""
     if not codename:
         return paths
     cn_lower = codename.lower()
@@ -83,7 +83,8 @@ def _filter_by_codename(
     for p in paths:
         rel = (os.path.relpath(p, base_dir) if base_dir else p).replace("\\", "/").lower()
         parts = rel.split("/")
-        if cn_lower in parts:
+        # Match if codename is a path component OR appears in the filename
+        if cn_lower in parts or cn_lower in os.path.basename(p).lower():
             filtered.append(p)
     return filtered
 
@@ -93,10 +94,25 @@ def _find_ckd_files(
     pattern: str,
     codename: Optional[str] = None,
 ) -> List[str]:
-    """Find CKD files matching a glob pattern, preferring non-legacy."""
+    """Find CKD files matching a glob pattern, preferring non-legacy.
+
+    If no results are found with codename filtering, falls back to
+    searching without the codename filter (handles deeply nested ZIPs).
+    """
     paths = glob.glob(os.path.join(directory, "**", pattern), recursive=True)
     filtered = _filter_by_codename(paths, codename, directory)
-    return _prefer_non_legacy(filtered)
+    result = _prefer_non_legacy(filtered)
+
+    # Fallback: if codename filtering removed all candidates, try without it
+    if not result and paths:
+        logger.debug(
+            "CKD search with codename '%s' found 0 results; "
+            "falling back to unfiltered (%d candidates)",
+            codename, len(paths),
+        )
+        result = _prefer_non_legacy(paths)
+
+    return result
 
 
 # ---------------------------------------------------------------------------

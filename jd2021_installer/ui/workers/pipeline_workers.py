@@ -97,10 +97,67 @@ class InstallMapWorker(QObject):
 
     def run(self) -> None:
         try:
-            self.status.emit(f"Installing {self._map_data.codename}...")
-            self.progress.emit(20)
+            codename = self._map_data.codename
+            self.status.emit(f"Installing {codename}...")
+            self.progress.emit(10)
 
-            write_game_files(self._map_data, self._target_dir, self._config)
+            # Resolve target directory: game_dir / World / MAPS / <codename>
+            map_target = self._target_dir / "World" / "MAPS" / codename
+            map_target.mkdir(parents=True, exist_ok=True)
+
+            # 1. Write all UbiArt config files
+            self.status.emit("Writing game configuration files...")
+            self.progress.emit(20)
+            write_game_files(self._map_data, map_target, self._config)
+
+            # 2. Copy media files (video + audio) into game directory
+            media = self._map_data.media
+            if media.video_path and media.video_path.exists():
+                self.status.emit("Copying video file...")
+                self.progress.emit(40)
+                from jd2021_installer.installers.media_processor import copy_video
+                video_dst = map_target / "VideosCoach" / f"{codename}.webm"
+                copy_video(media.video_path, video_dst)
+
+                # Also copy map preview video if available
+                if media.map_preview_video and media.map_preview_video.exists():
+                    preview_dst = map_target / "VideosCoach" / f"{codename}_MapPreview.webm"
+                    copy_video(media.map_preview_video, preview_dst)
+
+            if media.audio_path and media.audio_path.exists():
+                self.status.emit("Copying audio file...")
+                self.progress.emit(60)
+                from jd2021_installer.installers.media_processor import copy_audio
+                # Determine audio extension — keep .ogg for game engine
+                audio_ext = media.audio_path.suffix  # .ogg or .wav
+                audio_dst = map_target / "Audio" / f"{codename}{audio_ext}"
+                copy_audio(media.audio_path, audio_dst)
+
+            # 3. Copy cover/coach images to MenuArt/textures
+            if media.cover_path and media.cover_path.exists():
+                self.status.emit("Copying MenuArt textures...")
+                self.progress.emit(70)
+                import shutil
+                textures_dir = map_target / "MenuArt" / "textures"
+                textures_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(media.cover_path, textures_dir / media.cover_path.name)
+
+            for coach_img in media.coach_images:
+                if coach_img.exists():
+                    import shutil
+                    textures_dir = map_target / "MenuArt" / "textures"
+                    shutil.copy2(coach_img, textures_dir / coach_img.name)
+
+            # 4. Register map in SkuScene ISC
+            self.status.emit("Registering map in song list...")
+            self.progress.emit(85)
+            try:
+                from jd2021_installer.installers.sku_scene import register_map
+                register_map(self._target_dir, codename)
+            except Exception as e:
+                # Non-fatal: map files are installed, just won't appear in list
+                logger.warning("SkuScene registration failed (non-fatal): %s", e)
+                self.status.emit(f"Warning: SkuScene registration failed: {e}")
 
             self.progress.emit(100)
             self.status.emit("Installation complete!")
