@@ -94,9 +94,9 @@ class ProgressLogWidget(QWidget):
             self._checklist.addItem(item)
             self._step_items[name] = item
 
-    def update_checklist_step(self, step_name: str, status: StepStatus, prefix: str = "") -> None:
+    def update_checklist_step(self, step_name: str, status: StepStatus, prefix: str = "", suffix: str = "") -> None:
         """Update the icon for *step_name* to reflect *status*. 
-        Optional *prefix* (e.g. codename) is prepended to the name.
+        Optional *prefix* is prepended and *suffix* is appended to the name.
         """
         item = self._step_items.get(step_name)
         if item is None:
@@ -107,6 +107,8 @@ class ProgressLogWidget(QWidget):
         if prefix:
             display_text += f"{prefix} "
         display_text += step_name
+        if suffix:
+            display_text += f"  ({suffix})"
         item.setText(display_text)
 
         # Colour hint for quick scanning

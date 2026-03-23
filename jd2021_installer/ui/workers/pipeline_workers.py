@@ -207,6 +207,7 @@ class BatchInstallWorker(QObject):
     error = pyqtSignal(str)             # error message
     finished = pyqtSignal(bool)         # success flag
     finished_with_data = pyqtSignal(list) # list[NormalizedMapData]
+    discovered_maps = pyqtSignal(list)  # list[str] (codenames)
 
     def __init__(
         self,
@@ -246,6 +247,17 @@ class BatchInstallWorker(QObject):
                 return
 
             self.status.emit(f"Found {total} map(s) to process.")
+            
+            # Emit discovered map names to the UI so it can populate the checklist
+            map_names = []
+            for c in candidates:
+                if c.is_file() and c.suffix.lower() == ".ipk":
+                    from jd2021_installer.extractors.archive_ipk import inspect_ipk
+                    maps_in_ipk = inspect_ipk(c)
+                    map_names.extend(maps_in_ipk or [c.stem])
+                else:
+                    map_names.append(c.name)
+            self.discovered_maps.emit(map_names)
             success_count = 0
             installed_maps: list[NormalizedMapData] = []
             
@@ -264,7 +276,12 @@ class BatchInstallWorker(QObject):
                     if candidate.is_file() and candidate.suffix.lower() == ".ipk":
                         # Extract IPK to temp dir
                         from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor
-                        self.status.emit(f"[{i+1}/{total}] Unpacking IPK: {candidate.name}")
+                        # Try to get codename from IPK name for early status
+                        from jd2021_installer.extractors.archive_ipk import inspect_ipk
+                        maps_in_ipk = inspect_ipk(candidate)
+                        ipk_name_hint = maps_in_ipk[0] if maps_in_ipk else candidate.name
+                        
+                        self.status.emit(f"[{ipk_name_hint}] Extract map data")
                         extractor = ArchiveIPKExtractor(candidate)
                         import shutil
                         shutil.rmtree(batch_cache, ignore_errors=True)
@@ -286,9 +303,11 @@ class BatchInstallWorker(QObject):
                             # (If it's just batch processing standalone maps, it'll still work if selected_maps is None)
                             continue
                             
-                        self.status.emit(f"[{i+1}/{total}] Normalizing {sub_map.name}...")
+                        self.status.emit(f"[{sub_map.name}] Parse CKDs & Metadata")
                         from jd2021_installer.parsers.normalizer import normalize
                         map_data = normalize(sub_map)
+                        
+                        self.status.emit(f"[{map_data.codename}] Normalize assets")
                         
                         # V1 Parity: Persist preview assets in map cache so they remain available after batch extraction is cleared
                         map_cache = self._config.cache_directory / map_data.codename
