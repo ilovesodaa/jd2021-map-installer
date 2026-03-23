@@ -488,7 +488,7 @@ class MainWindow(QMainWindow):
                 
                 # Defer to batch installer to handle everything cleanly
                 self._sync_refinement.set_ipk_mode(is_ipk=True)
-                self._start_batch_install(selected_maps=set(selected_maps))
+                self._start_batch_install(selected_maps=set(selected_maps), map_names=sorted(list(selected_maps)))
                 return
 
         # Resolve the correct extractor based on mode
@@ -634,17 +634,26 @@ class MainWindow(QMainWindow):
                 pass
 
         if clean_msg in PIPELINE_STEPS:
-            # Mark this step as in progress with codename prefix
-            self._feedback_panel.update_checklist_step(clean_msg, StepStatus.IN_PROGRESS, prefix=prefix)
+            # If in batch mode, we might be updating by map name instead of step name
+            # Check if prefix (without brackets) is a known map in the checklist
+            raw_prefix = prefix.strip("[]")
+            if raw_prefix in self._feedback_panel._step_items:
+                self._feedback_panel.update_checklist_step(raw_prefix, StepStatus.IN_PROGRESS, suffix=clean_msg)
+            else:
+                # Standard single-map step update
+                self._feedback_panel.update_checklist_step(clean_msg, StepStatus.IN_PROGRESS, prefix=prefix)
             
-            # Heuristic: Mark ALL preceding steps as DONE. 
-            # This ensures that if steps are skipped or jump ahead, the UI catches up correctly.
-            try:
-                idx = PIPELINE_STEPS.index(clean_msg)
-                for i in range(idx):
-                    self._feedback_panel.update_checklist_step(PIPELINE_STEPS[i], StepStatus.DONE, prefix=prefix)
-            except ValueError:
-                pass
+            # Heuristic: Mark ALL preceding steps as DONE (only for single-map mode).
+            if raw_prefix not in self._feedback_panel._step_items:
+                try:
+                    idx = PIPELINE_STEPS.index(clean_msg)
+                    for i in range(idx):
+                        self._feedback_panel.update_checklist_step(PIPELINE_STEPS[i], StepStatus.DONE, prefix=prefix)
+                except ValueError:
+                    pass
+        elif prefix.strip("[]") in self._feedback_panel._step_items:
+            # High-level status for a map in batch mode
+            self._feedback_panel.update_checklist_step(prefix.strip("[]"), StepStatus.IN_PROGRESS, suffix=clean_msg)
 
     def _on_install_error(self, msg: str) -> None:
         self.append_log(f"ERROR: {msg}")
@@ -1010,7 +1019,7 @@ class MainWindow(QMainWindow):
         )
         return None
 
-    def _start_batch_install(self, selected_maps: set[str] | None = None) -> None:
+    def _start_batch_install(self, selected_maps: set[str] | None = None, map_names: list[str] | None = None) -> None:
         """Launches the dedicated Batch mode worker."""
         if not self._current_target:
             return
@@ -1019,8 +1028,11 @@ class MainWindow(QMainWindow):
 
         self._lock_ui(True)
         self._feedback_panel.reset()
-        self._feedback_panel.set_checklist_steps(PIPELINE_STEPS)
-        self._feedback_panel.update_checklist_step("Extract map data", StepStatus.IN_PROGRESS)
+        if map_names:
+            self._feedback_panel.set_checklist_steps(map_names)
+        else:
+            self._feedback_panel.set_checklist_steps(PIPELINE_STEPS)
+            self._feedback_panel.update_checklist_step("Extract map data", StepStatus.IN_PROGRESS)
 
         worker = BatchInstallWorker(
             batch_source_dir=Path(self._current_target),
@@ -1034,6 +1046,8 @@ class MainWindow(QMainWindow):
         thread.started.connect(worker.run)
         worker.progress.connect(self._feedback_panel.set_progress)
         worker.status.connect(self.append_log)
+        worker.status.connect(self._on_status_updated)
+        worker.discovered_maps.connect(self._feedback_panel.set_checklist_steps)
         
         # Share the error and success callbacks so the UI gets unlocked
         worker.error.connect(self._on_install_error)
