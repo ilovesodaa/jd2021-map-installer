@@ -491,8 +491,9 @@ class MainWindow(QMainWindow):
 
         # V2 native behavior: We modify the video_start_time_override directly.
         # This replaces V1's ffmpeg hard-padding logic, relying strictly on UbiArt configuration.
+        # Note: offset_ms is in milliseconds; video_start_time is in seconds.
         original = self._current_map.music_track.video_start_time
-        self._current_map.video_start_time_override = original + offset_ms
+        self._current_map.video_start_time_override = original + (offset_ms / 1000.0)
 
         worker = ApplyAndFinishWorker(
             map_data=self._current_map,
