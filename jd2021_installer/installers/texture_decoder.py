@@ -269,10 +269,13 @@ def decode_pictograms(picto_dir: Path, output_dir: Path) -> int:
         if "picto" not in ckd.name.lower():
             continue
 
-        # Determine output name: strip .ckd, ensure .png extension
-        out_name = ckd.stem  # e.g. "mapname_picto_001.tga"
-        if not out_name.lower().endswith(('.tga', '.png')):
-            out_name += '.png'
+        # Determine output name: ensure .png extension for pictograms
+        out_name = ckd.stem  # e.g. "mapname_picto_001.png"
+        if not out_name.lower().endswith('.png'):
+            if out_name.lower().endswith('.tga'):
+                out_name = out_name[:-4] + '.png'
+            else:
+                out_name += '.png'
         out_path = output_dir / out_name
 
         if decode_ckd_texture(ckd, out_path):

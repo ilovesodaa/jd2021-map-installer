@@ -610,12 +610,23 @@ class MainWindow(QMainWindow):
         # Main log console still gets everything
         logger.info(msg)
         
-        # Fix for Batch mode status strings e.g. "[1/10] Normalize assets (Koi)"
+        # Fix for Batch mode status strings e.g. "[1/10] Normalize assets (Koi)" or "[Koi] Extract map data"
         clean_msg = msg
+        prefix = ""
         if msg.startswith("[") and "]" in msg:
             try:
-                # Strip [x/y] prefix and (MapName) suffix
-                step_part = msg.split("]", 1)[1].strip()
+                # Extract [Codename] prefix if it exists
+                parts = msg.split("]", 1)
+                prefix = parts[0][1:].strip()
+                step_part = parts[1].strip()
+                
+                # If prefix is a number (e.g. 1/10), it's the old format
+                if "/" in prefix and prefix.replace("/", "").isdigit():
+                    prefix = f"[{prefix}]"
+                else:
+                    # It's likely a codename
+                    prefix = f"[{prefix}]"
+                
                 if "(" in step_part:
                     step_part = step_part.split("(", 1)[0].strip()
                 clean_msg = step_part
@@ -623,22 +634,19 @@ class MainWindow(QMainWindow):
                 pass
 
         if clean_msg in PIPELINE_STEPS:
-            # Mark this step as in progress
-            self._feedback_panel.update_checklist_step(clean_msg, StepStatus.IN_PROGRESS)
+            # Mark this step as in progress with codename prefix
+            self._feedback_panel.update_checklist_step(clean_msg, StepStatus.IN_PROGRESS, prefix=prefix)
             
             # Heuristic: Mark ALL preceding steps as DONE. 
             # This ensures that if steps are skipped or jump ahead, the UI catches up correctly.
             try:
                 idx = PIPELINE_STEPS.index(clean_msg)
                 for i in range(idx):
-                    self._feedback_panel.update_checklist_step(PIPELINE_STEPS[i], StepStatus.DONE)
+                    self._feedback_panel.update_checklist_step(PIPELINE_STEPS[i], StepStatus.DONE, prefix=prefix)
             except ValueError:
                 pass
 
     def _on_install_error(self, msg: str) -> None:
-        self._feedback_panel.update_checklist_step(
-            "Decode MenuArt textures", StepStatus.ERROR
-        )
         self.append_log(f"ERROR: {msg}")
         self._lock_ui(False)
         self._stop_file_logging()

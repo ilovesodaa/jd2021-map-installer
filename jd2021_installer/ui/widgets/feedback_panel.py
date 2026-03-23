@@ -94,14 +94,20 @@ class ProgressLogWidget(QWidget):
             self._checklist.addItem(item)
             self._step_items[name] = item
 
-    def update_checklist_step(self, step_name: str, status: StepStatus) -> None:
-        """Update the icon for *step_name* to reflect *status*."""
+    def update_checklist_step(self, step_name: str, status: StepStatus, prefix: str = "") -> None:
+        """Update the icon for *step_name* to reflect *status*. 
+        Optional *prefix* (e.g. codename) is prepended to the name.
+        """
         item = self._step_items.get(step_name)
         if item is None:
             logger.warning("Checklist step not found: %s", step_name)
             return
         icon = _STATUS_ICONS[status]
-        item.setText(f"{icon}  {step_name}")
+        display_text = f"{icon}  "
+        if prefix:
+            display_text += f"{prefix} "
+        display_text += step_name
+        item.setText(display_text)
 
         # Colour hint for quick scanning
         colour_map = {
