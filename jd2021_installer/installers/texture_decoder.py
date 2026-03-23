@@ -266,9 +266,6 @@ def decode_pictograms(picto_dir: Path, output_dir: Path) -> int:
     success = 0
 
     for ckd in picto_dir.rglob("*.ckd"):
-        if "picto" not in ckd.name.lower():
-            continue
-
         # Determine output name: ensure .png extension for pictograms
         out_name = ckd.stem  # e.g. "mapname_picto_001.png"
         if not out_name.lower().endswith('.png'):

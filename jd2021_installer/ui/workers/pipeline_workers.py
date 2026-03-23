@@ -437,8 +437,12 @@ def install_map_to_game(
             decode_menuart_textures(menuart_src, textures_dir)
             
         if status_callback: status_callback("Decode Pictograms")
-        picto_src = map_data.source_dir / "pictos"
-        if picto_src.exists():
+        picto_src = map_data.media.pictogram_dir
+        if not picto_src or not picto_src.exists():
+            # Fallback for manual/web extraction if normalizer didn't pick it up
+            picto_src = map_data.source_dir / "pictos"
+            
+        if picto_src and picto_src.exists():
             decode_pictograms(picto_src, map_target / "timeline" / "pictos")
 
     # 5. Moves
