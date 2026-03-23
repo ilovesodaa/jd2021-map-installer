@@ -609,13 +609,25 @@ class MainWindow(QMainWindow):
         # Main log console still gets everything
         logger.info(msg)
         
-        if msg in PIPELINE_STEPS:
+        # Fix for Batch mode status strings e.g. "[1/10] Normalize assets (Koi)"
+        clean_msg = msg
+        if msg.startswith("[") and "]" in msg:
+            try:
+                # Strip [x/y] prefix and (MapName) suffix
+                step_part = msg.split("]", 1)[1].strip()
+                if "(" in step_part:
+                    step_part = step_part.split("(", 1)[0].strip()
+                clean_msg = step_part
+            except Exception:
+                pass
+
+        if clean_msg in PIPELINE_STEPS:
             # Mark this step as in progress
-            self._feedback_panel.update_checklist_step(msg, StepStatus.IN_PROGRESS)
+            self._feedback_panel.update_checklist_step(clean_msg, StepStatus.IN_PROGRESS)
             
             # Heuristic: Mark the previous logical step as DONE
             try:
-                idx = PIPELINE_STEPS.index(msg)
+                idx = PIPELINE_STEPS.index(clean_msg)
                 if idx > 0:
                     # Special case: if we just started "Convert Audio", then "Decode MenuArt" (the previous one) is likely done
                     # but normalization steps are already marked DONE by _on_extract_finished.
@@ -844,6 +856,7 @@ class MainWindow(QMainWindow):
         self._lock_ui(False)
         if success:
             logger.info("✅  Offsets applied and audio reprocessed.")
+            self._feedback_panel.update_checklist_step("Finalizing Offsets", StepStatus.DONE)
             # V1 Parity: Don't auto-restart preview anymore after apply
             self._prompt_cleanup()
 

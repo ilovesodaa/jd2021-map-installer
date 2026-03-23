@@ -393,13 +393,19 @@ def normalize(
     video_ms = music_track.video_start_time * 1000.0
     audio_ms = 0.0
     
-    # If the map source is IPK, the audio is pre-trimmed (.wav from .wav.ckd).
-    # If it's Fetch/HTML, audio is .ogg and requires marker-based pre-roll trim.
-    is_ipk = bool(media.audio_path and media.audio_path.suffix.lower() == ".wav")
+    # If the map source is IPK, the audio and video are pre-synced.
+    # We detect it by checking the directory structure or audio format.
+    dir_path = Path(directory)
+    is_ipk = (
+        (dir_path / "world").exists() or 
+        (dir_path / "World").exists() or 
+        any(dir_path.rglob("*.wav.ckd")) or
+        bool(media.audio_path and media.audio_path.suffix.lower() == ".wav")
+    )
     
     if is_ipk:
         audio_ms = 0.0
-        logger.info("IPK map detected: audio_offset defaults to 0.0")
+        logger.info("IPK map detected: forcing audio_offset to 0.0 ms")
     else:
         preroll = calculate_marker_preroll(music_track.markers, music_track.start_beat)
         if preroll is not None:

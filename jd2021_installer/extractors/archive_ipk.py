@@ -118,8 +118,12 @@ def extract_ipk(target_file: str | Path, output_dir: str | Path) -> Path:
                 file_chunks.append(fheader)
 
             base_offset = _unpack(ipk_header["base_offset"]["value"])
+            created_dirs = set()
 
             for k, chunk in enumerate(file_chunks):
+                if k % 100 == 0:
+                    logger.info("IPK: Extracting file %d/%d...", k + 1, num_files)
+
                 offset = _unpack(chunk["offset"]["value"])
                 data_size = _unpack(chunk["size"]["value"])
 
@@ -138,7 +142,9 @@ def extract_ipk(target_file: str | Path, output_dir: str | Path) -> Path:
                     continue
 
                 f.seek(offset + base_offset)
-                file_path.mkdir(parents=True, exist_ok=True)
+                if file_path not in created_dirs:
+                    file_path.mkdir(parents=True, exist_ok=True)
+                    created_dirs.add(file_path)
 
                 with open(file_path / file_name, "wb") as ff:
                     raw_data = f.read(data_size)

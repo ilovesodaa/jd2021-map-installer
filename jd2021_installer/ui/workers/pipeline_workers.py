@@ -184,7 +184,7 @@ class ApplyAndFinishWorker(QObject):
 
     def run(self) -> None:
         try:
-            self.status.emit("Reprocessing audio offsets...")
+            self.status.emit("Finalizing Offsets")
             self.progress.emit(30)
             
             # 1. Update configs and audio via reprocess_audio
@@ -289,6 +289,20 @@ class BatchInstallWorker(QObject):
                         self.status.emit(f"[{i+1}/{total}] Normalizing {sub_map.name}...")
                         from jd2021_installer.parsers.normalizer import normalize
                         map_data = normalize(sub_map)
+                        
+                        # V1 Parity: Persist preview assets in map cache so they remain available after batch extraction is cleared
+                        map_cache = self._config.cache_directory / map_data.codename
+                        map_cache.mkdir(parents=True, exist_ok=True)
+                        if map_data.media.video_path and map_data.media.video_path.exists():
+                            persisted_video = map_cache / map_data.media.video_path.name
+                            if not persisted_video.exists():
+                                shutil.copy2(map_data.media.video_path, persisted_video)
+                            map_data.media.video_path = persisted_video
+                        if map_data.media.audio_path and map_data.media.audio_path.exists():
+                            persisted_audio = map_cache / map_data.media.audio_path.name
+                            if not persisted_audio.exists():
+                                shutil.copy2(map_data.media.audio_path, persisted_audio)
+                            map_data.media.audio_path = persisted_audio
                         
                         self.status.emit(f"[{i+1}/{total}] Installing {map_data.codename}...")
                         self._install_map_synchronously(map_data)
@@ -402,7 +416,7 @@ def install_map_to_game(
         if status_callback: status_callback("Decode Pictograms")
         picto_src = map_data.source_dir / "pictos"
         if picto_src.exists():
-            decode_pictograms(picto_src, map_target / "pictos")
+            decode_pictograms(picto_src, map_target / "Timeline" / "pictos")
 
     # 5. Moves
     if media.moves_dir and media.moves_dir.exists():
