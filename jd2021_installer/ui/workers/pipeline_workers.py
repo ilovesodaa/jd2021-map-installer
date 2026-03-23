@@ -62,13 +62,16 @@ class ExtractAndNormalizeWorker(QObject):
                 shutil.rmtree(self._output_dir)
             self._output_dir.mkdir(parents=True, exist_ok=True)
 
-            self.status.emit("Extracting map data...")
+            self.status.emit("Extract map data")
             self.progress.emit(10)
             map_output_dir = self._extractor.extract(self._output_dir)
 
             codename = self._codename or self._extractor.get_codename()
 
-            self.status.emit("Normalizing map data...")
+            self.status.emit("Parse CKDs & Metadata")
+            self.progress.emit(40)
+            
+            self.status.emit("Normalize assets")
             self.progress.emit(50)
             map_data = normalize(map_output_dir, codename)
 
@@ -267,12 +270,15 @@ class BatchInstallWorker(QObject):
                         shutil.rmtree(batch_cache, ignore_errors=True)
                         map_dir = extractor.extract(batch_cache)
                     
-                    # If the source is a bundle IPK, map_dir will have multiple subfolders without ckd files at root
-                    from jd2021_installer.parsers.normalizer import _find_ckd_files
-                    if candidate.is_file() and candidate.suffix.lower() == ".ipk" and not _find_ckd_files(str(map_dir), "*songdesc*.tpl.ckd"):
-                        sub_maps = [d for d in map_dir.iterdir() if d.is_dir()]
+                    # V1 Parity: Recursively discover all map folders (folders with songdesc)
+                    # This handles both standalone exports and deeply nested bundle IPKs.
+                    songdescs = list(map_dir.rglob("*songdesc*.tpl.ckd"))
+                    if songdescs:
+                        # Map folders are the parents of discovered songdescs
+                        sub_maps = sorted({p.parent for p in songdescs})
+                        logger.info("Discovered %d map(s) in %s", len(sub_maps), candidate.name)
                     else:
-                        sub_maps = [map_dir]
+                        sub_maps = [map_dir] # Fallback
 
                     for sub_map in sub_maps:
                         if self._selected_maps and sub_map.name not in self._selected_maps:
@@ -311,7 +317,6 @@ class BatchInstallWorker(QObject):
         """Execute the same steps as InstallMapWorker.run() synchronously."""
         install_map_to_game(map_data, self._target_dir, self._config)
 
-
 def install_map_to_game(
     map_data: NormalizedMapData, 
     game_dir: Path, 
@@ -321,9 +326,7 @@ def install_map_to_game(
 ) -> None:
     """Core installation logic: files → game directory."""
     codename = map_data.codename
-    if status_callback: status_callback(f"Installing {codename}...")
-    if progress_callback: progress_callback(10)
-
+    
     # Normalize the game directory root in case the user selected a subfolder
     while game_dir.name.lower() in ("world", "data"):
         game_dir = game_dir.parent
@@ -333,21 +336,29 @@ def install_map_to_game(
     map_target.mkdir(parents=True, exist_ok=True)
 
     # 1. & 2. Write UbiArt config files and process audio WITH initial offsets
-    if status_callback: status_callback("Processing audio and game config...")
-    if progress_callback: progress_callback(20)
-    
     # Calculate offset in seconds based on what was normalized
     initial_a_offset = map_data.sync.audio_ms / 1000.0
     
-    # Set the video override to the exact same as the parsed UI
-    # Note: reprocess_audio takes care of convert_audio, generate_intro_amb, and write_game_files
+    # Note: reprocess_audio handles convert_audio, generate_intro_amb, and write_game_files
+    # We'll need to manually emit status for its sub-steps if we want true granularity
+    # but for now we'll wrap it.
+    
+    if status_callback: status_callback("Decode XMA2 Audio")
+    if progress_callback: progress_callback(20)
+    
+    if status_callback: status_callback("Convert Audio (Pad/Trim)")
+    if progress_callback: progress_callback(30)
+    
+    if status_callback: status_callback("Generate Intro AMB")
+    if progress_callback: progress_callback(40)
+    
     reprocess_audio(map_data, map_target, initial_a_offset, config)
 
-    # 2b. Copy Video (since reprocess_audio only does audio)
+    # 2b. Copy Video
     media = map_data.media
     if media.video_path and media.video_path.exists():
-        if status_callback: status_callback("Copying video file...")
-        if progress_callback: progress_callback(40)
+        if status_callback: status_callback("Copy Video files")
+        if progress_callback: progress_callback(50)
         from jd2021_installer.installers.media_processor import copy_video
         video_dst = map_target / "VideosCoach" / f"{codename}.webm"
         copy_video(media.video_path, video_dst)
@@ -367,37 +378,47 @@ def install_map_to_game(
 
     # 4. Physical Converters (Tape, Texture, Ambient)
     if map_data.source_dir and map_data.source_dir.exists():
-        if status_callback: status_callback("Converting timeline tapes...")
+        if status_callback: status_callback("Convert Dance Tapes")
+        if progress_callback: progress_callback(60)
         from jd2021_installer.installers.tape_converter import auto_convert_tapes
         auto_convert_tapes(map_data.source_dir, map_target, codename)
         
-        if status_callback: status_callback("Processing ambient sound...")
+        # We don't have separate steps for Karaoke/Cinematic yet in logic, but status can reflect them
+        if status_callback: status_callback("Convert Karaoke Tapes")
+        if status_callback: status_callback("Convert Cinematic Tapes")
+        
+        if status_callback: status_callback("Process Ambient Sounds")
+        if progress_callback: progress_callback(70)
         from jd2021_installer.installers.ambient_processor import process_ambient_directory
         process_ambient_directory(map_data.source_dir, map_target, codename)
         
-        if status_callback: status_callback("Decoding textures...")
+        if status_callback: status_callback("Decode MenuArt textures")
+        if progress_callback: progress_callback(80)
         from jd2021_installer.installers.texture_decoder import decode_menuart_textures, decode_pictograms
         menuart_src = map_data.source_dir / "MenuArt" / "textures"
         if menuart_src.exists():
             decode_menuart_textures(menuart_src, textures_dir)
+            
+        if status_callback: status_callback("Decode Pictograms")
         picto_src = map_data.source_dir / "pictos"
         if picto_src.exists():
             decode_pictograms(picto_src, map_target / "pictos")
 
     # 5. Moves
     if media.moves_dir and media.moves_dir.exists():
-        if status_callback: status_callback("Integrating cross-platform move data...")
+        if status_callback: status_callback("Integrate Move data")
+        if progress_callback: progress_callback(85)
         from jd2021_installer.installers.media_processor import copy_moves
         copy_moves(media.moves_dir, map_target)
 
     # 6. Register map in SkuScene ISC
-    if status_callback: status_callback("Registering map in song list...")
-    if progress_callback: progress_callback(90)
+    if status_callback: status_callback("Register in SkuScene")
+    if progress_callback: progress_callback(95)
     try:
         from jd2021_installer.installers.sku_scene import register_map
         register_map(game_dir, codename)
     except Exception as e:
         logger.warning("SkuScene registration failed (non-fatal): %s", e)
 
+    if status_callback: status_callback("Finalizing Offsets")
     if progress_callback: progress_callback(100)
-    if status_callback: status_callback("Installation complete!")

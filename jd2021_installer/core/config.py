@@ -38,7 +38,7 @@ class AppConfig(BaseModel):
     download_timeout_s: int = 600
     max_retries: int = 3
     retry_base_delay_s: int = 2
-    inter_request_delay_s: float = 0.5
+    inter_request_delay_s: float = 1.5
     user_agent: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "

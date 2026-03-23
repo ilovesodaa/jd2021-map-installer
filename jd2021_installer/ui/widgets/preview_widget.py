@@ -370,7 +370,7 @@ class PreviewWidget(QWidget):
         aud_seek += start_time
 
         vf_chain = (
-            f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+            f"scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos,"
             f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black"
         )
 
@@ -428,12 +428,19 @@ class PreviewWidget(QWidget):
         self.preview_started.emit()
 
     def stop(self) -> None:
-        """Stop any running preview subprocess."""
+        """Stop any running preview subprocess safely."""
         if self._worker is not None:
             self._worker.request_stop()
-        if self._thread is not None and self._thread.isRunning():
-            self._thread.quit()
-            self._thread.wait(3000)
+        
+        # Guard against RuntimeError if the C++ object was already deleted
+        if self._thread is not None:
+            try:
+                if self._thread.isRunning():
+                    self._thread.quit()
+                    self._thread.wait(3000)
+            except RuntimeError:
+                logger.debug("Preview thread already deleted.")
+
         self._worker = None
         self._thread = None
 

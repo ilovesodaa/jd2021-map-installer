@@ -50,11 +50,12 @@ def load_ckd(file_path: str | Path) -> dict | object:
 
     raw = path.read_bytes()
 
-    # Try JSON first (strip null padding)
-    cleaned = raw.replace(b"\x00", b"").strip()
+    # Try JSON first (strip null padding/garbage)
     try:
-        return json.loads(cleaned.decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError):
+        content = raw.decode("utf-8", errors="ignore").strip().replace("\x00", "")
+        # Handle cases where there is extra data after the JSON object
+        return json.JSONDecoder().raw_decode(content)[0]
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
         pass
 
     # Fall back to binary parser
@@ -81,10 +82,11 @@ def _filter_by_codename(
     cn_lower = codename.lower()
     filtered = []
     for p in paths:
+        # Normalize relative path for easier matching
         rel = (os.path.relpath(p, base_dir) if base_dir else p).replace("\\", "/").lower()
         parts = rel.split("/")
-        # Match if codename is a path component OR appears in the filename
-        if cn_lower in parts or cn_lower in os.path.basename(p).lower():
+        # Match if codename is ANY component of the path OR appears in the filename
+        if any(cn_lower in part for part in parts) or cn_lower in os.path.basename(p).lower():
             filtered.append(p)
     return filtered
 

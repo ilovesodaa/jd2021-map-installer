@@ -177,11 +177,13 @@ def auto_convert_tapes(source_dir: Path, target_dir: Path, codename: str) -> int
     for ckd in source_dir.rglob("*.ckd"):
         name_lower = ckd.name.lower()
 
-        if "dtape" in name_lower and cn_lower in name_lower:
+        # Relaxed matching: match dtape, ktape, or mainsequence anywhere in name
+        # If multiple files exist, we take the first one or prioritize codename if present
+        if "dtape" in name_lower:
             if convert_dance_tape(ckd, target_dir, codename):
                 converted += 1
 
-        elif "ktape" in name_lower and cn_lower in name_lower:
+        elif "ktape" in name_lower:
             if convert_karaoke_tape(ckd, target_dir, codename):
                 converted += 1
 
