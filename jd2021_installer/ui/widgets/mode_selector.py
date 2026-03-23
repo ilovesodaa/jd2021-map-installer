@@ -14,6 +14,9 @@ Each mode shows a tailored input area via a ``QStackedWidget``.
 from __future__ import annotations
 
 import logging
+import os
+import re
+from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import pyqtSignal

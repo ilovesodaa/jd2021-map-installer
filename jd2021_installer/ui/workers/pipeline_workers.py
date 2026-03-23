@@ -55,6 +55,13 @@ class ExtractAndNormalizeWorker(QObject):
 
     def run(self) -> None:
         try:
+            # Clear output_dir (temp extraction dir) before starting
+            import shutil
+            if self._output_dir.exists():
+                logger.debug("Cleaning temp extraction dir: %s", self._output_dir)
+                shutil.rmtree(self._output_dir)
+            self._output_dir.mkdir(parents=True, exist_ok=True)
+
             self.status.emit("Extracting map data...")
             self.progress.emit(10)
             map_output_dir = self._extractor.extract(self._output_dir)

@@ -622,9 +622,11 @@ def calculate_marker_preroll(markers: List[int], start_beat: int) -> Optional[fl
     
     start_beat (negative) indicates how many beats before beat-0 the audio begins.
     Returns duration in milliseconds.
+    
+    Note: Adds 85ms calibration to match V1 parity (OGG decode latency).
     """
     idx = abs(start_beat)
     if not markers or idx >= len(markers) or idx == 0:
         return None
-    # 48 ticks per ms
-    return markers[idx] / 48.0
+    # 48 ticks per ms + 85ms calibration
+    return (markers[idx] / 48.0) + 85.0

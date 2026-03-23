@@ -458,7 +458,7 @@ class MainWindow(QMainWindow):
         # Create worker + thread
         worker = ExtractAndNormalizeWorker(
             extractor=extractor,
-            output_dir=self._config.cache_directory,
+            output_dir=self._config.temp_directory / "_extraction",
         )
         thread = QThread()
         worker.moveToThread(thread)
@@ -586,6 +586,10 @@ class MainWindow(QMainWindow):
             self._sync_refinement.set_nav_visible(False)
             
         # Preview the first map
+        self._sync_refinement.set_offsets(
+            self._current_map.sync.audio_ms,
+            self._current_map.sync.video_ms
+        )
         self._on_preview_toggle(True)
 
     def _on_nav_requested(self, direction: int) -> None:
@@ -604,6 +608,12 @@ class MainWindow(QMainWindow):
             # Update UI
             self._sync_refinement.set_nav_visible(True, f"Map {new_index + 1} / {len(self._nav_maps)}")
             self.append_log(f"Switched to: {self._current_map.codename}")
+            
+            # Update UI offsets
+            self._sync_refinement.set_offsets(
+                self._current_map.sync.audio_ms,
+                self._current_map.sync.video_ms
+            )
             
             # Start preview for the new map
             self._on_preview_toggle(True)

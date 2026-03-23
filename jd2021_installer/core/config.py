@@ -16,8 +16,9 @@ class AppConfig(BaseModel):
 
     # Paths
     game_directory: Optional[Path] = None
-    download_directory: Path = Path("./downloads")
+    download_root: Path = Path("./mapDownloads")
     cache_directory: Path = Path("./cache")
+    temp_directory: Path = Path("./temp")
 
     # Video quality preference (descending fallback)
     video_quality: str = Field(
