@@ -99,7 +99,18 @@ def _find_ckd_files(
     If no results are found with codename filtering, falls back to
     searching without the codename filter (handles deeply nested ZIPs).
     """
-    paths = glob.glob(os.path.join(directory, "**", pattern), recursive=True)
+    from pathlib import Path
+    base_path = Path(directory)
+    # Using Path.rglob is often more robust than glob.glob with ** on some systems
+    paths = [str(p) for p in base_path.rglob(pattern)]
+    
+    if not paths and "musictrack" in pattern:
+        # Extra fallback for musictrack variations
+        alt_patterns = ["*TM_MusicTrack*.ckd", "*musictrack*.ckd", "*MusicTrack*.ckd"]
+        for alt in alt_patterns:
+            paths = [str(p) for p in base_path.rglob(alt)]
+            if paths: break
+
     filtered = _filter_by_codename(paths, codename, directory)
     result = _prefer_non_legacy(filtered)
 
@@ -137,7 +148,7 @@ def _extract_music_track(
     try:
         from jd2021_installer.core.models import MusicSection, MusicSignature
         s = data["COMPONENTS"][0]["trackData"]["structure"]
-        return MusicTrackStructure(
+        res = MusicTrackStructure(
             markers=s["markers"],
             signatures=[
                 MusicSignature(beats=sig["beats"], marker=sig["marker"])
@@ -159,6 +170,16 @@ def _extract_music_track(
             fade_out_duration=float(s.get("fadeOutDuration", 0)),
             fade_out_type=int(s.get("fadeOutType", 0)),
         )
+
+        # V1/V2 unit parity & safety: if videoStartTime is 0 but startBeat is negative, 
+        # it's likely a binary CKD that needs synthesis from markers.
+        if res.video_start_time == 0.0 and res.start_beat < 0:
+            idx = abs(res.start_beat)
+            if 0 <= idx < len(res.markers):
+                vst = -(res.markers[idx] / 48.0 / 1000.0)
+                logger.info("Synthesized video_start_time from markers: %.3f s", vst)
+                res.video_start_time = vst
+        return res
     except (KeyError, IndexError, TypeError) as exc:
         raise NormalizationError(f"Invalid musictrack JSON: {exc}") from exc
 

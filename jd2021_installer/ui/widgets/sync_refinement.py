@@ -41,6 +41,7 @@ class SyncRefinementWidget(QWidget):
     preview_requested = pyqtSignal(bool)      # True = start, False = stop
     apply_requested = pyqtSignal(float)       # combined offset to apply
     pad_audio_requested = pyqtSignal()
+    nav_requested = pyqtSignal(int)          # -1 = prev, 1 = next
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -66,7 +67,7 @@ class SyncRefinementWidget(QWidget):
         offsets_row.addWidget(QLabel("Audio Offset (ms):"))
         self._audio_spin = QDoubleSpinBox()
         self._audio_spin.setRange(-5000.0, 5000.0)
-        self._audio_spin.setSingleStep(10.0)
+        self._audio_spin.setSingleStep(1.0)
         self._audio_spin.setDecimals(1)
         self._audio_spin.setValue(0.0)
         self._audio_spin.setToolTip("Shift audio timing (negative = earlier)")
@@ -78,7 +79,7 @@ class SyncRefinementWidget(QWidget):
         offsets_row.addWidget(QLabel("Video Offset (ms):"))
         self._video_spin = QDoubleSpinBox()
         self._video_spin.setRange(-5000.0, 5000.0)
-        self._video_spin.setSingleStep(10.0)
+        self._video_spin.setSingleStep(1.0)
         self._video_spin.setDecimals(1)
         self._video_spin.setValue(0.0)
         self._video_spin.setToolTip("Shift video timing (negative = earlier)")
@@ -118,6 +119,11 @@ class SyncRefinementWidget(QWidget):
         self._btn_pad.clicked.connect(self.pad_audio_requested.emit)
         preview_row.addWidget(self._btn_pad)
 
+        self._btn_sync_beatgrid = QPushButton("Sync Beatgrid")
+        self._btn_sync_beatgrid.setToolTip("Copy video offset to audio offset (1:1 align)")
+        self._btn_sync_beatgrid.clicked.connect(self._on_sync_beatgrid)
+        preview_row.addWidget(self._btn_sync_beatgrid)
+
         self._btn_apply = QPushButton("✔  Apply Offset")
         self._btn_apply.setObjectName("btn_apply_offset")
         self._btn_apply.setToolTip("Commit the combined offset to the current map data")
@@ -135,6 +141,27 @@ class SyncRefinementWidget(QWidget):
         self._preview_frame.setStyleSheet("background-color: #111; border-radius: 4px;")
         group_layout.addWidget(self._preview_frame)
 
+        # -- Navigation row (multi-map) --------------------------------------
+        self._nav_group = QWidget()
+        nav_layout = QHBoxLayout(self._nav_group)
+        nav_layout.setContentsMargins(0, 4, 0, 0)
+        
+        self._btn_prev = QPushButton("< Prev Map")
+        self._btn_prev.clicked.connect(lambda: self.nav_requested.emit(-1))
+        nav_layout.addWidget(self._btn_prev)
+
+        self._nav_label = QLabel("Map 1 / 1")
+        self._nav_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._nav_label.setStyleSheet("font-weight: bold;")
+        nav_layout.addWidget(self._nav_label, 1)
+
+        self._btn_next = QPushButton("Next Map >")
+        self._btn_next.clicked.connect(lambda: self.nav_requested.emit(1))
+        nav_layout.addWidget(self._btn_next)
+
+        self._nav_group.setVisible(False)
+        group_layout.addWidget(self._nav_group)
+
     # ------------------------------------------------------------------
     # Internal wiring
     # ------------------------------------------------------------------
@@ -147,6 +174,17 @@ class SyncRefinementWidget(QWidget):
         combined = self._audio_spin.value() + self._video_spin.value()
         self._combined_display.setText(f"{combined:+.1f} ms")
         self.offset_changed.emit(combined)
+
+    def _on_sync_beatgrid(self) -> None:
+        """Copies video offset to audio offset."""
+        self._audio_spin.setValue(self._video_spin.value())
+        # setValue will trigger valueChanged, which calls _update_combined
+
+    def set_nav_visible(self, visible: bool, label_text: str = "") -> None:
+        """Toggle multi-map navigation visibility."""
+        self._nav_group.setVisible(visible)
+        if label_text:
+            self._nav_label.setText(label_text)
 
     def _on_preview_toggled(self, checked: bool) -> None:
         self._btn_preview.setText("⏹  Stop" if checked else "▶  Preview")

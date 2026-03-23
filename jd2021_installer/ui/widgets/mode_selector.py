@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -287,6 +288,15 @@ class ModeSelectorWidget(QWidget):
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 4, 0, 0)
+        
+        # Add scroll area since there are many fields
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        
+        scroll_content = QWidget()
+        scroll_lay = QVBoxLayout(scroll_content)
+        scroll_lay.setContentsMargins(0, 0, 0, 0)
 
         # Top generic entries
         top_lay = QGridLayout()
@@ -302,7 +312,7 @@ class ModeSelectorWidget(QWidget):
         inp_code = QLineEdit()
         top_lay.addWidget(inp_code, 1, 1)
 
-        lay.addLayout(top_lay)
+        scroll_lay.addLayout(top_lay)
 
         # Required Files Group
         grp_req = QGroupBox("Required Files")
@@ -315,7 +325,7 @@ class ModeSelectorWidget(QWidget):
         lay_req.addWidget(row_audio)
         lay_req.addWidget(row_video)
         lay_req.addWidget(row_mtrack)
-        lay.addWidget(grp_req)
+        scroll_lay.addWidget(grp_req)
 
         # Optional Tapes Group
         grp_tapes = QGroupBox("Tapes & Config")
@@ -330,7 +340,7 @@ class ModeSelectorWidget(QWidget):
         lay_tapes.addWidget(row_dtape)
         lay_tapes.addWidget(row_ktape)
         lay_tapes.addWidget(row_mseq)
-        lay.addWidget(grp_tapes)
+        scroll_lay.addWidget(grp_tapes)
 
         # Optional Assets Group
         grp_assets = QGroupBox("Asset Folders")
@@ -345,7 +355,13 @@ class ModeSelectorWidget(QWidget):
         lay_assets.addWidget(row_pictos)
         lay_assets.addWidget(row_menuart)
         lay_assets.addWidget(row_amb)
-        lay.addWidget(grp_assets)
+        scroll_lay.addWidget(grp_assets)
+        
+        # Add stretch so fields pack tightly at the top
+        scroll_lay.addStretch()
+        
+        scroll.setWidget(scroll_content)
+        lay.addWidget(scroll)
         
         self.inputs["manual"].update({
             "root": root_row.line_edit,

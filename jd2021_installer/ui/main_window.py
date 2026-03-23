@@ -87,6 +87,10 @@ class MainWindow(QMainWindow):
         self._active_worker: Optional[object] = None
         self._file_logger_handler: Optional[logging.Handler] = None
 
+        # Phase 4: Multi-map navigation
+        self._nav_maps: list[NormalizedMapData] = []
+        self._nav_index: int = 0
+
         # -- Window setup -----------------------------------------------------
         self.setWindowTitle("JD2021 Map Installer v2")
         self.setMinimumSize(1060, 800)
@@ -97,6 +101,10 @@ class MainWindow(QMainWindow):
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
         self._status_bar.showMessage("Ready")
+
+        # Show Quickstart Guide if needed
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(500, self._show_quickstart_if_needed)
 
     # ==================================================================
     # SETTINGS PERSISTENCE
@@ -125,6 +133,16 @@ class MainWindow(QMainWindow):
                 json.dump(data, f, indent=4)
         except Exception as e:
             logger.error("Failed to save settings: %s", e)
+
+    def _show_quickstart_if_needed(self) -> None:
+        # Check config (we'll need to add a flag to AppConfig or settings)
+        # For now, let's just check if a certain file exists or dummy logic
+        if not getattr(self._config, "skip_quickstart", False):
+            from jd2021_installer.ui.widgets.quickstart_dialog import QuickstartDialog
+            dont_show_again = QuickstartDialog.show_guide(self)
+            if dont_show_again:
+                self._config.skip_quickstart = True
+                self._save_settings()
 
     # ==================================================================
     # UI COMPOSITION  (Phase 3)
@@ -210,6 +228,7 @@ class MainWindow(QMainWindow):
         self._sync_refinement.apply_requested.connect(self._on_apply_offset)
         self._sync_refinement.offset_changed.connect(self._on_offset_spin_changed)
         self._sync_refinement.pad_audio_requested.connect(self._on_pad_audio)
+        self._sync_refinement.nav_requested.connect(self._on_nav_requested)
 
     # ==================================================================
     # SLOT IMPLEMENTATIONS
@@ -436,8 +455,28 @@ class MainWindow(QMainWindow):
             "Install to game directory", StepStatus.IN_PROGRESS
         )
 
+        # Check metadata for non-ASCII characters
+        self._check_metadata(map_data)
+        
         # Start install worker
         self._start_install_worker(map_data)
+
+    def _check_metadata(self, map_data: NormalizedMapData) -> None:
+        """Verify song metadata fields and prompt for correction if non-ASCII found."""
+        fields_to_check = {
+            "title": map_data.song_desc.title,
+            "artist": map_data.song_desc.artist,
+            "dancer_name": map_data.song_desc.dancer_name,
+        }
+        
+        from jd2021_installer.ui.widgets.metadata_dialog import MetadataCorrectionDialog
+        
+        for field, value in fields_to_check.items():
+            if any(ord(c) > 127 for c in value):
+                corrected = MetadataCorrectionDialog.get_corrected_value(field, value, self)
+                if field == "title": map_data.song_desc.title = corrected
+                elif field == "artist": map_data.song_desc.artist = corrected
+                elif field == "dancer_name": map_data.song_desc.dancer_name = corrected
 
     def _start_install_worker(self, map_data: NormalizedMapData) -> None:
         worker = InstallMapWorker(
@@ -476,8 +515,58 @@ class MainWindow(QMainWindow):
         if success:
             self._set_status("Installation complete!")
             self.append_log("✅  Map installed successfully!")
+            
+            # If we don't have a nav list yet (single install), set current as the only one
+            if not self._nav_maps and self._current_map:
+                self._nav_maps = [self._current_map]
+                self._nav_index = 0
+                self._sync_refinement.set_nav_visible(False)
+            
+            # Start preview for the current map
+            if self._current_map:
+                self._on_preview_toggle(True)
+
         self._lock_ui(False)
         self._stop_file_logging()
+
+    def _on_batch_finished_with_data(self, installed_maps: list[NormalizedMapData]) -> None:
+        """Called when a batch install completes with a list of map data."""
+        if not installed_maps:
+            return
+        
+        self._nav_maps = installed_maps
+        self._nav_index = 0
+        self._current_map = self._nav_maps[0]
+        
+        # Show nav controls if multiple maps
+        if len(self._nav_maps) > 1:
+            self._sync_refinement.set_nav_visible(True, f"Map 1 / {len(self._nav_maps)}")
+            self.append_log(f"Multi-map review: {len(self._nav_maps)} maps ready for offset adjustment.")
+        else:
+            self._sync_refinement.set_nav_visible(False)
+            
+        # Preview the first map
+        self._on_preview_toggle(True)
+
+    def _on_nav_requested(self, direction: int) -> None:
+        """Switch between maps in a batch/bundle review."""
+        if not self._nav_maps:
+            return
+            
+        new_index = self._nav_index + direction
+        if 0 <= new_index < len(self._nav_maps):
+            # Stop current preview
+            self._on_preview_toggle(False)
+            
+            self._nav_index = new_index
+            self._current_map = self._nav_maps[self._nav_index]
+            
+            # Update UI
+            self._sync_refinement.set_nav_visible(True, f"Map {new_index + 1} / {len(self._nav_maps)}")
+            self.append_log(f"Switched to: {self._current_map.codename}")
+            
+            # Start preview for the new map
+            self._on_preview_toggle(True)
 
     # ==================================================================
     # SYNC REFINEMENT / PREVIEW
@@ -554,6 +643,8 @@ class MainWindow(QMainWindow):
         # V2 native behavior: We modify the video_start_time_override directly.
         # This replaces V1's ffmpeg hard-padding logic, relying strictly on UbiArt configuration.
         # Note: offset_ms is in milliseconds; video_start_time is in seconds.
+        # Phase 4.8: Ensure ticks_per_ms parity? 
+        # Actually V2 tracks seconds. 1 ms = 0.001s.
         original = self._current_map.music_track.video_start_time
         self._current_map.video_start_time_override = original + (offset_ms / 1000.0)
 
@@ -585,6 +676,47 @@ class MainWindow(QMainWindow):
                 f"Offset applied & Map updated — effective start: "
                 f"{self._current_map.effective_video_start_time:.2f} ms"
             )
+            # Phase 4.5: Prompt for cleanup
+            self._prompt_cleanup()
+
+    def _prompt_cleanup(self) -> None:
+        """Ask user whether to delete downloaded source files after apply."""
+        if not self._current_map:
+            return
+            
+        # In batch mode, we probably don't want to prompt for EVERY map.
+        # Maybe just once at the end? Or follow V1's "Cleanup Behavior" setting.
+        # For now, let's just ask if it's a single map or at the end of nav.
+        if len(self._nav_maps) > 1 and self._nav_index < len(self._nav_maps) - 1:
+            return # Don't prompt yet
+            
+        reply = QMessageBox.question(
+            self,
+            "Cleanup Source Files?",
+            "The installation and sync are complete.\n\n"
+            "Would you like to delete the temporary downloaded/extracted source files to save space?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.append_log("Cleaning up source files...")
+            try:
+                # 1. Clean up _extraction cache
+                cache_dir = self._config.cache_directory / "_extraction"
+                if cache_dir.exists():
+                    import shutil
+                    shutil.rmtree(cache_dir, ignore_errors=True)
+                
+                # 2. Clean up _batch_temp if it exists
+                batch_temp = self._config.cache_directory / "_batch_temp"
+                if batch_temp.exists():
+                    import shutil
+                    shutil.rmtree(batch_temp, ignore_errors=True)
+                
+                self.append_log("✅  Source files cleaned up.")
+            except Exception as e:
+                self.append_log(f"Warning: Cleanup failed ({e})")
 
     # ==================================================================
     # HELPERS
@@ -706,6 +838,7 @@ class MainWindow(QMainWindow):
         
         # Share the error and success callbacks so the UI gets unlocked
         worker.error.connect(self._on_install_error)
+        worker.finished_with_data.connect(self._on_batch_finished_with_data)
         worker.finished.connect(self._on_install_finished)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
