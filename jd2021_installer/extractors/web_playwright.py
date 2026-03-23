@@ -503,19 +503,24 @@ async def _fetch_command_with_retry(
             logger.info("Retrying %s (attempt %d/%d)...", label, attempt + 1, max_retries + 1)
             await page.wait_for_timeout(3000)
 
-        pre_id = await _get_last_accessory_id(page)
-        await _send_slash_command(page, command=command, choices=choices, codename=codename)
-        embed_id = await _wait_for_new_embed(page, pre_id, timeout_s=bot_timeout_s)
-        html = await _extract_embed_html(page, embed_id)
+        try:
+            pre_id = await _get_last_accessory_id(page)
+            await _send_slash_command(page, command=command, choices=choices, codename=codename)
+            embed_id = await _wait_for_new_embed(page, pre_id, timeout_s=bot_timeout_s)
+            html = await _extract_embed_html(page, embed_id)
 
-        if _has_valid_cdn_links(html):
-            logger.info("Extracted %s embed HTML.", label)
-            return html
+            if _has_valid_cdn_links(html):
+                logger.info("Extracted %s embed HTML.", label)
+                return html
 
-        logger.warning(
-            "%s response has no valid CDN links (bot may have returned an error).",
-            label,
-        )
+            logger.warning(
+                "%s response has no valid CDN links (bot may have returned an error).",
+                label,
+            )
+        except WebExtractionError as e:
+            if attempt == max_retries:
+                raise
+            logger.warning("%s attempt %d failed: %s", label, attempt + 1, e)
 
     raise WebExtractionError(
         f"{label} response contained no valid download links after "

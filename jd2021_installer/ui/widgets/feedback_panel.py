@@ -67,27 +67,12 @@ class ProgressLogWidget(QWidget):
         section_label.setStyleSheet("font-weight: bold;")
         root.addWidget(section_label)
 
-        # Vertical splitter: checklist (top) + log (bottom)
-        self._splitter = QSplitter(Qt.Orientation.Vertical)
-        root.addWidget(self._splitter)
-
         # -- Checklist -------------------------------------------------------
         self._checklist = QListWidget()
         self._checklist.setAlternatingRowColors(True)
         self._checklist.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         self._checklist.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._splitter.addWidget(self._checklist)
-
-        # -- Log output ------------------------------------------------------
-        self._log_output = QPlainTextEdit()
-        self._log_output.setReadOnly(True)
-        self._log_output.setPlaceholderText("Log output will appear here…")
-        log_font = QFont("Consolas", 9)
-        log_font.setStyleHint(QFont.StyleHint.Monospace)
-        self._log_output.setFont(log_font)
-        self._splitter.addWidget(self._log_output)
-
-        self._splitter.setSizes([180, 280])
+        root.addWidget(self._checklist)
 
         # -- Progress bar ----------------------------------------------------
         self._progress = QProgressBar()
@@ -139,25 +124,13 @@ class ProgressLogWidget(QWidget):
         """Reset the progress bar to zero."""
         self._progress.setValue(0)
 
-    # ------------------------------------------------------------------
-    # Log API
-    # ------------------------------------------------------------------
-
-    def append_log(self, text: str) -> None:
-        """Append a line to the log pane and auto-scroll."""
-        self._log_output.appendPlainText(text)
-
-    def clear_log(self) -> None:
-        """Clear all log output."""
-        self._log_output.clear()
 
     # ------------------------------------------------------------------
     # Combined reset
     # ------------------------------------------------------------------
 
     def reset(self) -> None:
-        """Clear checklist, progress bar, and log."""
+        """Clear checklist and progress bar."""
         self._checklist.clear()
         self._step_items.clear()
         self._progress.setValue(0)
-        self._log_output.clear()
