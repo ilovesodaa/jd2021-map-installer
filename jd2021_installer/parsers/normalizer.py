@@ -322,14 +322,14 @@ def _discover_media(directory: str, codename: Optional[str] = None) -> MapMedia:
                     )
 
     # Cover images
-    for ext in ("*.jpg", "*.png", "*.tga"):
+    for ext in ("*.jpg", "*.png", "*.tga", "*.tga.ckd", "*.jpg.ckd", "*.png.ckd"):
         covers = [f for f in dir_path.rglob(ext) if "cover" in f.name.lower()]
         if covers:
             media.cover_path = covers[0]
             break
 
     # Coach images
-    for ext in ("*.png", "*.tga"):
+    for ext in ("*.png", "*.tga", "*.png.ckd", "*.tga.ckd"):
         coaches = sorted(
             f for f in dir_path.rglob(ext) if "coach_" in f.name.lower()
         )
@@ -395,8 +395,11 @@ def normalize(
     
     # If the map source is IPK, the audio and video are pre-synced.
     # We detect it by checking the directory structure or audio format.
+    # CRITICAL: Fetch/HTML maps also contain an IPK, so we MUST exclude them if .html exists.
     dir_path = Path(directory)
-    is_ipk = (
+    is_html_source = any(dir_path.glob("*.html"))
+    
+    is_ipk = not is_html_source and (
         (dir_path / "world").exists() or 
         (dir_path / "World").exists() or 
         any(dir_path.rglob("*.wav.ckd")) or
@@ -406,6 +409,14 @@ def normalize(
     if is_ipk:
         audio_ms = 0.0
         logger.info("IPK map detected: forcing audio_offset to 0.0 ms")
+        
+        # V1 Parity: If videoStartTime is 0.0, it might be a missing value.
+        # Use markers to calculate a reasonable video offset if available.
+        if video_ms == 0.0:
+            preroll = calculate_marker_preroll(music_track.markers, music_track.start_beat)
+            if preroll is not None:
+                video_ms = preroll
+                logger.info("IPK map (missing videoStartTime): marker-based video_offset=%.3f ms", video_ms)
     else:
         preroll = calculate_marker_preroll(music_track.markers, music_track.start_beat)
         if preroll is not None:

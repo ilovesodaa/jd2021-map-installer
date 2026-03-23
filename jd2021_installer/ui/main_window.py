@@ -840,8 +840,8 @@ class MainWindow(QMainWindow):
         worker.moveToThread(thread)
 
         thread.started.connect(worker.run)
-        worker.status.connect(self.append_log)
-        worker.error.connect(lambda msg: self.append_log(f"ERROR: {msg}"))
+        worker.status.connect(self._on_status_updated)
+        worker.error.connect(self._on_install_error)
         worker.finished.connect(self._on_reprocess_finished)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
