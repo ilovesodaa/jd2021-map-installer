@@ -330,7 +330,7 @@ class PreviewWidget(QWidget):
         Args:
             video_path:  Absolute path to the ``.webm`` video file.
             audio_path:  Absolute path to the ``.ogg`` audio file.
-            v_override:  Video start-time override (ticks, negative = intro).
+            v_override:  Video start-time override (seconds, negative = intro).
             a_offset:    Audio offset in seconds.
             start_time:  Seek position in seconds to start from.
         """
