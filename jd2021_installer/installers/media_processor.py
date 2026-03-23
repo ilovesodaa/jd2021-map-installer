@@ -480,12 +480,72 @@ def generate_cover_tga(
 VGMSTREAM_DEFAULT_PATH = Path("tools/vgmstream/vgmstream-cli.exe")
 
 
-def is_xma2_audio(file_path: str | Path) -> bool:
-    """Quick check: does this look like an Xbox 360 .wav.ckd (XMA2) file?
+# Ported from V1: _extract_ckd_audio
+CKD_HEADER_SIZE = 44
 
-    Matches filenames like ``music.wav.ckd`` which contain XMA2-encoded
-    audio payloads (as opposed to ``.ogg`` or standard ``.wav``).
+def extract_ckd_audio_v1(ckd_path: str | Path, output_dir: str | Path) -> Optional[str]:
+    """Strip the 44-byte CKD header from a cooked audio file and write raw audio.
+    
+    Ported from V1 source_analysis.py.
+    For standard OGG/WAV payloads the header is simply stripped.
+    For X360 proprietary formats (XMA etc.) vgmstream is used to decode to WAV.
     """
+    ckd_path = Path(ckd_path)
+    output_dir = Path(output_dir)
+    
+    try:
+        data = ckd_path.read_bytes()
+    except OSError:
+        return None
+
+    if len(data) <= CKD_HEADER_SIZE:
+        return None
+
+    payload = data[CKD_HEADER_SIZE:]
+    ext = None
+
+    if payload[:4] == b"OggS":
+        ext = ".ogg"
+    elif payload[:4] == b"RIFF":
+        ext = ".wav"
+    else:
+        # CKD header may be larger than 44 bytes — scan for magic bytes
+        riff_offset = data.find(b"RIFF", 0, 512)
+        ogg_offset = data.find(b"OggS", 0, 512)
+        if riff_offset >= 0 and (ogg_offset < 0 or riff_offset <= ogg_offset):
+            payload = data[riff_offset:]
+            ext = ".wav"
+        elif ogg_offset >= 0:
+            payload = data[ogg_offset:]
+            ext = ".ogg"
+        else:
+            # Proprietary format (XMA, etc.) -- use the existing decode_xma2_audio wrapper
+            base = ckd_path.stem
+            if base.lower().endswith(".wav") or base.lower().endswith(".ogg"):
+                base = base[:-4]
+            out_path = output_dir / (base + "_decoded.wav")
+            
+            try:
+                # Use V2's decode_xma2_audio which uses vgmstream
+                return str(decode_xma2_audio(ckd_path, out_path))
+            except Exception as e:
+                logger.warning("vgmstream fallback failed for %s: %s", ckd_path.name, e)
+                return None
+
+    # Standard OGG/WAV payload found
+    output_dir.mkdir(parents=True, exist_ok=True)
+    base = ckd_path.stem
+    if base.lower().endswith(".wav") or base.lower().endswith(".ogg"):
+        base = base[:-4]
+    out_path = output_dir / (base + ext)
+
+    out_path.write_bytes(payload)
+    logger.info("Extracted %s payload from CKD: %s", ext.upper()[1:], out_path.name)
+    return str(out_path)
+
+
+def is_xma2_audio(file_path: str | Path) -> bool:
+    """Quick check: does this look like an Xbox 360 .wav.ckd (XMA2) file?"""
     name = Path(file_path).name.lower()
     return name.endswith(".wav.ckd")
 
@@ -496,25 +556,7 @@ def decode_xma2_audio(
     vgmstream_path: Optional[str | Path] = None,
     timeout: int = 120,
 ) -> Path:
-    """Decode an Xbox 360 XMA2 audio file to WAV using vgmstream-cli.
-
-    This wraps ``vgmstream-cli.exe -o <output> <input>`` in a blocking
-    ``subprocess.run`` call.  Because it is designed to be invoked from
-    the normalizer pipeline (which already runs inside a QThread), the
-    blocking call will **not** freeze the GUI.
-
-    Args:
-        input_ckd:      Path to the ``.wav.ckd`` input file.
-        output_wav:     Path where the decoded ``.wav`` will be written.
-        vgmstream_path: Override path to vgmstream-cli.exe.
-        timeout:        Maximum seconds before the process is killed.
-
-    Returns:
-        The resolved ``output_wav`` Path on success.
-
-    Raises:
-        MediaProcessingError: If the binary is missing or decoding fails.
-    """
+    """Decode an Xbox 360 XMA2 audio file to WAV using vgmstream-cli."""
     input_ckd = Path(input_ckd)
     output_wav = Path(output_wav)
     output_wav.parent.mkdir(parents=True, exist_ok=True)

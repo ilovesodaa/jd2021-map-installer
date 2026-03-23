@@ -343,8 +343,8 @@ class PreviewWidget(QWidget):
         self._v_override = v_override
         self._a_offset = a_offset
 
-        # Kill previous
-        self.stop()
+        # Kill previous, but keep position if we are just restarting/seeking
+        self.stop(reset_position=(start_time == 0.0))
 
         # Probe duration (best effort)
         if start_time == 0.0:
@@ -427,8 +427,12 @@ class PreviewWidget(QWidget):
         thread.start()
         self.preview_started.emit()
 
-    def stop(self) -> None:
-        """Stop any running preview subprocess safely and reset to black."""
+    def stop(self, reset_position: bool = True) -> None:
+        """Stop any running preview subprocess safely.
+        
+        Args:
+            reset_position: If True, sets _position back to 0.0 and clears labels.
+        """
         if self._worker is not None:
             self._worker.request_stop()
         
@@ -443,9 +447,10 @@ class PreviewWidget(QWidget):
 
         self._worker = None
         self._thread = None
-        self._position = 0.0
-        self._lbl_time.setText("0:00")
-        self._seek_slider.setValue(0)
+        if reset_position:
+            self._position = 0.0
+            self._lbl_time.setText("0:00")
+            self._seek_slider.setValue(0)
         
         # Reset canvas to black ("No Preview" state)
         self._canvas.clear()

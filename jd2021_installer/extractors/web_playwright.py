@@ -764,7 +764,9 @@ class WebPlaywrightExtractor(BaseExtractor):
                 )
 
                 # Save HTML to output dir for caching / debugging
-                output_dir = self._config.cache_directory / codename
+                # Save HTML to download dir for caching / debugging / portability
+                # We use download_root which is 'mapDownloads'
+                output_dir = self._config.download_root / codename
                 output_dir.mkdir(parents=True, exist_ok=True)
                 (output_dir / "assets.html").write_text(assets_html, encoding="utf-8")
                 (output_dir / "nohud.html").write_text(nohud_html, encoding="utf-8")

@@ -288,38 +288,123 @@ def _discover_media(directory: str, codename: Optional[str] = None) -> MapMedia:
         if preview_videos:
             media.map_preview_video = preview_videos[0]
 
-    # Audio files
-    ogg_files = [f for f in dir_path.rglob("*.ogg") if "audiopreview" not in f.name.lower()]
-    if ogg_files:
-        # Prioritize audio/ over autodance/ to avoid using the low-quality autodance audio
-        audio_folder_oggs = [f for f in ogg_files if "/audio/" in f.as_posix().lower()]
-        if audio_folder_oggs:
-            media.audio_path = audio_folder_oggs[0]
+    # Ported from V1: _pick_audio
+    # 1. Try exact codename match at top level (.ogg then .wav)
+    if codename:
+        for ext in (".ogg", ".wav"):
+            candidate = dir_path / f"{codename}{ext}"
+            if candidate.is_file():
+                media.audio_path = candidate
+                logger.info("Selected audio (exact match): %s", candidate.name)
+                return media
+
+    # 2. Glob for any .ogg at top level (excluding previews)
+    oggs = [
+        f for f in dir_path.glob("*.ogg")
+        if "AudioPreview" not in f.name
+    ]
+    if oggs:
+        if codename:
+            lower = codename.lower()
+            matches = [p for p in oggs if p.name.lower().startswith(lower)]
+            if matches:
+                 media.audio_path = matches[0]
+                 logger.info("Selected audio (top-level ogg match): %s", media.audio_path.name)
+                 return media
         else:
-            media.audio_path = ogg_files[0]
-    else:
-        # Fallback: look for Xbox 360 .wav.ckd (XMA2) and auto-decode
-        wav_ckd_files = [
-            f for f in dir_path.rglob("*.wav.ckd")
-            if "audiopreview" not in f.name.lower()
-        ]
-        if wav_ckd_files:
+            media.audio_path = oggs[0]
+            logger.info("Selected audio (top-level ogg): %s", media.audio_path.name)
+            return media
+
+    # 3. Glob for any .wav at top level (excluding previews)
+    wavs = [
+        f for f in dir_path.glob("*.wav")
+        if "AudioPreview" not in f.name
+    ]
+    if wavs:
+        if codename:
+            lower = codename.lower()
+            matches = [p for p in wavs if p.name.lower().startswith(lower)]
+            if matches:
+                media.audio_path = matches[0]
+                logger.info("Selected audio (top-level wav match): %s", media.audio_path.name)
+                return media
+        else:
+            media.audio_path = wavs[0]
+            logger.info("Selected audio (top-level wav): %s", media.audio_path.name)
+            return media
+
+    # 4. Recursive search (for extracted IPK structures with nested dirs)
+    #    Try .ogg first, then .wav, then .wav.ckd
+    patterns = [
+        ("**/ *.ogg", False), # Fix space in glob if needed, but Path.rglob ignores it? 
+        ("**/*.wav", False),
+        ("**/*.wav.ckd", True)
+    ]
+    # Fixed patterns for Path.rglob
+    patterns = [
+        ("*.ogg", False),
+        ("*.wav", False),
+        ("*.wav.ckd", True)
+    ]
+    
+    for pattern, is_ckd in patterns:
+        hits = list(dir_path.rglob(pattern))
+        if not hits:
+            continue
+            
+        # Filter out preview / ambient / autodance files
+        filtered_hits = []
+        for h in hits:
+            h_low = str(h).lower()
+            h_name_low = h.name.lower()
+            if "audiopreview" in h_name_low:
+                continue
+            if "/amb/" in h_low.replace("\\", "/") or "/autodance/" in h_low.replace("\\", "/"):
+                continue
+            if is_ckd and h_name_low.startswith("amb_"):
+                continue
+            filtered_hits.append(h)
+        
+        if not filtered_hits:
+            continue
+            
+        if codename:
+            lower = codename.lower()
+            # Filename match
+            matches = [p for p in filtered_hits if p.name.lower().startswith(lower)]
+            # Path match: codename appears as a directory component
+            if not matches:
+                matches = [p for p in filtered_hits
+                           if f"/{lower}/" in str(p).lower().replace("\\", "/")]
+            
+            if matches:
+                final_hits = matches
+            else:
+                # No match for this codename -- skip to next pattern
+                continue
+        else:
+            final_hits = filtered_hits
+
+        selected = final_hits[0]
+        if is_ckd:
+            # Handle Xbox 360 .wav.ckd (XMA2) auto-decoding
             from jd2021_installer.installers.media_processor import (
-                decode_xma2_audio,
+                extract_ckd_audio_v1, # We will rename/implement this
                 is_xma2_audio,
             )
-            ckd_src = wav_ckd_files[0]
-            decoded_wav = ckd_src.parent / (ckd_src.stem.replace(".wav", "") + "_decoded.wav")
-            if decoded_wav.exists():
-                logger.info("Using previously decoded audio: %s", decoded_wav.name)
-                media.audio_path = decoded_wav
-            elif is_xma2_audio(ckd_src):
-                try:
-                    media.audio_path = decode_xma2_audio(ckd_src, decoded_wav)
-                except Exception as e:
-                    logger.warning(
-                        "Failed to decode X360 audio %s: %s", ckd_src.name, e
-                    )
+            # V1 logic extracts it in-place
+            decoded = extract_ckd_audio_v1(selected, selected.parent)
+            if decoded:
+                media.audio_path = Path(decoded)
+                logger.info("Selected and extracted audio: %s", media.audio_path.name)
+                return media
+        else:
+            media.audio_path = selected
+            logger.info("Selected audio (recursive): %s", media.audio_path.name)
+            return media
+
+    return media
 
     # Cover images
     for ext in ("*.jpg", "*.png", "*.tga", "*.tga.ckd", "*.jpg.ckd", "*.png.ckd"):
@@ -395,9 +480,9 @@ def normalize(
     
     # If the map source is IPK, the audio and video are pre-synced.
     # We detect it by checking the directory structure or audio format.
-    # CRITICAL: Fetch/HTML maps also contain an IPK, so we MUST exclude them if .html exists.
+    # Check for HTML files in the immediate root or mapDownloads subfolder
     dir_path = Path(directory)
-    is_html_source = any(dir_path.glob("*.html"))
+    is_html_source = any(dir_path.glob("*.html")) or any(dir_path.glob("**/assets.html"))
     
     is_ipk = not is_html_source and (
         (dir_path / "world").exists() or 

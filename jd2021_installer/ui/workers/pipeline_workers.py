@@ -304,7 +304,7 @@ class BatchInstallWorker(QObject):
                                 shutil.copy2(map_data.media.audio_path, persisted_audio)
                             map_data.media.audio_path = persisted_audio
                         
-                        self.status.emit(f"[{i+1}/{total}] Installing {map_data.codename}...")
+                        self.status.emit(f"[{map_data.codename}] Installing map...")
                         self._install_map_synchronously(map_data)
                         success_count += 1
                         installed_maps.append(map_data)
@@ -329,7 +329,11 @@ class BatchInstallWorker(QObject):
             
     def _install_map_synchronously(self, map_data: NormalizedMapData) -> None:
         """Execute the same steps as InstallMapWorker.run() synchronously."""
-        install_map_to_game(map_data, self._target_dir, self._config)
+        def callback(msg: str):
+            prefix = f"[{map_data.codename}] "
+            self.status.emit(prefix + msg)
+            
+        install_map_to_game(map_data, self._target_dir, self._config, status_callback=callback)
 
 def install_map_to_game(
     map_data: NormalizedMapData, 

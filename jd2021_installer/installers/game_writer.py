@@ -128,9 +128,9 @@ def _write_songdesc(target: Path, name: str, sd: SongDescription,
             phone_str += f'\n\t\t\t\t\t\t{{\n\t\t\t\t\t\t\tKEY = "{k}",\n\t\t\t\t\t\t\tVAL = "{v}"\n\t\t\t\t\t\t}},'
         phone_str = phone_str.rstrip(",")
     else:
-        phone_str = f'\n\t\t\t\t\t\t{{\n\t\t\t\t\t\t\tKEY = "cover",\n\t\t\t\t\t\t\tVAL = "world/maps/{name_lower}/menuart/textures/{name_lower}_cover_phone.jpg"\n\t\t\t\t\t\t}}'
+        phone_str = f'\n\t\t\t\t\t\t{{\n\t\t\t\t\t\t\tKEY = "cover",\n\t\t\t\t\t\t\tVAL = "World/MAPS/{name}/MenuArt/textures/{name_lower}_cover_phone.jpg"\n\t\t\t\t\t\t}}'
         for i in range(1, num_coach + 1):
-            phone_str += f',\n\t\t\t\t\t\t{{\n\t\t\t\t\t\t\tKEY = "coach{i}",\n\t\t\t\t\t\t\tVAL = "world/maps/{name_lower}/menuart/textures/{name_lower}_coach_{i}_phone.png"\n\t\t\t\t\t\t}}'
+            phone_str += f',\n\t\t\t\t\t\t{{\n\t\t\t\t\t\t\tKEY = "coach{i}",\n\t\t\t\t\t\t\tVAL = "World/MAPS/{name}/MenuArt/textures/{name_lower}_coach_{i}_phone.png"\n\t\t\t\t\t\t}}'
 
     # DefaultColors
     dc = sd.default_colors
@@ -148,6 +148,8 @@ def _write_songdesc(target: Path, name: str, sd: SongDescription,
     existing_keys_lower = {k.lower(): k for k in merged_colors.keys()}
     for key, val in dc.extra.items():
         k_lower = key.lower()
+        if k_lower == "defaultcolors":
+            continue # CRITICAL: Prevent duplicate DefaultColors block inside the map
         if k_lower in existing_keys_lower:
             # Overwrite existing key with the case-preserved original key name
             merged_colors[existing_keys_lower[k_lower]] = val
@@ -229,7 +231,7 @@ params =
     NAME = "Actor",
     Actor =
     {{
-        LUA = "World/MAPS/{name}/songdesc.tpl",
+        LUA = "World/MAPS/{name}/SongDesc.tpl",
         COMPONENTS =
         {{
             {{
@@ -578,7 +580,7 @@ def _write_menuart_files(target: Path, name: str, num_coach: int) -> None:
                             {{
                                 GFXMaterialTexturePathSet =
                                 {{
-                                    diffuse = "World/MAPS/{name}/menuart/textures/{name}_{art}.tga"
+                                    diffuse = "World/MAPS/{name}/MenuArt/textures/{name}_{art}.tga"
                                 }}
                             }},
                             shaderPath = "World/_COMMON/MatShader/MultiTexture_1Layer.msh"
@@ -596,7 +598,7 @@ def _write_menuart_files(target: Path, name: str, num_coach: int) -> None:
 <root>
 \t<Scene ENGINE_VERSION="140999" GRIDUNIT="0.500000" DEPTH_SEPARATOR="0" NEAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000" FAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000" viewFamily="1">
 \t\t<ACTORS NAME="Actor">
-\t\t\t<Actor RELATIVEZ="0.000000" SCALE="0.300000 0.300000" xFLIPPED="0" USERFRIENDLY="{name}_cover_generic" POS2D="266.087555 197.629959" ANGLE="0.000000" INSTANCEDATAFILE="World/MAPS/{name}/menuart/actors/{name}_cover_generic.act" LUA="enginedata/actortemplates/tpl_materialgraphiccomponent2d.tpl">
+\t\t\t<Actor RELATIVEZ="0.000000" SCALE="0.300000 0.300000" xFLIPPED="0" USERFRIENDLY="{name}_cover_generic" POS2D="266.087555 197.629959" ANGLE="0.000000" INSTANCEDATAFILE="World/MAPS/{name}/MenuArt/actors/{name}_cover_generic.act" LUA="enginedata/actortemplates/tpl_materialgraphiccomponent2d.tpl">
 \t\t\t\t<COMPONENTS NAME="MaterialGraphicComponent">
 \t\t\t\t\t<MaterialGraphicComponent colorComputerTagId="0" renderInTarget="0" disableLight="0" disableShadow="-1" AtlasIndex="0" customAnchor="0.000000 0.000000" SinusAmplitude="0.000000 0.000000 0.000000" SinusSpeed="1.000000" AngleX="0.000000" AngleY="0.000000">
 \t\t\t\t\t\t<PrimitiveParameters>
@@ -606,7 +608,7 @@ def _write_menuart_files(target: Path, name: str, num_coach: int) -> None:
 \t\t\t\t\t\t<material>
 \t\t\t\t\t\t\t<GFXMaterialSerializable ATL_Channel="0" shaderPath="World/_COMMON/MatShader/MultiTexture_1Layer.msh" stencilTest="0" alphaTest="4294967295" alphaRef="4294967295">
 \t\t\t\t\t\t\t\t<textureSet>
-\t\t\t\t\t\t\t\t\t<GFXMaterialTexturePathSet diffuse="World/MAPS/{name}/menuart/textures/{name}_cover_generic.tga" />
+\t\t\t\t\t\t\t\t\t<GFXMaterialTexturePathSet diffuse="World/MAPS/{name}/MenuArt/textures/{name}_cover_generic.tga" />
 \t\t\t\t\t\t\t\t</textureSet>
 \t\t\t\t\t\t\t</GFXMaterialSerializable>
 \t\t\t\t\t\t</material>
@@ -616,7 +618,7 @@ def _write_menuart_files(target: Path, name: str, num_coach: int) -> None:
 \t\t\t</Actor>
 \t\t</ACTORS>
 \t\t<ACTORS NAME="Actor">
-\t\t\t<Actor RELATIVEZ="0.000000" SCALE="0.300000 0.300000" xFLIPPED="0" USERFRIENDLY="{name}_cover_online" POS2D="-150.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="World/MAPS/{name}/menuart/actors/{name}_cover_online.act" LUA="enginedata/actortemplates/tpl_materialgraphiccomponent2d.tpl">
+\t\t\t<Actor RELATIVEZ="0.000000" SCALE="0.300000 0.300000" xFLIPPED="0" USERFRIENDLY="{name}_cover_online" POS2D="-150.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="World/MAPS/{name}/MenuArt/actors/{name}_cover_online.act" LUA="enginedata/actortemplates/tpl_materialgraphiccomponent2d.tpl">
 \t\t\t\t<COMPONENTS NAME="MaterialGraphicComponent">
 \t\t\t\t\t<MaterialGraphicComponent colorComputerTagId="0" renderInTarget="0" disableLight="0" disableShadow="-1" AtlasIndex="0" customAnchor="0.000000 0.000000" SinusAmplitude="0.000000 0.000000 0.000000" SinusSpeed="1.000000" AngleX="0.000000" AngleY="0.000000">
 \t\t\t\t\t\t<PrimitiveParameters>
@@ -626,7 +628,7 @@ def _write_menuart_files(target: Path, name: str, num_coach: int) -> None:
 \t\t\t\t\t\t<material>
 \t\t\t\t\t\t\t<GFXMaterialSerializable ATL_Channel="0" shaderPath="World/_COMMON/MatShader/MultiTexture_1Layer.msh" stencilTest="0" alphaTest="4294967295" alphaRef="4294967295">
 \t\t\t\t\t\t\t\t<textureSet>
-\t\t\t\t\t\t\t\t\t<GFXMaterialTexturePathSet diffuse="World/MAPS/{name}/menuart/textures/{name}_cover_online.tga" />
+\t\t\t\t\t\t\t\t\t<GFXMaterialTexturePathSet diffuse="World/MAPS/{name}/MenuArt/textures/{name}_cover_online.tga" />
 \t\t\t\t\t\t\t\t</textureSet>
 \t\t\t\t\t\t\t</GFXMaterialSerializable>
 \t\t\t\t\t\t</material>
@@ -682,7 +684,7 @@ def _write_main_scene_isc(target: Path, name: str, has_autodance: bool = True) -
 \t\t\t</Actor>
 \t\t</ACTORS>
 \t\t<ACTORS NAME="SubSceneActor">
-\t\t\t<SubSceneActor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{name}_menuart" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="enginedata/actortemplates/subscene.tpl" RELATIVEPATH="World/MAPS/{name}/menuart/{name}_menuart.isc" EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">
+\t\t\t<SubSceneActor RELATIVEZ="0.000000" SCALE="1.000000 1.000000" xFLIPPED="0" USERFRIENDLY="{name}_menuart" POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" LUA="enginedata/actortemplates/subscene.tpl" RELATIVEPATH="World/MAPS/{name}/MenuArt/{name}_menuart.isc" EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">
 \t\t\t\t<ENUM NAME="viewType" SEL="3" />
 \t\t\t</SubSceneActor>
 \t\t</ACTORS>

@@ -222,16 +222,17 @@ class ArchiveIPKExtractor(BaseExtractor):
         self._codename: Optional[str] = None
 
     def extract(self, output_dir: Path) -> Path:
+        import re
         result = extract_ipk(self._ipk_path, output_dir)
-        # Try to infer codename from directory contents, ignoring generic structure folders
-        for item in output_dir.iterdir():
-            if item.is_dir() and not item.name.startswith("."):
-                name_low = item.name.lower()
-                if name_low in ("world", "data", "cache", "temp", "_extraction"):
-                    continue
-                self._codename = item.name
-                break
-                break
+        
+        # Ported from V1: _extract_codename_from_ipk_name
+        base = self._ipk_path.name
+        stem = self._ipk_path.stem
+        # Strip platform suffixes: _x360, _durango, _scarlett, _nx, _orbis, _prospero, _pc
+        stem = re.sub(r"_(x360|durango|scarlett|nx|orbis|prospero|pc)$", "", stem, flags=re.IGNORECASE)
+        self._codename = stem
+        
+        logger.info("Inferred codename from IPK filename: %s", self._codename)
         return result
 
     def get_codename(self) -> Optional[str]:

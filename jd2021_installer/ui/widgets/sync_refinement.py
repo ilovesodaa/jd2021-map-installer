@@ -95,6 +95,7 @@ class SyncRefinementWidget(QWidget):
 
         # -- Increment Buttons Row ------------------------------------------
         # V1 Parity: +/- 1000, 100, 10, 1 (ms)
+        self._audio_buttons = []
         self._video_buttons = []
         inc_row_audio = QHBoxLayout()
         inc_row_audio.addWidget(QLabel("Adj Audio:"))
@@ -105,6 +106,7 @@ class SyncRefinementWidget(QWidget):
             btn.setStyleSheet("font-size: 10px; padding: 2px;")
             btn.clicked.connect(lambda _, d=delta: self._adjust_audio(d))
             inc_row_audio.addWidget(btn)
+            self._audio_buttons.append(btn)
         inc_row_audio.addStretch()
         group_layout.addLayout(inc_row_audio)
 
@@ -207,12 +209,18 @@ class SyncRefinementWidget(QWidget):
 
     def set_ipk_mode(self, is_ipk: bool) -> None:
         """Disable audio padding/trimming for IPK sources."""
-        self._audio_spin.setEnabled(not is_ipk)
+        self.set_audio_editable(not is_ipk)
         if is_ipk:
             self._audio_spin.setValue(0.0)
             self._audio_spin.setToolTip("Audio reprocessing disabled for IPK sources")
         else:
             self._audio_spin.setToolTip("Shift audio timing (negative = earlier)")
+
+    def set_audio_editable(self, editable: bool) -> None:
+        """Enable or disable audio offset controls entirely."""
+        self._audio_spin.setEnabled(editable)
+        for btn in self._audio_buttons:
+            btn.setEnabled(editable)
 
     def set_video_editable(self, editable: bool) -> None:
         """Enable or disable the video offset checkbox/spinbox entirely."""
