@@ -8,10 +8,13 @@ in a background QThread.
 from __future__ import annotations
 
 import asyncio
+import glob
 import logging
 import os
+import re
 import shutil
 import subprocess
+import wave
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -212,6 +215,218 @@ def generate_audio_preview(
         config=config,
     )
     return output
+
+
+def convert_audio(
+    audio_path: str | Path,
+    map_name: str,
+    target_dir: str | Path,
+    a_offset: float = 0.0,
+    config: Optional[AppConfig] = None,
+) -> None:
+    """Ported from V1: FFmpeg-based audio padding/trimming.
+    
+    Generates both .wav (for PC) and .ogg (for menu preview).
+    """
+    audio_path = Path(audio_path)
+    target_dir = Path(target_dir)
+    wav_out = target_dir / "Audio" / f"{map_name}.wav"
+    ogg_out = target_dir / "Audio" / f"{map_name}.ogg"
+    wav_out.parent.mkdir(parents=True, exist_ok=True)
+
+    if not ogg_out.exists():
+        if audio_path.suffix.lower() == ".ogg":
+            logger.info("Copying menu preview OGG...")
+            shutil.copy2(audio_path, ogg_out)
+        else:
+            logger.info("Converting to menu preview OGG...")
+            run_ffmpeg(["-y", "-i", str(audio_path), str(ogg_out)], config=config)
+
+    if a_offset == 0.0:
+        logger.info("Converting to 48kHz WAV (no offset)...")
+        run_ffmpeg(["-y", "-i", str(audio_path), "-ar", "48000", str(wav_out)], config=config)
+    elif a_offset < 0:
+        trim_s = abs(a_offset)
+        logger.info("Converting to 48kHz WAV (trimming first %.3fs)...", trim_s)
+        run_ffmpeg([
+            "-y", "-i", str(audio_path), 
+            "-ss", f"{trim_s:.6f}",
+            "-ar", "48000", str(wav_out)
+        ], config=config)
+    else:
+        delay_ms = int(a_offset * 1000)
+        logger.info("Converting to 48kHz WAV (padding %dms silence)...", delay_ms)
+        af_filter = f"adelay={delay_ms}|{delay_ms},asetpts=PTS-STARTPTS"
+        run_ffmpeg([
+            "-y", "-i", str(audio_path), 
+            "-af", af_filter,
+            "-ar", "48000", str(wav_out)
+        ], config=config)
+
+
+def generate_intro_amb(
+    ogg_path: str | Path,
+    map_name: str,
+    target_dir: str | Path,
+    a_offset: float,
+    v_override: Optional[float] = None,
+    marker_preroll_ms: Optional[float] = None,
+    config: Optional[AppConfig] = None,
+) -> None:
+    """Ported from V1: Generate an intro AMB WAV for negative videoStartTime.
+    
+    Strategy: AMB plays from t=0, covering silence before main WAV.
+    """
+    ogg_path = Path(ogg_path)
+    target_dir = Path(target_dir)
+    map_lower = map_name.lower()
+    amb_dir = target_dir / "Audio" / "AMB"
+
+    # If no pre-roll silence, silence any existing intro WAV
+    if a_offset >= 0 and (v_override is None or v_override >= 0):
+        if amb_dir.exists():
+            for wav in amb_dir.glob("*_intro.wav"):
+                with wave.open(str(wav), 'w') as wf:
+                    wf.setnchannels(2)
+                    wf.setsampwidth(2)
+                    wf.setframerate(48000)
+                    wf.writeframes(b'\x00\x00\x00\x00' * 4800)
+        return
+
+    amb_dir.mkdir(parents=True, exist_ok=True)
+
+    intro_dur = abs(v_override) if v_override is not None and v_override < 0 else abs(a_offset)
+    audio_delay = max(0.0, intro_dur - abs(a_offset))
+    
+    if marker_preroll_ms is not None:
+        audio_content_dur = marker_preroll_ms / 1000.0
+        fade_start = audio_delay + audio_content_dur - 0.2
+        logger.info("Using marker-based AMB duration: %.3fs", audio_content_dur)
+    else:
+        audio_content_dur = abs(a_offset) + 1.355
+        fade_start = audio_delay + abs(a_offset) + 1.155
+    
+    amb_duration = audio_delay + audio_content_dur
+
+    intro_wavs = list(amb_dir.glob("*_intro.wav"))
+    intro_tpls = list(amb_dir.glob("*_intro.tpl"))
+
+    if intro_tpls:
+        intro_name = intro_tpls[0].stem
+        intro_wav = intro_wavs[0] if intro_wavs else amb_dir / f"{intro_name}.wav"
+    else:
+        if intro_wavs:
+            intro_wav = intro_wavs[0]
+            intro_name = intro_wav.stem
+        else:
+            intro_name = f"amb_{map_lower}_intro"
+            intro_wav = amb_dir / f"{intro_name}.wav"
+
+        wav_rel_path = f"world/maps/{map_lower}/audio/amb/{intro_wav.name}"
+        ilu_content = f'''DESCRIPTOR =
+{{
+\t{{
+\t\tNAME = "SoundDescriptor_Template",
+\t\tSoundDescriptor_Template =
+\t\t{{
+\t\t\tname = "{intro_name}",
+\t\t\tvolume = 0,
+\t\t\tcategory = "amb",
+\t\t\tlimitCategory = "",
+\t\t\tlimitMode = 0,
+\t\t\tmaxInstances = 4294967295,
+\t\t\tfiles =
+\t\t\t{{
+\t\t\t\t{{
+\t\t\t\t\tVAL = "{wav_rel_path}",
+\t\t\t\t}},
+\t\t\t}},
+\t\t\tserialPlayingMode = 0,
+\t\t\tserialStoppingMode = 0,
+\t\t\tparams =
+\t\t\t{{
+\t\t\t\tNAME = "SoundParams",
+\t\t\t\tSoundParams =
+\t\t\t\t{{
+\t\t\t\t\tloop = 0,
+\t\t\t\t\tplayMode = 1,
+\t\t\t\t\tplayModeInput = "",
+\t\t\t\t\trandomVolMin = 0,
+\t\t\t\t\trandomVolMax = 0,
+\t\t\t\t\tdelay = 0,
+\t\t\t\t\trandomDelay = 0,
+\t\t\t\t\trandomPitchMin = 1,
+\t\t\t\t\trandomPitchMax = 1,
+\t\t\t\t\tfadeInTime = 0,
+\t\t\t\t\tfadeOutTime = 0,
+\t\t\t\t\tfilterFrequency = 0,
+\t\t\t\t\tfilterType = 2,
+\t\t\t\t\ttransitionSampleOffset = 0,
+\t\t\t\t}},
+\t\t\t}},
+\t\t\tpauseInsensitiveFlags = 0,
+\t\t\toutDevices = 4294967295,
+\t\t\tsoundPlayAfterdestroy = 0,
+\t\t}},
+\t}},
+}}
+appendTable(component.SoundComponent_Template.soundList,DESCRIPTOR)'''
+
+        tpl_content = f'''params=
+{{
+\tNAME="Actor_Template",
+\tActor_Template=
+\t{{
+\t\tCOMPONENTS=
+\t\t{{
+\t\t}}
+\t}}
+}}
+includeReference("EngineData/Misc/Components/SoundComponent.ilu")
+includeReference("world/maps/{map_name}/audio/amb/{intro_name}.ilu")'''
+
+        (amb_dir / f"{intro_name}.ilu").write_text(ilu_content, encoding="utf-8")
+        (amb_dir / f"{intro_name}.tpl").write_text(tpl_content, encoding="utf-8")
+        logger.info("Created intro AMB files: %s.tpl/.ilu", intro_name)
+
+    # Always inject AMB actor if not present
+    audio_isc_path = target_dir / "Audio" / f"{map_name}_audio.isc"
+    if audio_isc_path.exists():
+        isc_data = audio_isc_path.read_text(encoding="utf-8")
+        if intro_name not in isc_data:
+            amb_actor = (
+                f'\t\t<ACTORS NAME="Actor">\n'
+                f'\t\t\t<Actor RELATIVEZ="0.000002" SCALE="1.000000 1.000000" xFLIPPED="0"'
+                f' USERFRIENDLY="{intro_name}" POS2D="0.000000 0.000000" ANGLE="0.000000"'
+                f' INSTANCEDATAFILE="" LUA="World/MAPS/{map_name}/audio/AMB/{intro_name}.tpl">\n'
+                f'\t\t\t\t<COMPONENTS NAME="SoundComponent">\n'
+                f'\t\t\t\t\t<SoundComponent />\n'
+                f'\t\t\t\t</COMPONENTS>\n'
+                f'\t\t\t</Actor>\n'
+                f'\t\t</ACTORS>\n'
+            )
+            # Inject before <sceneConfigs>
+            new_isc = isc_data.replace("\t\t<sceneConfigs>", amb_actor + "\t\t<sceneConfigs>")
+            audio_isc_path.write_text(new_isc, encoding="utf-8")
+            logger.info("Injected intro AMB actor into audio ISC")
+
+    delay_ms = int(audio_delay * 1000)
+    if delay_ms > 0:
+        af_filter = (
+            f"adelay={delay_ms}|{delay_ms},asetpts=PTS-STARTPTS,"
+            f"afade=t=out:st={fade_start:.3f}:d=0.2"
+        )
+        logger.info("Intro audio delayed by %.3fs", audio_delay)
+    else:
+        af_filter = f"afade=t=out:st={fade_start:.3f}:d=0.2"
+
+    run_ffmpeg([
+        "-y", "-t", f"{audio_content_dur:.3f}", 
+        "-i", str(ogg_path),
+        "-af", af_filter, 
+        "-ar", "48000", str(intro_wav)
+    ], config=config)
+    logger.info("Generated intro AMB: %s (%.3fs)", intro_wav.name, amb_duration)
 
 
 # ---------------------------------------------------------------------------

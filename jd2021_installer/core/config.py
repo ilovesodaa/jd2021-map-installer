@@ -31,6 +31,7 @@ class AppConfig(BaseModel):
     cleanup_behavior: str = Field(default="ask", pattern=r"^(ask|delete|keep)$")
     show_preflight_success_popup: bool = True
     show_quickstart_on_launch: bool = True
+    skip_quickstart: bool = False
 
     # Download settings
     download_timeout_s: int = 600

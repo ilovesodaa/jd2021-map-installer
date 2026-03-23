@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QStackedWidget,
     QVBoxLayout,
@@ -298,12 +299,23 @@ class ModeSelectorWidget(QWidget):
         scroll_lay = QVBoxLayout(scroll_content)
         scroll_lay.setContentsMargins(0, 0, 0, 0)
 
+        # Submode Selection
+        submode_lay = QHBoxLayout()
+        submode_lay.addWidget(QLabel("Manual Submode:"))
+        self._manual_sub_select = QRadioButton("Select Files")
+        self._manual_sub_scan = QRadioButton("Scan Directory")
+        self._manual_sub_scan.setChecked(True)
+        submode_lay.addWidget(self._manual_sub_select)
+        submode_lay.addWidget(self._manual_sub_scan)
+        submode_lay.addStretch()
+        scroll_lay.addLayout(submode_lay)
+
         # Top generic entries
         top_lay = QGridLayout()
         top_lay.setContentsMargins(0, 0, 0, 0)
         
         root_row = FileRowWidget("Root Folder:", is_dir=True)
-        root_row.path_changed.connect(lambda t: self.target_selected.emit(t))
+        root_row.path_changed.connect(self._on_manual_root_changed)
         top_lay.addWidget(root_row, 0, 0, 1, 2)
 
         lbl_code = QLabel("Codename:")
@@ -389,6 +401,49 @@ class ModeSelectorWidget(QWidget):
         self._stack.setCurrentIndex(index)
         self.mode_changed.emit(MODE_LABELS[index])
         logger.debug("Mode switched to: %s", MODE_LABELS[index])
+
+    def _on_manual_root_changed(self, path: str) -> None:
+        """Triggered when root folder in manual mode is changed."""
+        self.target_selected.emit(path)
+        if not self._manual_sub_scan.isChecked():
+            return
+            
+        # Scan and auto-fill
+        from pathlib import Path
+        root = Path(path)
+        if not root.is_dir(): return
+        
+        # 1. Infer codename from directory name
+        self.inputs["manual"]["codename"].setText(root.name)
+        
+        # 2. Auto-discover common files
+        from jd2021_installer.parsers.normalizer import _find_ckd_files
+        
+        mapping = {
+            "mtrack": "*musictrack*.tpl.ckd",
+            "sdesc": "*songdesc*.tpl.ckd",
+            "dtape": "*dtape*.ckd",
+            "ktape": "*ktape*.ckd",
+            "mseq": "*mainsequence*.ckd",
+        }
+        
+        for key, pattern in mapping.items():
+            found = _find_ckd_files(str(root), pattern)
+            if found:
+                self.inputs["manual"][key].setText(found[0])
+                
+        # Audio/Video
+        video = list(root.rglob("*.webm"))
+        if video: self.inputs["manual"]["video"].setText(str(video[0]))
+        
+        audio = list(root.rglob("*.ogg")) or list(root.rglob("*.wav")) or list(root.rglob("*.wav.ckd"))
+        if audio: self.inputs["manual"]["audio"].setText(str(audio[0]))
+        
+        # Folders
+        for key in ["moves", "pictos", "menuart", "amb"]:
+            folder = next((d for d in root.rglob("*") if d.is_dir() and key in d.name.lower()), None)
+            if folder:
+                self.inputs["manual"][key].setText(str(folder))
 
     # ------------------------------------------------------------------
     # Public API

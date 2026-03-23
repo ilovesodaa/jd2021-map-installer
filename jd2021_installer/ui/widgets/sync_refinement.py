@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QVBoxLayout,
     QWidget,
+    QCheckBox,
 )
 
 logger = logging.getLogger("jd2021.ui.widgets.sync_refinement")
@@ -39,7 +40,7 @@ class SyncRefinementWidget(QWidget):
     # Signals
     offset_changed = pyqtSignal(float)       # combined offset in ms
     preview_requested = pyqtSignal(bool)      # True = start, False = stop
-    apply_requested = pyqtSignal(float)       # combined offset to apply
+    apply_requested = pyqtSignal(float, float) # (audio_ms, video_ms) to apply
     pad_audio_requested = pyqtSignal()
     nav_requested = pyqtSignal(int)          # -1 = prev, 1 = next
 
@@ -75,17 +76,46 @@ class SyncRefinementWidget(QWidget):
 
         offsets_row.addSpacing(12)
 
-        # Video offset
-        offsets_row.addWidget(QLabel("Video Offset (ms):"))
+        # Video offset toggle + spin
+        self._video_check = QCheckBox("Video Offset (ms):")
+        self._video_check.setToolTip("Enable to override the engine's videoStartTime")
+        self._video_check.toggled.connect(self._on_video_toggle)
+        offsets_row.addWidget(self._video_check)
+        
         self._video_spin = QDoubleSpinBox()
         self._video_spin.setRange(-5000.0, 5000.0)
         self._video_spin.setSingleStep(1.0)
         self._video_spin.setDecimals(1)
         self._video_spin.setValue(0.0)
+        self._video_spin.setEnabled(False)
         self._video_spin.setToolTip("Shift video timing (negative = earlier)")
         offsets_row.addWidget(self._video_spin)
 
         group_layout.addLayout(offsets_row)
+
+        # -- Increment Buttons Row ------------------------------------------
+        inc_row = QHBoxLayout()
+        inc_row.addWidget(QLabel("Adjust:"))
+        
+        for delta in [-100.0, -10.0, -1.0, 1.0, 10.0, 100.0]:
+            btn = QPushButton(f"{delta:+.0f}")
+            btn.setFixedWidth(40)
+            btn.setStyleSheet("font-size: 10px; padding: 2px;")
+            # Use a closure to capture delta correctly
+            btn.clicked.connect(lambda _, d=delta: self._adjust_audio(d))
+            inc_row.addWidget(btn)
+            
+        inc_row.addSpacing(20)
+        inc_row.addWidget(QLabel("Video:"))
+        for delta in [-1.0, 1.0]:
+            btn = QPushButton(f"{delta:+.0f}")
+            btn.setFixedWidth(30)
+            btn.setStyleSheet("font-size: 10px; padding: 2px;")
+            btn.clicked.connect(lambda _, d=delta: self._adjust_video(d))
+            inc_row.addWidget(btn)
+            
+        inc_row.addStretch()
+        group_layout.addLayout(inc_row)
 
         # -- Combined display -----------------------------------------------
         combined_row = QHBoxLayout()
@@ -175,10 +205,30 @@ class SyncRefinementWidget(QWidget):
         self._combined_display.setText(f"{combined:+.1f} ms")
         self.offset_changed.emit(combined)
 
+    def _adjust_audio(self, delta: float) -> None:
+        self._audio_spin.setValue(self._audio_spin.value() + delta)
+
+    def _adjust_video(self, delta: float) -> None:
+        if self._video_check.isChecked():
+            self._video_spin.setValue(self._video_spin.value() + delta)
+
     def _on_sync_beatgrid(self) -> None:
         """Copies video offset to audio offset."""
-        self._audio_spin.setValue(self._video_spin.value())
-        # setValue will trigger valueChanged, which calls _update_combined
+        if self._video_check.isChecked():
+            self._audio_spin.setValue(self._video_spin.value())
+
+    def _on_video_toggle(self, checked: bool) -> None:
+        self._video_spin.setEnabled(checked)
+        self._update_combined()
+
+    def set_ipk_mode(self, is_ipk: bool) -> None:
+        """Disable audio padding/trimming for IPK sources."""
+        self._audio_spin.setEnabled(not is_ipk)
+        if is_ipk:
+            self._audio_spin.setValue(0.0)
+            self._audio_spin.setToolTip("Audio reprocessing disabled for IPK sources")
+        else:
+            self._audio_spin.setToolTip("Shift audio timing (negative = earlier)")
 
     def set_nav_visible(self, visible: bool, label_text: str = "") -> None:
         """Toggle multi-map navigation visibility."""
@@ -190,9 +240,17 @@ class SyncRefinementWidget(QWidget):
         self._btn_preview.setText("⏹  Stop" if checked else "▶  Preview")
         self.preview_requested.emit(checked)
 
+    def set_preview_state(self, playing: bool) -> None:
+        """Update the preview button state from outside."""
+        self._btn_preview.blockSignals(True)
+        self._btn_preview.setChecked(playing)
+        self._btn_preview.setText("⏹  Stop" if playing else "▶  Preview")
+        self._btn_preview.blockSignals(False)
+
     def _on_apply(self) -> None:
-        combined = self._audio_spin.value() + self._video_spin.value()
-        self.apply_requested.emit(combined)
+        audio_ms = self._audio_spin.value()
+        video_ms = self._video_spin.value() if self._video_check.isChecked() else 0.0
+        self.apply_requested.emit(audio_ms, video_ms)
 
     # ------------------------------------------------------------------
     # Public API
@@ -211,6 +269,7 @@ class SyncRefinementWidget(QWidget):
         """Programmatically set both offset spinboxes."""
         self._audio_spin.setValue(audio_ms)
         self._video_spin.setValue(video_ms)
+        self._video_check.setChecked(video_ms != 0.0)
 
     def reset(self) -> None:
         """Reset both spinboxes to zero."""

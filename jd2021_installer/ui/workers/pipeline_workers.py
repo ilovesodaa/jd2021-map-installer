@@ -97,78 +97,13 @@ class InstallMapWorker(QObject):
 
     def run(self) -> None:
         try:
-            codename = self._map_data.codename
-            self.status.emit(f"Installing {codename}...")
-            self.progress.emit(10)
-
-            # Resolve target directory: game_dir / World / MAPS / <codename>
-            map_target = self._target_dir / "World" / "MAPS" / codename
-            map_target.mkdir(parents=True, exist_ok=True)
-
-            # 1. Write all UbiArt config files
-            self.status.emit("Writing game configuration files...")
-            self.progress.emit(20)
-            write_game_files(self._map_data, map_target, self._config)
-
-            # 2. Copy media files (video + audio) into game directory
-            media = self._map_data.media
-            if media.video_path and media.video_path.exists():
-                self.status.emit("Copying video file...")
-                self.progress.emit(40)
-                from jd2021_installer.installers.media_processor import copy_video
-                video_dst = map_target / "VideosCoach" / f"{codename}.webm"
-                copy_video(media.video_path, video_dst)
-
-                # Also copy map preview video if available
-                if media.map_preview_video and media.map_preview_video.exists():
-                    preview_dst = map_target / "VideosCoach" / f"{codename}_MapPreview.webm"
-                    copy_video(media.map_preview_video, preview_dst)
-
-            if media.audio_path and media.audio_path.exists():
-                self.status.emit("Copying/Transcoding audio file...")
-                self.progress.emit(60)
-                from jd2021_installer.installers.media_processor import copy_audio
-                # Force .wav for legacy PC engine support
-                audio_dst = map_target / "Audio" / f"{codename}.wav"
-                copy_audio(media.audio_path, audio_dst)
-
-            # 3. Copy cover/coach images to MenuArt/textures
-            if media.cover_path and media.cover_path.exists():
-                self.status.emit("Copying MenuArt textures...")
-                self.progress.emit(70)
-                import shutil
-                textures_dir = map_target / "MenuArt" / "textures"
-                textures_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(media.cover_path, textures_dir / media.cover_path.name)
-
-            for coach_img in media.coach_images:
-                if coach_img.exists():
-                    import shutil
-                    textures_dir = map_target / "MenuArt" / "textures"
-                    shutil.copy2(coach_img, textures_dir / coach_img.name)
-
-            # Moves
-            if media.moves_dir and media.moves_dir.exists():
-                self.status.emit("Integrating cross-platform move data...")
-                from jd2021_installer.installers.media_processor import copy_moves
-                moves_copied = copy_moves(media.moves_dir, map_target)
-                logger.info("Integrated %d move skeleton(s) for %s", moves_copied, codename)
-            else:
-                logger.info("No 'moves' folder found for %s; autodance may fail.", codename)
-
-            # 4. Register map in SkuScene ISC
-            self.status.emit("Registering map in song list...")
-            self.progress.emit(85)
-            try:
-                from jd2021_installer.installers.sku_scene import register_map
-                register_map(self._target_dir, codename)
-            except Exception as e:
-                # Non-fatal: map files are installed, just won't appear in list
-                logger.warning("SkuScene registration failed (non-fatal): %s", e)
-                self.status.emit(f"Warning: SkuScene registration failed: {e}")
-
-            self.progress.emit(100)
-            self.status.emit("Installation complete!")
+            install_map_to_game(
+                self._map_data, 
+                self._target_dir, 
+                self._config,
+                status_callback=self.status.emit,
+                progress_callback=self.progress.emit
+            )
             self.finished.emit(True)
 
         except Exception as e:
@@ -177,14 +112,40 @@ class InstallMapWorker(QObject):
             self.finished.emit(False)
 
 
-def reprocess_audio(map_data: NormalizedMapData, target_dir: Path, config: Optional[AppConfig] = None) -> None:
-    """Rebuild game configuration files to apply updated audio/video offsets.
-    
-    In V1, this recomputed FFmpeg operations on the physical .ogg file. 
-    In V2, offsets are tracked purely in `video_start_time_override`, 
-    so we just re-execute write_game_files to rewrite the `.trk` file.
-    """
+def reprocess_audio(
+    map_data: NormalizedMapData, 
+    target_dir: Path, 
+    a_offset: float = 0.0,
+    config: Optional[AppConfig] = None
+) -> None:
+    """Rebuild game configuration files and reprocess physical audio files."""
+    # 1. Update UbiArt config (musictrack.trk, etc)
     write_game_files(map_data, target_dir, config)
+    
+    # 2. Ported V1 FFmpeg logic: pad/trim main audio and generate intro AMB
+    from jd2021_installer.installers.media_processor import convert_audio, generate_intro_amb
+    
+    codename = map_data.codename
+    media = map_data.media
+    
+    if media.audio_path and media.audio_path.exists():
+        # Generates Audio/<codename>.wav and .ogg
+        convert_audio(media.audio_path, codename, target_dir, a_offset, config)
+        
+        # Generates Audio/AMB/<intro>.wav/tpl/ilu and injects into audio ISC
+        ogg_path = target_dir / "Audio" / f"{codename}.ogg"
+        v_override = map_data.video_start_time_override
+        
+        # Use beat marker data if available for precise pre-roll
+        preroll = None
+        if map_data.music_track and map_data.music_track.markers:
+            from jd2021_installer.parsers.binary_ckd import calculate_marker_preroll
+            preroll = calculate_marker_preroll(
+                map_data.music_track.markers, 
+                map_data.music_track.start_beat
+            )
+            
+        generate_intro_amb(ogg_path, codename, target_dir, a_offset, v_override, preroll, config)
 
 
 class ApplyAndFinishWorker(QObject):
@@ -200,6 +161,7 @@ class ApplyAndFinishWorker(QObject):
         map_data: NormalizedMapData,
         target_dir: Path,
         cache_dir: Path,
+        a_offset: float = 0.0,
         config: Optional[AppConfig] = None,
         parent: Optional[QObject] = None,
     ) -> None:
@@ -207,6 +169,7 @@ class ApplyAndFinishWorker(QObject):
         self._map_data = map_data
         self._target_dir = target_dir
         self._cache_dir = cache_dir
+        self._a_offset = a_offset
         self._config = config
 
     def run(self) -> None:
@@ -214,8 +177,8 @@ class ApplyAndFinishWorker(QObject):
             self.status.emit("Reprocessing audio offsets...")
             self.progress.emit(30)
             
-            # 1. Update configs natively via reprocess_audio
-            reprocess_audio(self._map_data, self._target_dir, self._config)
+            # 1. Update configs and audio via reprocess_audio
+            reprocess_audio(self._map_data, self._target_dir, self._a_offset, self._config)
             
             # 2. Clear cache replicating V1's clean logic
             self.status.emit("Clearing downloaded cache...")
@@ -343,40 +306,92 @@ class BatchInstallWorker(QObject):
             
     def _install_map_synchronously(self, map_data: NormalizedMapData) -> None:
         """Execute the same steps as InstallMapWorker.run() synchronously."""
-        codename = map_data.codename
-        map_target = self._target_dir / "World" / "MAPS" / codename
-        map_target.mkdir(parents=True, exist_ok=True)
+        install_map_to_game(map_data, self._target_dir, self._config)
 
-        write_game_files(map_data, map_target, self._config)
 
-        media = map_data.media
-        from jd2021_installer.installers.media_processor import copy_video, copy_audio
-        if media.video_path and media.video_path.exists():
-            video_dst = map_target / "VideosCoach" / f"{codename}.webm"
-            copy_video(media.video_path, video_dst)
-            if media.map_preview_video and media.map_preview_video.exists():
-                preview_dst = map_target / "VideosCoach" / f"{codename}_MapPreview.webm"
-                copy_video(media.map_preview_video, preview_dst)
+def install_map_to_game(
+    map_data: NormalizedMapData, 
+    game_dir: Path, 
+    config: AppConfig,
+    status_callback: Optional[callable] = None,
+    progress_callback: Optional[callable] = None
+) -> None:
+    """Core installation logic: files → game directory."""
+    codename = map_data.codename
+    if status_callback: status_callback(f"Installing {codename}...")
+    if progress_callback: progress_callback(10)
 
-        if media.audio_path and media.audio_path.exists():
-            audio_dst = map_target / "Audio" / f"{codename}.wav"
-            copy_audio(media.audio_path, audio_dst)
+    # Resolve target directory: game_dir / World / MAPS / <codename>
+    map_target = game_dir / "World" / "MAPS" / codename
+    map_target.mkdir(parents=True, exist_ok=True)
 
-        if media.cover_path and media.cover_path.exists():
-            import shutil
-            textures_dir = map_target / "MenuArt" / "textures"
-            textures_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(media.cover_path, textures_dir / media.cover_path.name)
+    # 1. Write all UbiArt config files
+    if status_callback: status_callback("Writing game configuration files...")
+    if progress_callback: progress_callback(20)
+    write_game_files(map_data, map_target, config)
 
-        for coach_img in media.coach_images:
-            if coach_img.exists():
-                import shutil
-                textures_dir = map_target / "MenuArt" / "textures"
-                shutil.copy2(coach_img, textures_dir / coach_img.name)
+    # 2. Copy media files (video + audio)
+    media = map_data.media
+    if media.video_path and media.video_path.exists():
+        if status_callback: status_callback("Copying video file...")
+        if progress_callback: progress_callback(40)
+        from jd2021_installer.installers.media_processor import copy_video
+        video_dst = map_target / "VideosCoach" / f"{codename}.webm"
+        copy_video(media.video_path, video_dst)
+        if media.map_preview_video and media.map_preview_video.exists():
+            preview_dst = map_target / "VideosCoach" / f"{codename}_MapPreview.webm"
+            copy_video(media.map_preview_video, preview_dst)
 
-        if media.moves_dir and media.moves_dir.exists():
-            from jd2021_installer.installers.media_processor import copy_moves
-            copy_moves(media.moves_dir, map_target)
+    if media.audio_path and media.audio_path.exists():
+        if status_callback: status_callback("Copying/Transcoding audio file...")
+        if progress_callback: progress_callback(60)
+        from jd2021_installer.installers.media_processor import copy_audio
+        audio_dst = map_target / "Audio" / f"{codename}.wav"
+        copy_audio(media.audio_path, audio_dst)
 
+    # 3. Copy cover/coach images
+    textures_dir = map_target / "MenuArt" / "textures"
+    textures_dir.mkdir(parents=True, exist_ok=True)
+    import shutil
+    if media.cover_path and media.cover_path.exists():
+        shutil.copy2(media.cover_path, textures_dir / media.cover_path.name)
+    for coach_img in media.coach_images:
+        if coach_img.exists():
+            shutil.copy2(coach_img, textures_dir / coach_img.name)
+
+    # 4. Physical Converters (Tape, Texture, Ambient)
+    if map_data.source_dir and map_data.source_dir.exists():
+        if status_callback: status_callback("Converting timeline tapes...")
+        from jd2021_installer.installers.tape_converter import auto_convert_tapes
+        auto_convert_tapes(map_data.source_dir, map_target, codename)
+        
+        if status_callback: status_callback("Processing ambient sound...")
+        from jd2021_installer.installers.ambient_processor import process_ambient_directory
+        process_ambient_directory(map_data.source_dir, map_target, codename)
+        
+        if status_callback: status_callback("Decoding textures...")
+        from jd2021_installer.installers.texture_decoder import decode_menuart_textures, decode_pictograms
+        menuart_src = map_data.source_dir / "MenuArt" / "textures"
+        if menuart_src.exists():
+            decode_menuart_textures(menuart_src, textures_dir)
+        picto_src = map_data.source_dir / "pictos"
+        if picto_src.exists():
+            decode_pictograms(picto_src, map_target / "pictos")
+
+    # 5. Moves
+    if media.moves_dir and media.moves_dir.exists():
+        if status_callback: status_callback("Integrating cross-platform move data...")
+        from jd2021_installer.installers.media_processor import copy_moves
+        copy_moves(media.moves_dir, map_target)
+
+    # 6. Register map in SkuScene ISC
+    if status_callback: status_callback("Registering map in song list...")
+    if progress_callback: progress_callback(90)
+    try:
         from jd2021_installer.installers.sku_scene import register_map
-        register_map(self._target_dir, codename)
+        register_map(game_dir, codename)
+    except Exception as e:
+        logger.warning("SkuScene registration failed (non-fatal): %s", e)
+
+    if progress_callback: progress_callback(100)
+    if status_callback: status_callback("Installation complete!")

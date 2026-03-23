@@ -31,6 +31,7 @@ from jd2021_installer.core.config import (
     AppConfig,
 )
 from jd2021_installer.core.exceptions import DownloadError, WebExtractionError
+from jd2021_installer.extractors.archive_ipk import extract_ipk
 from jd2021_installer.extractors.base import BaseExtractor
 
 logger = logging.getLogger("jd2021.extractors.web_playwright")
@@ -609,6 +610,16 @@ class WebPlaywrightExtractor(BaseExtractor):
                 logger.info("Extracting scene ZIP (fallback): %s", f)
                 with zipfile.ZipFile(zip_path, "r") as z:
                     z.extractall(output_dir)
+
+        # -- Unpack any .ipk files found after ZIP extraction (mirrors V1 step_04) ---
+        for ipk in output_dir.glob("*.ipk"):
+            logger.info("Unpacking IPK found in scene ZIP: %s", ipk.name)
+            try:
+                extract_ipk(ipk, output_dir)
+                # Delete IPK after extraction to keep normalization directory clean
+                ipk.unlink()
+            except Exception as e:
+                logger.warning("Failed to unpack IPK %s: %s", ipk.name, e)
 
     # ------------------------------------------------------------------
     # Live Discord scraping  (async, called via asyncio.run from QThread)

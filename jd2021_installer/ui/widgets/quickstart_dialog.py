@@ -30,7 +30,7 @@ class QuickstartDialog(QDialog):
 
         guide = QTextBrowser()
         guide.setOpenExternalLinks(True)
-        guide.setHtml(\"\"\"
+        guide.setHtml("""
             <h3>How to use this tool:</h3>
             <ol>
                 <li><b>Set Game Directory:</b> Go to the 'Configuration' tab and select your JD2021 'data' folder.</li>
@@ -47,7 +47,7 @@ class QuickstartDialog(QDialog):
             <p><i>Tip: Use 'Sync Beatgrid' to quickly align audio trim with the video start time.</i></p>
             <hr/>
             <p>For more help, visit the <a href="https://github.com/VenB304/jd2021-map-installer">GitHub Repository</a>.</p>
-        \"\"\" )
+        """)
         layout.addWidget(guide)
 
         footer = QHBoxLayout()

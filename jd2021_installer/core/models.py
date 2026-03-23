@@ -250,6 +250,7 @@ class NormalizedMapData:
     karaoke_tape: Optional[KaraokeTape] = None
     cinematic_tape: Optional[CinematicTape] = None
     media: MapMedia = field(default_factory=MapMedia)
+    source_dir: Optional[Path] = None
     video_start_time_override: Optional[float] = None
     has_autodance: bool = True
 
