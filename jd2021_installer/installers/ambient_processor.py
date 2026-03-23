@@ -165,16 +165,16 @@ def _generate_synthetic_amb(
 
 def inject_ambient_actors(target_dir: Path, codename: str) -> bool:
     """Inject AMB actors into the map's audio.isc file."""
-    audio_isc = target_dir / "Audio" / f"{codename}_audio.isc"
+    audio_isc = target_dir / "audio" / f"{codename}_audio.isc"
     if not audio_isc.is_file():
         # Case insensitive fallback
-        isc_files = list((target_dir / "Audio").glob("*_audio.isc"))
+        isc_files = list((target_dir / "audio").glob("*_audio.isc"))
         if isc_files:
             audio_isc = isc_files[0]
         else:
             return False
 
-    amb_tpls = list((target_dir / "Audio" / "AMB").glob("*.tpl"))
+    amb_tpls = list((target_dir / "audio" / "amb").glob("*.tpl"))
     if not amb_tpls:
         return False
 
@@ -216,7 +216,7 @@ def inject_ambient_actors(target_dir: Path, codename: str) -> bool:
 
 def process_ambient_directory(source_dir: Path, target_dir: Path, codename: str) -> int:
     """Process all ambient assets (templates and loose CKDs) in a directory."""
-    amb_out_dir = target_dir / "Audio" / "AMB"
+    amb_out_dir = target_dir / "audio" / "amb"
     amb_out_dir.mkdir(parents=True, exist_ok=True)
     count = 0
 
