@@ -227,6 +227,7 @@ class MapMedia:
     banner_path: Optional[Path] = None
     coach_images: List[Path] = field(default_factory=list)
     pictogram_dir: Optional[Path] = None
+    moves_dir: Optional[Path] = None
     map_preview_video: Optional[Path] = None
 
 

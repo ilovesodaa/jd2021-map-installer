@@ -191,8 +191,26 @@ def download_files(
         fname = get_filename_from_url(url)
         target = str(download_path / fname)
 
+        # Check if already in cache
         if os.path.exists(target):
-            logger.info("%s already exists, skipping.", fname)
+            logger.info("%s already in cache, skipping download.", fname)
+            downloaded[fname] = target
+            continue
+
+        # Check if already installed in game directory
+        codename = download_path.name
+        game_map_dir = config.game_directory and config.game_directory / "World" / "MAPS" / codename
+        found_in_game = False
+        if game_map_dir and game_map_dir.exists():
+            for fpath in game_map_dir.rglob(fname):
+                if fpath.is_file():
+                    import shutil
+                    logger.info("Found %s in existing game installation, copying to cache...", fname)
+                    shutil.copy2(fpath, target)
+                    found_in_game = True
+                    break
+        
+        if found_in_game:
             downloaded[fname] = target
             continue
 

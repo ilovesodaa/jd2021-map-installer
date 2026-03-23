@@ -160,6 +160,54 @@ def extract_ipk(target_file: str | Path, output_dir: str | Path) -> Path:
         raise IPKExtractionError(f"Failed to extract IPK: {exc}") from exc
 
 
+def inspect_ipk(target_file: str | Path) -> list[str]:
+    """Fast scan of the IPK to discover top-level directories (maps).
+    
+    Reads only headers without decompressing data.
+    """
+    target_file = Path(target_file)
+    if not target_file.exists():
+        return []
+
+    try:
+        with open(target_file, "rb") as f:
+            ipk_header = _read_header_fields(f, _IPK_HEADER_TEMPLATE)
+            if ipk_header["magic"]["value"] != _IPK_MAGIC:
+                return []
+
+            num_files = _unpack(ipk_header["num_files"]["value"])
+            root_dirs = set()
+            
+            for _ in range(num_files):
+                fheader = _get_file_header()
+                for v in fheader:
+                    size = fheader[v]["size"]
+                    if v == "path_name":
+                        size = _unpack(fheader["path_size"]["value"])
+                    if v == "file_name":
+                        size = _unpack(fheader["name_size"]["value"])
+                    fheader[v]["value"] = f.read(size)
+                
+                # Check path name to see if it belongs to a folder
+                path_ori = fheader["path_name"]["value"].decode().lower().replace('\\', '/')
+                # Look for world/maps/<codename>
+                if "world/maps/" in path_ori:
+                    # Extract the codename
+                    after_maps = path_ori.split("world/maps/")[1]
+                    parts = after_maps.split("/")
+                    if parts and parts[0]:
+                        root_dirs.add(parts[0])
+
+            # Filter out random junk
+            return sorted({d for d in root_dirs if d and not d.startswith(".")})
+
+    except Exception as exc:
+        logger.warning("Fast inspect failed for IPK %s: %s", target_file, exc)
+        return []
+
+
+
+
 class ArchiveIPKExtractor(BaseExtractor):
     """Extractor for IPK archive files."""
 

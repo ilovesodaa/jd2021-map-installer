@@ -161,7 +161,7 @@ def copy_audio(
     src_path: str | Path,
     dst_path: str | Path,
 ) -> Path:
-    """Copy an audio file to the destination."""
+    """Copy or transcode an audio file to the destination."""
     src = Path(src_path)
     dst = Path(dst_path)
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -169,8 +169,21 @@ def copy_audio(
     if not src.exists():
         raise MediaProcessingError(f"Source audio not found: {src}")
 
-    shutil.copy2(src, dst)
-    logger.info("Copied audio: %s -> %s", src.name, dst)
+    # JD2017 PC requires .wav for stable engine compatibility.
+    # If source is .ogg but we are writing .wav, let's transcode:
+    if src.suffix.lower() == ".ogg" and dst.suffix.lower() == ".wav":
+        logger.info("Transcoding OGG -> WAV: %s -> %s", src.name, dst.name)
+        run_ffmpeg([
+            "-y",
+            "-i", str(src),
+            "-c:a", "pcm_s16le",
+            "-ar", "48000",
+            str(dst)
+        ])
+    else:
+        shutil.copy2(src, dst)
+        logger.info("Copied audio: %s -> %s", src.name, dst)
+        
     return dst
 
 
@@ -329,4 +342,76 @@ def decode_xma2_audio(
             f"Could not execute vgmstream at '{vgm_bin}'. "
             "Check that the binary is not blocked by antivirus."
         )
+
+
+def copy_moves(
+    moves_src_dir: str | Path,
+    target_dir: str | Path,
+) -> int:
+    """Extract and merge .gesture and .msm files cross-platform to PC format.
+
+    Args:
+        moves_src_dir: The extracted root 'moves' folder containing 'nx', 'durango', etc.
+        target_dir: The map's root installation target directory.
+
+    Returns:
+        The number of valid move skeleton files copied.
+    """
+    src_root = Path(moves_src_dir)
+    if not src_root.is_dir():
+        return 0
+
+    pc_moves_dir = Path(target_dir) / "Timeline" / "Moves" / "PC"
+    total_copied = 0
+
+    KINECT_PLATFORMS = {"DURANGO", "SCARLETT", "X360"}
+
+    # Pass 1: Copy Kinect-compatible gestures and universally compatible MSMs
+    for plat_dir in src_root.iterdir():
+        if not plat_dir.is_dir() or plat_dir.name.upper() == "PC":
+            continue
+            
+        plat_name = plat_dir.name.upper()
+
+        if plat_name in KINECT_PLATFORMS:
+            for gesture_file in plat_dir.glob("*.gesture"):
+                dest = pc_moves_dir / gesture_file.name
+                if not dest.exists():
+                    pc_moves_dir.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(gesture_file, dest)
+                    total_copied += 1
+
+        for msm_file in plat_dir.glob("*.msm"):
+            dest = pc_moves_dir / msm_file.name
+            if not dest.exists():
+                pc_moves_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(msm_file, dest)
+                total_copied += 1
+
+    # Pass 2: Substitute ORBIS (PS4) exclusive gestures with Kinect base gestures
+    pc_gestures = {f.name for f in pc_moves_dir.glob("*.gesture")}
+    
+    for plat_dir in src_root.iterdir():
+        if not plat_dir.is_dir() or plat_dir.name.upper() in KINECT_PLATFORMS or plat_dir.name.upper() == "PC":
+            continue
+            
+        for gesture_file in plat_dir.glob("*.gesture"):
+            fname = gesture_file.name
+            if fname in pc_gestures or (pc_moves_dir / fname).exists():
+                continue
+                
+            stem = gesture_file.stem
+            base = stem.rstrip("0123456789")
+            sub_src = pc_moves_dir / (base + ".gesture")
+            
+            if base != stem and sub_src.exists():
+                pc_moves_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(sub_src, pc_moves_dir / fname)
+                total_copied += 1
+
+    if total_copied:
+        logger.info("Merged %d gesture/msm file(s) from %s into PC/", total_copied, src_root)
+
+    return total_copied
+
 
