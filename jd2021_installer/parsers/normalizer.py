@@ -288,147 +288,126 @@ def _discover_media(directory: str, codename: Optional[str] = None) -> MapMedia:
         if preview_videos:
             media.map_preview_video = preview_videos[0]
 
-    # Ported from V1: _pick_audio
     # 1. Try exact codename match at top level (.ogg then .wav)
+    audio_found = False
     if codename:
         for ext in (".ogg", ".wav"):
             candidate = dir_path / f"{codename}{ext}"
             if candidate.is_file():
                 media.audio_path = candidate
-                logger.info("Selected audio (exact match): %s", candidate.name)
-                return media
+                logger.debug("Selected audio (exact match): %s", candidate.name)
+                audio_found = True
+                break
 
     # 2. Glob for any .ogg at top level (excluding previews)
-    oggs = [
-        f for f in dir_path.glob("*.ogg")
-        if "AudioPreview" not in f.name
-    ]
-    if oggs:
-        if codename:
-            lower = codename.lower()
-            matches = [p for p in oggs if p.name.lower().startswith(lower)]
-            if matches:
-                 media.audio_path = matches[0]
-                 logger.info("Selected audio (top-level ogg match): %s", media.audio_path.name)
-                 return media
-        else:
-            media.audio_path = oggs[0]
-            logger.info("Selected audio (top-level ogg): %s", media.audio_path.name)
-            return media
+    if not audio_found:
+        oggs = [f for f in dir_path.glob("*.ogg") if "audiopreview" not in f.name.lower()]
+        if oggs:
+            if codename:
+                lower = codename.lower()
+                matches = [p for p in oggs if p.name.lower().startswith(lower)]
+                if matches:
+                    media.audio_path = matches[0]
+                    logger.debug("Selected audio (top-level ogg match): %s", media.audio_path.name)
+                    audio_found = True
+            if not audio_found:
+                media.audio_path = oggs[0]
+                logger.debug("Selected audio (top-level ogg): %s", media.audio_path.name)
+                audio_found = True
 
     # 3. Glob for any .wav at top level (excluding previews)
-    wavs = [
-        f for f in dir_path.glob("*.wav")
-        if "AudioPreview" not in f.name
-    ]
-    if wavs:
-        if codename:
-            lower = codename.lower()
-            matches = [p for p in wavs if p.name.lower().startswith(lower)]
-            if matches:
-                media.audio_path = matches[0]
-                logger.info("Selected audio (top-level wav match): %s", media.audio_path.name)
-                return media
-        else:
-            media.audio_path = wavs[0]
-            logger.info("Selected audio (top-level wav): %s", media.audio_path.name)
-            return media
+    if not audio_found:
+        wavs = [f for f in dir_path.glob("*.wav") if "audiopreview" not in f.name.lower()]
+        if wavs:
+            if codename:
+                lower = codename.lower()
+                matches = [p for p in wavs if p.name.lower().startswith(lower)]
+                if matches:
+                    media.audio_path = matches[0]
+                    logger.debug("Selected audio (top-level wav match): %s", media.audio_path.name)
+                    audio_found = True
+            if not audio_found:
+                media.audio_path = wavs[0]
+                logger.debug("Selected audio (top-level wav): %s", media.audio_path.name)
+                audio_found = True
 
     # 4. Recursive search (for extracted IPK structures with nested dirs)
-    #    Try .ogg first, then .wav, then .wav.ckd
-    patterns = [
-        ("**/ *.ogg", False), # Fix space in glob if needed, but Path.rglob ignores it? 
-        ("**/*.wav", False),
-        ("**/*.wav.ckd", True)
-    ]
-    # Fixed patterns for Path.rglob
-    patterns = [
-        ("*.ogg", False),
-        ("*.wav", False),
-        ("*.wav.ckd", True)
-    ]
-    
-    for pattern, is_ckd in patterns:
-        hits = list(dir_path.rglob(pattern))
-        if not hits:
-            continue
+    if not audio_found:
+        patterns = [("*.ogg", False), ("*.wav", False), ("*.wav.ckd", True)]
+        for pattern, is_ckd in patterns:
+            hits = list(dir_path.rglob(pattern))
+            if not hits: continue
             
-        # Filter out preview / ambient / autodance files
-        filtered_hits = []
-        for h in hits:
-            h_low = str(h).lower()
-            h_name_low = h.name.lower()
-            if "audiopreview" in h_name_low:
-                continue
-            if "/amb/" in h_low.replace("\\", "/") or "/autodance/" in h_low.replace("\\", "/"):
-                continue
-            if is_ckd and h_name_low.startswith("amb_"):
-                continue
-            filtered_hits.append(h)
-        
-        if not filtered_hits:
-            continue
+            filtered_hits = []
+            for h in hits:
+                h_low = str(h).lower().replace("\\", "/")
+                h_name_low = h.name.lower()
+                if "audiopreview" in h_name_low or "/amb/" in h_low or "/autodance/" in h_low:
+                    continue
+                if is_ckd and h_name_low.startswith("amb_"):
+                    continue
+                filtered_hits.append(h)
             
-        if codename:
-            lower = codename.lower()
-            # Filename match
-            matches = [p for p in filtered_hits if p.name.lower().startswith(lower)]
-            # Path match: codename appears as a directory component
-            if not matches:
-                matches = [p for p in filtered_hits
-                           if f"/{lower}/" in str(p).lower().replace("\\", "/")]
+            if not filtered_hits: continue
+                
+            final_hits = []
+            if codename:
+                lower = codename.lower()
+                final_hits = [p for p in filtered_hits if p.name.lower().startswith(lower)]
+                if not final_hits:
+                    final_hits = [p for p in filtered_hits if f"/{lower}/" in str(p).lower().replace("\\", "/")]
             
-            if matches:
-                final_hits = matches
+            if not final_hits:
+                final_hits = filtered_hits
+
+            selected = final_hits[0]
+            if is_ckd:
+                from jd2021_installer.installers.media_processor import extract_ckd_audio_v1
+                decoded = extract_ckd_audio_v1(selected, selected.parent)
+                if decoded:
+                    media.audio_path = Path(decoded)
+                    logger.debug("Selected and extracted audio: %s", media.audio_path.name)
+                    audio_found = True
+                    break
             else:
-                # No match for this codename -- skip to next pattern
-                continue
-        else:
-            final_hits = filtered_hits
+                media.audio_path = selected
+                logger.debug("Selected audio (recursive): %s", media.audio_path.name)
+                audio_found = True
+                break
 
-        selected = final_hits[0]
-        if is_ckd:
-            # Handle Xbox 360 .wav.ckd (XMA2) auto-decoding
-            from jd2021_installer.installers.media_processor import (
-                extract_ckd_audio_v1, # We will rename/implement this
-                is_xma2_audio,
-            )
-            # V1 logic extracts it in-place
-            decoded = extract_ckd_audio_v1(selected, selected.parent)
-            if decoded:
-                media.audio_path = Path(decoded)
-                logger.info("Selected and extracted audio: %s", media.audio_path.name)
-                return media
-        else:
-            media.audio_path = selected
-            logger.info("Selected audio (recursive): %s", media.audio_path.name)
-            return media
-
-    return media
-
-    # Cover images
+    # 5. Cover images
     for ext in ("*.jpg", "*.png", "*.tga", "*.tga.ckd", "*.jpg.ckd", "*.png.ckd"):
         covers = [f for f in dir_path.rglob(ext) if "cover" in f.name.lower()]
         if covers:
             media.cover_path = covers[0]
             break
 
-    # Coach images
+    # 6. Coach images
     for ext in ("*.png", "*.tga", "*.png.ckd", "*.tga.ckd"):
-        coaches = sorted(
-            f for f in dir_path.rglob(ext) if "coach_" in f.name.lower()
-        )
+        coaches = sorted(f for f in dir_path.rglob(ext) if "coach_" in f.name.lower())
         if coaches:
             media.coach_images = coaches
             break
 
-    # Pictogram directory
-    picto_dirs = list(dir_path.rglob("pictos"))
-    if picto_dirs:
-        media.pictogram_dir = picto_dirs[0]
+    # 7. Pictogram directory
+    # V1 parity: search for 'pictos' or 'timeline/pictos'
+    picto_candidates = []
+    for pattern in ("pictos", "Pictos", "PICTOS"):
+        picto_candidates.extend([d for d in dir_path.rglob(pattern) if d.is_dir()])
+    
+    if picto_candidates:
+        # Prefer the one closest to the codename if possible
+        if codename:
+            lower = codename.lower()
+            filtered = [d for d in picto_candidates if lower in str(d).lower().replace("\\", "/")]
+            media.pictogram_dir = filtered[0] if filtered else picto_candidates[0]
+        else:
+            media.pictogram_dir = picto_candidates[0]
 
-    # Moves directory
+    # 8. Moves directory
     move_dirs = [d for d in dir_path.rglob("moves") if d.is_dir()]
+    if not move_dirs:
+        move_dirs = [d for d in dir_path.rglob("Moves") if d.is_dir()]
     if move_dirs:
         media.moves_dir = move_dirs[0]
 
