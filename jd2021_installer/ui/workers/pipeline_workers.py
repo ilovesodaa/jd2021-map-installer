@@ -133,17 +133,21 @@ def reprocess_audio(
     write_game_files(map_data, target_dir, config)
     
     # 2. Ported V1 FFmpeg logic: pad/trim main audio and generate intro AMB
-    from jd2021_installer.installers.media_processor import convert_audio, generate_intro_amb
+    from jd2021_installer.installers.media_processor import (
+        convert_audio, 
+        generate_intro_amb,
+        extract_amb_clips,
+    )
     
     codename = map_data.codename
     media = map_data.media
     
     if media.audio_path and media.audio_path.exists():
-        # Generates Audio/<codename>.wav and .ogg
+        # Generates audio/<codename>.wav and .ogg
         convert_audio(media.audio_path, codename, target_dir, a_offset, config)
         
-        # Generates Audio/AMB/<intro>.wav/tpl/ilu and injects into audio ISC
-        ogg_path = target_dir / "Audio" / f"{codename}.ogg"
+        # Generates audio/amb/<intro>.wav/tpl/ilu and injects into audio ISC
+        ogg_path = target_dir / "audio" / f"{codename}.ogg"
         v_override = map_data.video_start_time_override
         
         # Use beat marker data if available for precise pre-roll
@@ -156,6 +160,10 @@ def reprocess_audio(
             )
             
         generate_intro_amb(ogg_path, codename, target_dir, a_offset, v_override, preroll, config)
+
+        # Ported V1: Extract cinematic AMB clips from the main audio
+        if map_data.cinematic_tape:
+            extract_amb_clips(map_data.cinematic_tape, media.audio_path, target_dir, codename, config)
 
 
 class ApplyAndFinishWorker(QObject):
@@ -354,6 +362,51 @@ class BatchInstallWorker(QObject):
             
         install_map_to_game(map_data, self._target_dir, self._config, status_callback=callback)
 
+
+
+def pre_install_cleanup(
+    game_dir: Path, 
+    codename: str, 
+    status_callback: Optional[callable] = None
+) -> None:
+    """Clean up any previous installation of this map, including cooked cache."""
+    import shutil
+    
+    # Normalize game_dir
+    while game_dir.name.lower() in ("world", "data"):
+        game_dir = game_dir.parent
+
+    if status_callback:
+        status_callback(f"Cleaning up previous installation of {codename}...")
+
+    # 1. Delete main map directory
+    map_dir = game_dir / "data" / "world" / "maps" / codename
+    if map_dir.exists():
+        logger.info("Deleting previous map directory: %s", codename)
+        shutil.rmtree(map_dir, ignore_errors=True)
+
+    # 2. Delete cooked cache directories
+    # V1 Parity: engine cache paths are strictly lowercase
+    name_lower = codename.lower()
+    cache_base = game_dir / "data" / "cache" / "itf_cooked" / "pc" / "world" / "maps" / name_lower
+    
+    cache_paths = [
+        cache_base,
+        cache_base.with_name(cache_base.name + "_autodance"),
+        cache_base.with_name(cache_base.name + "_cine"),
+        cache_base / "audio"
+    ]
+
+    for cp in cache_paths:
+        if cp.exists():
+            logger.info("Deleting cache: %s", cp.name)
+            shutil.rmtree(cp, ignore_errors=True)
+
+    # 3. Unregister from SkuScene
+    from jd2021_installer.installers.sku_scene import unregister_map
+    unregister_map(game_dir, codename)
+
+
 def install_map_to_game(
     map_data: NormalizedMapData, 
     game_dir: Path, 
@@ -364,12 +417,16 @@ def install_map_to_game(
     """Core installation logic: files → game directory."""
     codename = map_data.codename
     
+    # 0. Pre-install cleanup
+    pre_install_cleanup(game_dir, codename, status_callback)
+    if progress_callback: progress_callback(5)
+
     # Normalize the game directory root in case the user selected a subfolder
     while game_dir.name.lower() in ("world", "data"):
         game_dir = game_dir.parent
 
-    # Resolve target directory: game_dir / data / World / MAPS / <codename>
-    map_target = game_dir / "data" / "World" / "MAPS" / codename
+    # Resolve target directory: game_dir / data / world / maps / <codename>
+    map_target = game_dir / "data" / "world" / "maps" / codename
     map_target.mkdir(parents=True, exist_ok=True)
 
     # 1. & 2. Write UbiArt config files and process audio WITH initial offsets
@@ -397,14 +454,14 @@ def install_map_to_game(
         if status_callback: status_callback("Copy Video files")
         if progress_callback: progress_callback(50)
         from jd2021_installer.installers.media_processor import copy_video
-        video_dst = map_target / "VideosCoach" / f"{codename}.webm"
+        video_dst = map_target / "videoscoach" / f"{codename}.webm"
         copy_video(media.video_path, video_dst)
         if media.map_preview_video and media.map_preview_video.exists():
-            preview_dst = map_target / "VideosCoach" / f"{codename}_MapPreview.webm"
+            preview_dst = map_target / "videoscoach" / f"{codename}_MapPreview.webm"
             copy_video(media.map_preview_video, preview_dst)
 
     # 3. Copy cover/coach images
-    textures_dir = map_target / "MenuArt" / "textures"
+    textures_dir = map_target / "menuart" / "textures"
     textures_dir.mkdir(parents=True, exist_ok=True)
     import shutil
     if media.cover_path and media.cover_path.exists():
@@ -435,6 +492,10 @@ def install_map_to_game(
         menuart_src = map_data.source_dir / "MenuArt" / "textures"
         if menuart_src.exists():
             decode_menuart_textures(menuart_src, textures_dir)
+            
+        # V1 Parity: Validate and heal MenuArt (case-fix + RGBA re-save)
+        from jd2021_installer.installers.media_processor import process_menu_art
+        process_menu_art(map_target, codename)
             
         if status_callback: status_callback("Decode Pictograms")
         picto_src = map_data.media.pictogram_dir

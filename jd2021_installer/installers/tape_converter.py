@@ -183,7 +183,7 @@ def convert_dance_tape(ckd_path: Path, target_dir: Path, codename: str) -> bool:
     Input:  ``*_TML_Dance.dtape.ckd``
     Output: ``Timeline/{codename}_TML_Dance.dtape``
     """
-    output = target_dir / "Timeline" / f"{codename}_TML_Dance.dtape"
+    output = target_dir / "timeline" / f"{codename}_TML_Dance.dtape"
     return convert_tape_file(ckd_path, output)
 
 
@@ -193,7 +193,7 @@ def convert_karaoke_tape(ckd_path: Path, target_dir: Path, codename: str) -> boo
     Input:  ``*_TML_Karaoke.ktape.ckd``
     Output: ``Timeline/{codename}_TML_Karaoke.ktape``
     """
-    output = target_dir / "Timeline" / f"{codename}_TML_Karaoke.ktape"
+    output = target_dir / "timeline" / f"{codename}_TML_Karaoke.ktape"
     return convert_tape_file(ckd_path, output)
 
 
@@ -203,7 +203,7 @@ def convert_cinematic_tape(ckd_path: Path, target_dir: Path, codename: str) -> b
     Input:  ``*_mainsequence.tape.ckd`` or ``*_MainSequence.tape.ckd``
     Output: ``Cinematics/{codename}_MainSequence.tape``
     """
-    output = target_dir / "Cinematics" / f"{codename}_MainSequence.tape"
+    output = target_dir / "cinematics" / f"{codename}_MainSequence.tape"
     return convert_tape_file(ckd_path, output)
 
 

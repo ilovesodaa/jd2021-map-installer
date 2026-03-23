@@ -119,12 +119,12 @@ def _find_ckd_files(
     filtered = _filter_by_codename(paths, codename, directory)
     result = _prefer_non_legacy(filtered)
 
-    # Fallback: if codename filtering removed all candidates, try without it
-    if not result and paths:
+    # V1 Parity: STRICT SCOPING. If codename was provided, do NOT fall back to unfiltered.
+    # This prevents picking up assets from other maps in a multi-map (bundle) IPK.
+    if not result and paths and not codename:
         logger.debug(
-            "CKD search with codename '%s' found 0 results; "
-            "falling back to unfiltered (%d candidates)",
-            codename, len(paths),
+            "CKD search returned 0 results; falling back to unfiltered (%d candidates)",
+            len(paths),
         )
         result = _prefer_non_legacy(paths)
 
@@ -315,9 +315,10 @@ def _discover_media(directory: str, codename: Optional[str] = None) -> MapMedia:
     codename_low = codename.lower() if codename else None
 
     # 1. Video files (.webm)
+    # V1 Parity: prioritize quality suffixes and codename match
+    SUPPORTED_QUALITIES = ["ULTRA_HD", "ULTRA", "HIGH_HD", "HIGH", "MID_HD", "MID", "LOW_HD", "LOW"]
     webms = list(dir_path.rglob("*.webm"))
     if webms:
-        # Exclusion list for main video
         main_videos = []
         for w in webms:
             w_name = w.name.lower()
@@ -328,27 +329,33 @@ def _discover_media(directory: str, codename: Optional[str] = None) -> MapMedia:
             main_videos.append(w)
         
         if main_videos:
-            # Priority: 1. codename.webm, 2. codename in path, 3. first available
-            best_video = main_videos[0]
+            # Filter by codename first if in bundle
             if codename_low:
+                matches = [v for v in main_videos if v.name.lower().startswith(codename_low)]
+                if matches:
+                    main_videos = matches
+            
+            # Priority: 1. Requested quality suffix, 2. any quality suffix, 3. first available
+            best_video = main_videos[0]
+            found_quality = False
+            for q in SUPPORTED_QUALITIES:
+                suffix = f"_{q}.webm"
                 for v in main_videos:
-                    if v.name.lower() == f"{codename_low}.webm":
+                    if v.name.upper().endswith(suffix):
                         best_video = v
+                        found_quality = True
                         break
-                    if codename_low and codename_low in str(v).lower().replace("\\", "/"):
-                        best_video = v
+                if found_quality: break
+            
             media.video_path = best_video
 
     # 2. Audio files (.ogg, .wav, .wav.ckd)
-    # V1 Priority: 1. codename.ext, 2. *.ext
-    # Recursive search with strict exclusions
-    audio_patterns = ["*.ogg", "*.wav", "*.wav.ckd"]
+    # V1 Priority: .ogg > .wav > .wav.ckd
     audio_found = False
-    
-    for pattern in audio_patterns:
+    for ext_pattern in ("*.ogg", "*.wav", "*.wav.ckd"):
         if audio_found: break
         
-        candidates = list(dir_path.rglob(pattern))
+        candidates = list(dir_path.rglob(ext_pattern))
         if not candidates: continue
         
         # Prune exclusions: amb, autodance, preview
@@ -356,7 +363,8 @@ def _discover_media(directory: str, codename: Optional[str] = None) -> MapMedia:
         for c in candidates:
             c_path = str(c).lower().replace("\\", "/")
             c_name = c.name.lower()
-            if any(k in c_path for k in ("/amb/", "/autodance/", "audiopreview")):
+            # Strict V1 exclusions
+            if any(k in c_path for k in ("/amb/", "/autodance/", "audiopreview", "mappreview")):
                 continue
             if c_name.startswith("amb_") or c_name.startswith("ad_"):
                 continue
@@ -364,21 +372,19 @@ def _discover_media(directory: str, codename: Optional[str] = None) -> MapMedia:
         
         if not filtered: continue
         
-        # Pick best candidate
-        best_audio = filtered[0]
+        # Codename scoping
         if codename_low:
-            # 1. Exact name match
-            for a in filtered:
-                if a.stem.lower() == codename_low or a.name.lower() == f"{codename_low}.wav.ckd":
-                    best_audio = a
-                    break
+            matches = [a for a in filtered if a.name.lower().startswith(codename_low)]
+            if not matches:
+                # Path-based scoping for deeply nested IPK structures
+                matches = [a for a in filtered if f"/{codename_low}/" in str(a).lower().replace("\\", "/")]
+            if matches:
+                filtered = matches
             else:
-                # 2. Path match
-                for a in filtered:
-                    if f"/{codename_low}/" in str(a).lower().replace("\\", "/"):
-                        best_audio = a
-                        break
+                # If we're in a bundle and this extension didn't match codename, skip it
+                continue
         
+        best_audio = filtered[0]
         # Handle CKD extraction
         if best_audio.name.lower().endswith(".ckd"):
             from jd2021_installer.installers.media_processor import extract_ckd_audio_v1
@@ -390,42 +396,48 @@ def _discover_media(directory: str, codename: Optional[str] = None) -> MapMedia:
             media.audio_path = best_audio
             audio_found = True
 
-    # 3. Cover images
+    # 3. & 4. Images (Cover/Coach)
+    # V1 Parity: Prefer exact codename matches to avoid bundle bleed
     for ext in ("*.jpg", "*.png", "*.tga", "*.ckd"):
-        covers = [f for f in dir_path.rglob(ext) if "cover" in f.name.lower()]
-        if covers:
-            media.cover_path = covers[0]
-            break
-
-    # 4. Coach images
-    for ext in ("*.png", "*.tga", "*.ckd"):
-        coaches = sorted(f for f in dir_path.rglob(ext) if "coach_" in f.name.lower())
-        if coaches:
-            media.coach_images = coaches
-            break
+        all_imgs = list(dir_path.rglob(ext))
+        if not media.cover_path:
+            covers = [f for f in all_imgs if "cover" in f.name.lower()]
+            if codename_low:
+                matches = [c for c in covers if codename_low in c.name.lower()]
+                if matches: covers = matches
+            if covers:
+                media.cover_path = covers[0]
+        
+        if not media.coach_images:
+            coaches = [f for f in all_imgs if "coach_" in f.name.lower()]
+            if codename_low:
+                matches = [c for c in coaches if codename_low in c.name.lower()]
+                if matches: coaches = matches
+            if coaches:
+                media.coach_images = sorted(coaches)
 
     # 5. Pictogram directory
-    # V1 Parity: Look for 'pictos' folder OR any folder containing '*picto*.ckd'
+    # V1 Parity: strictly scope to codename if possible
     media.pictogram_dir = None
     picto_candidates = [d for d in dir_path.rglob("*") if d.is_dir() and "picto" in d.name.lower()]
-    if picto_candidates:
-        # Prefer 'pictos' or 'timeline/pictos'
-        for d in picto_candidates:
-            if d.name.lower() == "pictos":
-                media.pictogram_dir = d
-                break
-        else:
-            media.pictogram_dir = picto_candidates[0]
+    if codename_low:
+        picto_candidates = [d for d in picto_candidates if codename_low in str(d).lower().replace("\\", "/")]
     
-    if not media.pictogram_dir:
-        # Check for folders containing picto CKDs if 'pictos' folder name doesn't exist
-        for d in [p.parent for p in dir_path.rglob("*picto*.ckd")]:
-            media.pictogram_dir = d
-            break
+    if picto_candidates:
+        media.pictogram_dir = picto_candidates[0]
+    else:
+        # Fallback: finding parent of any picto CKD
+        picto_files = list(dir_path.rglob("*picto*.ckd"))
+        if codename_low:
+            picto_files = [f for f in picto_files if codename_low in str(f).lower().replace("\\", "/")]
+        if picto_files:
+            media.pictogram_dir = picto_files[0].parent
 
     # 6. Moves directory
     media.moves_dir = None
     move_candidates = [d for d in dir_path.rglob("*") if d.is_dir() and "moves" in d.name.lower()]
+    if codename_low:
+        move_candidates = [d for d in move_candidates if codename_low in str(d).lower().replace("\\", "/")]
     if move_candidates:
         media.moves_dir = move_candidates[0]
 

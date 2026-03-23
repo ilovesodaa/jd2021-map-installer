@@ -105,7 +105,7 @@ def _write_musictrack_trk(target: Path, name: str, mt: MusicTrackStructure, vst:
         f"fadeOutDuration = {mt.fade_out_duration}, fadeOutType = {mt.fade_out_type}, "
         f"entryPoints = {{ }} }} }}"
     )
-    (target / f"Audio/{name}.trk").write_text(content, encoding="utf-8")
+    (target / f"audio/{name}.trk").write_text(content, encoding="utf-8")
 
 
 def _write_songdesc(target: Path, name: str, sd: SongDescription,
@@ -251,7 +251,7 @@ params =
 def _write_audio_isc(target: Path, name: str) -> None:
     """Write musictrack.tpl, sequence.tpl, .stape, and audio.isc."""
     # musictrack.tpl
-    (target / f"Audio/{name}_musictrack.tpl").write_text(
+    (target / f"audio/{name}_musictrack.tpl").write_text(
         f'''includeReference("world/maps/{name.lower()}/audio/{name}.trk")
 params =
 {{
@@ -280,7 +280,7 @@ params =
 }}''')
 
     # sequence.tpl
-    (target / f"Audio/{name}_sequence.tpl").write_text(
+    (target / f"audio/{name}_sequence.tpl").write_text(
         f'''params =
 {{
 \tNAME = "Actor_Template",
@@ -317,7 +317,7 @@ params =
 }}''', encoding="utf-8")
 
     # .stape
-    (target / f"Audio/{name}.stape").write_text(
+    (target / f"audio/{name}.stape").write_text(
         f'''params =
 {{
     NAME="Tape",
@@ -329,7 +329,7 @@ params =
 }}''')
 
     # audio.isc
-    (target / f"Audio/{name}_audio.isc").write_text(
+    (target / f"audio/{name}_audio.isc").write_text(
         f'''<?xml version="1.0" encoding="ISO-8859-1"?>
 <root>
 \t<Scene ENGINE_VERSION="55299" GRIDUNIT="0.500000" DEPTH_SEPARATOR="0" NEAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000" FAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000">
@@ -354,7 +354,7 @@ params =
 </root>''')
 
     # ConfigMusic.sfi
-    (target / "Audio/ConfigMusic.sfi").write_text(
+    (target / "audio/ConfigMusic.sfi").write_text(
         '''<root>
   <SoundConfiguration TargetName="PC" Format="PCM" IsStreamed="1" IsMusic="1"/>
   <SoundConfiguration TargetName="Durango" Format="PCM" IsStreamed="1" IsMusic="1"/>
@@ -366,7 +366,7 @@ params =
 def _write_timeline_files(target: Path, name: str) -> None:
     """Write Timeline TPLs, ACTs, and the tml.isc scene file."""
     for ty, tpl_name in [("Dance", "Motion"), ("Karaoke", "Karaoke")]:
-        (target / f"Timeline/{name}_TML_{ty}.tpl").write_text(
+        (target / f"timeline/{name}_TML_{ty}.tpl").write_text(
             f'''params =
 {{
 \tNAME = "Actor_Template",
@@ -402,7 +402,7 @@ def _write_timeline_files(target: Path, name: str) -> None:
 \t}}
 }}''', encoding="utf-8")
 
-        (target / f"Timeline/{name}_TML_{ty}.act").write_text(
+        (target / f"timeline/{name}_TML_{ty}.act").write_text(
             f'''params =
 {{
     NAME = "Actor",
@@ -422,7 +422,7 @@ def _write_timeline_files(target: Path, name: str) -> None:
 }}''', encoding="utf-8")
 
     # tml.isc
-    (target / f"Timeline/{name}_tml.isc").write_text(
+    (target / f"timeline/{name}_tml.isc").write_text(
         f'''<?xml version="1.0" encoding="ISO-8859-1"?>
 <root>
     <Scene>
@@ -447,7 +447,7 @@ def _write_timeline_files(target: Path, name: str) -> None:
 def _write_videoscoach_files(target: Path, name: str) -> None:
     """Write VideosCoach MPDs, video player ACTs, and video ISC files."""
     for mpd_name in [name, f"{name}_MapPreview"]:
-        (target / f"VideosCoach/{mpd_name}.mpd").write_text(
+        (target / f"videoscoach/{mpd_name}.mpd").write_text(
             f'''<?xml version="1.0"?>
 <MPD xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="urn:mpeg:DASH:schema:MPD:2011" xsi:schemaLocation="urn:mpeg:DASH:schema:MPD:2011" type="static" mediaPresentationDuration="PT230S" minBufferTime="PT1S" profiles="urn:webm:dash:profile:webm-on-demand:2012">
 \t<Period id="0" start="PT0S" duration="PT230S">
@@ -462,7 +462,7 @@ def _write_videoscoach_files(target: Path, name: str) -> None:
 \t</Period>
 </MPD>''', encoding="utf-8")
 
-    (target / "VideosCoach/video_player_main.act").write_text(
+    (target / "videoscoach/video_player_main.act").write_text(
         f'''params =
 {{
     NAME="Actor",
@@ -483,7 +483,7 @@ def _write_videoscoach_files(target: Path, name: str) -> None:
     }}
 }}''', encoding="utf-8")
 
-    (target / "VideosCoach/video_player_map_preview.act").write_text(
+    (target / "videoscoach/video_player_map_preview.act").write_text(
         f'''params =
 {{
     NAME="Actor",
@@ -505,7 +505,7 @@ def _write_videoscoach_files(target: Path, name: str) -> None:
     }}
 }}''', encoding="utf-8")
 
-    (target / f"VideosCoach/{name}_video.isc").write_text(
+    (target / f"videoscoach/{name}_video.isc").write_text(
         f'''<?xml version="1.0" encoding="ISO-8859-1"?>
 <root>
     <Scene>
@@ -531,7 +531,7 @@ def _write_videoscoach_files(target: Path, name: str) -> None:
     </Scene>
 </root>''', encoding="utf-8")
 
-    (target / f"VideosCoach/{name}_video_map_preview.isc").write_text(
+    (target / f"videoscoach/{name}_video_map_preview.isc").write_text(
         f'''<?xml version="1.0" encoding="ISO-8859-1"?>
 <root>
     <Scene>
@@ -550,7 +550,7 @@ def _write_menuart_files(target: Path, name: str, num_coach: int) -> None:
             'cover_generic', 'cover_online', 'map_bkg'] + coach_arts
 
     for art in arts:
-        (target / f"MenuArt/Actors/{name}_{art}.act").write_text(
+        (target / f"menuart/actors/{name}_{art}.act").write_text(
             f'''params =
 {{
     NAME="Actor",
@@ -586,7 +586,7 @@ def _write_menuart_files(target: Path, name: str, num_coach: int) -> None:
 }}''', encoding="utf-8")
 
     # MenuArt ISC
-    (target / f"MenuArt/{name}_menuart.isc").write_text(
+    (target / f"menuart/{name}_menuart.isc").write_text(
         f'''<?xml version="1.0" encoding="ISO-8859-1"?>
 <root>
 \t<Scene ENGINE_VERSION="140999" GRIDUNIT="0.500000" DEPTH_SEPARATOR="0" NEAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000" FAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000" viewFamily="1">
@@ -701,7 +701,7 @@ def _write_autodance_stubs(target: Path, name: str, vst: float = 0.0) -> None:
     Skips TPL write if it already contains real converted data (>1KB)
     from the tape conversion step, to avoid overwriting real data.
     """
-    autodance_tpl_path = target / f"Autodance/{name}_autodance.tpl"
+    autodance_tpl_path = target / f"autodance/{name}_autodance.tpl"
     if autodance_tpl_path.exists() and autodance_tpl_path.stat().st_size >= 1024:
         return
 

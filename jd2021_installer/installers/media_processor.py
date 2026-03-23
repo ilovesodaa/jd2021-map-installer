@@ -20,6 +20,11 @@ from typing import Callable, Optional
 
 from jd2021_installer.core.config import AppConfig
 from jd2021_installer.core.exceptions import MediaProcessingError
+from jd2021_installer.core.models import (
+    CinematicTape,
+    MusicTrackStructure,
+    SongDescription,
+)
 
 logger = logging.getLogger("jd2021.installers.media_processor")
 
@@ -230,8 +235,10 @@ def convert_audio(
     """
     audio_path = Path(audio_path)
     target_dir = Path(target_dir)
-    wav_out = target_dir / "Audio" / f"{map_name}.wav"
-    ogg_out = target_dir / "Audio" / f"{map_name}.ogg"
+    wav_out = target_dir / "audio" / f"{map_name}.wav"
+    ogg_out = target_dir / "audio" / f"{map_name}.ogg"
+    video_out = target_dir / "videoscoach" / f"{map_name}.webm"
+    video_out.parent.mkdir(parents=True, exist_ok=True)
     wav_out.parent.mkdir(parents=True, exist_ok=True)
 
     # 1. Handle .ckd extraction if needed
@@ -289,6 +296,8 @@ def process_menu_art(
     
     Ensures cover_generic and cover_online exist, and re-saves all 
     as uncompressed 32-bit RGBA TGAs to prevent black-box glitches.
+    
+    Also handles Case Correction by renaming files to match expected case.
     """
     try:
         from PIL import Image
@@ -311,21 +320,39 @@ def process_menu_art(
     found_tgas = {}
     for f in tex_dir.iterdir():
         if f.suffix.lower() == ".tga":
-            found_tgas[f.name.lower()] = f
+            f_name_lower = f.name.lower()
+            
+            # V1 Parity Case Correction: if this file matches an expected name case-insensitively,
+            # rename it to the exact expected case.
+            for expected in expected_tgas:
+                if f_name_lower == expected.lower() and f.name != expected:
+                    target = f.parent / expected
+                    logger.info("Case fix: %s -> %s", f.name, expected)
+                    if target.exists():
+                        target.unlink()
+                    f.rename(target)
+                    found_tgas[expected.lower()] = target
+                    break
+            else:
+                found_tgas[f_name_lower] = f
 
     # 2. Synthesis for online/generic parity
     online_key = f"{codename_low}_cover_online.tga"
     generic_key = f"{codename_low}_cover_generic.tga"
+    
+    # Map back from lower key to actual Path object
+    online_path = found_tgas.get(online_key)
+    generic_path = found_tgas.get(generic_key)
 
     if online_key not in found_tgas and generic_key in found_tgas:
-        src = found_tgas[generic_key]
+        src = generic_path
         dst = tex_dir / f"{codename}_cover_online.tga"
         shutil.copy2(src, dst)
         found_tgas[online_key] = dst
         logger.info("Synthesized cover_online from cover_generic")
 
-    if generic_key not in found_tgas and online_key in found_tgas:
-        src = found_tgas[online_key]
+    elif generic_key not in found_tgas and online_key in found_tgas:
+        src = online_path
         dst = tex_dir / f"{codename}_cover_generic.tga"
         shutil.copy2(src, dst)
         found_tgas[generic_key] = dst
@@ -368,7 +395,7 @@ def generate_intro_amb(
     ogg_path = Path(ogg_path)
     target_dir = Path(target_dir)
     map_lower = map_name.lower()
-    amb_dir = target_dir / "Audio" / "AMB"
+    amb_dir = target_dir / "audio" / "amb"
 
     # If no pre-roll silence, silence any existing intro WAV
     if a_offset >= 0 and (v_override is None or v_override >= 0):
@@ -478,7 +505,7 @@ includeReference("world/maps/{map_name.lower()}/audio/amb/{intro_name}.ilu")'''
         logger.info("Created intro AMB files: %s.tpl/.ilu", intro_name)
 
     # Always inject AMB actor if not present
-    audio_isc_path = target_dir / "Audio" / f"{map_name}_audio.isc"
+    audio_isc_path = target_dir / "audio" / f"{map_name}_audio.isc"
     if audio_isc_path.exists():
         isc_data = audio_isc_path.read_text(encoding="utf-8")
         if intro_name not in isc_data:
@@ -515,6 +542,60 @@ includeReference("world/maps/{map_name.lower()}/audio/amb/{intro_name}.ilu")'''
         "-ar", "48000", str(intro_wav)
     ], config=config)
     logger.info("Generated intro AMB: %s (%.3fs)", intro_wav.name, amb_duration)
+
+
+def extract_amb_clips(
+    cinematic_tape: CinematicTape,
+    audio_path: Path,
+    target_dir: Path,
+    codename: str,
+    config: Optional[AppConfig] = None,
+) -> int:
+    """Extract audio clips for cinematic ambient sounds (V1 parity).
+    
+    Scans the cinematic tape for SoundSetClips with start_time <= 0
+    (intro clips) and extracts them from the main audio source.
+    """
+    if not cinematic_tape or not audio_path.exists():
+        return 0
+
+    count = 0
+    map_lower = codename.lower()
+    amb_dir = target_dir / "audio" / "amb"
+    amb_dir.mkdir(parents=True, exist_ok=True)
+
+    for clip in cinematic_tape.clips:
+        if not hasattr(clip, "sound_set_path"):
+            continue
+        
+        # Only extract if it's an intro clip (start_time <= 0)
+        if clip.start_time > 0:
+            continue
+
+        clip_name = clip.sound_set_path.split("/")[-1].split(".")[0]
+        # Skip if it's the main intro (which we handle separately)
+        if f"amb_{map_lower}_intro" in clip_name:
+            continue
+
+        output_wav = amb_dir / f"{clip_name}.wav"
+        # If it's already a real file (>100KB), don't overwrite
+        if output_wav.exists() and output_wav.stat().st_size > 102400:
+            continue
+
+        duration_s = clip.duration / 1000.0
+        fade_start = max(0, duration_s - 0.200)
+
+        logger.info("Extracting cinematic AMB clip: %s (%.3fs)", clip_name, duration_s)
+        run_ffmpeg([
+            "-y", "-i", str(audio_path),
+            "-t", f"{duration_s:.6f}",
+            "-af", f"afade=t=out:st={fade_start:.6f}:d=0.200",
+            "-ar", "48000", str(output_wav)
+        ], config=config)
+        count += 1
+
+    return count
+
 
 
 # ---------------------------------------------------------------------------
@@ -751,7 +832,7 @@ def copy_moves(
     if not src_root.is_dir():
         return 0
 
-    pc_moves_dir = Path(target_dir) / "Timeline" / "Moves" / "PC"
+    pc_moves_dir = Path(target_dir) / "timeline" / "moves" / "pc"
     total_copied = 0
 
     KINECT_PLATFORMS = {"DURANGO", "SCARLETT", "X360"}
