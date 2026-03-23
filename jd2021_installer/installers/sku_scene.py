@@ -16,8 +16,8 @@ from jd2021_installer.core.exceptions import GameWriterError
 
 logger = logging.getLogger("jd2021.installers.sku_scene")
 
-# SkuScene ISC location relative to the game root
-SKU_SCENE_REL = Path("World/SkuScenes/SkuScene_Maps_PC_All.isc")
+# SkuScene ISC location relative to the game root (V1 Parity: use data/ prefix)
+SKU_SCENE_REL = Path("data/World/SkuScenes/SkuScene_Maps_PC_All.isc")
 
 
 def _sku_scene_path(game_dir: str | Path) -> Path:

@@ -147,7 +147,7 @@ def generate_map_preview(
             "-ss", str(start_time),
             "-t", str(duration),
             "-c:v", "libvpx-vp9",
-            "-b:v", "1M",
+            "-b:v", "4M",
             "-an",
             str(output),
         ],

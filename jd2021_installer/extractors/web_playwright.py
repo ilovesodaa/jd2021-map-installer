@@ -15,6 +15,7 @@ import asyncio
 import logging
 import os
 import re
+import requests
 import shutil
 import ssl
 import time
@@ -63,6 +64,8 @@ def extract_urls_from_html(html_content: str) -> List[str]:
     for url in urls:
         if "discordapp.net" in url:
             continue
+        # Strip trailing punctuation that might be captured from text around the URL
+        url = url.rstrip(").,!;?")
         url = url.replace("&amp;", "&")
         clean.add(url)
     return list(clean)
@@ -189,22 +192,37 @@ def download_files(
     important_urls.extend(classified.get("others", []))
 
     unique_urls = list(set(important_urls))
+    # Prioritize: mainscene > audio > video > others
+    def priority(u):
+        if "MAIN_SCENE" in u: return 0
+        if ".ogg" in u or ".wav" in u: return 1
+        if any(pat in u for pat in QUALITY_PATTERNS.values()): return 2
+        return 3
+    
+    unique_urls.sort(key=priority)
+    
     downloaded: Dict[str, str] = {}
     total = len(unique_urls)
 
+    session = requests.Session()
+    session.headers.update({"User-Agent": config.user_agent})
+    session.headers.update({"Referer": "https://discord.com/"})
+
     for idx, url in enumerate(unique_urls):
         fname = get_filename_from_url(url)
-        target = str(download_path / fname)
+        target = download_path / fname
 
-        # Check if already in cache
-        if os.path.exists(target):
+        # Check if already in cache and not empty
+        if target.exists() and target.stat().st_size > 1024:
             logger.info("%s already in cache, skipping download.", fname)
-            downloaded[fname] = target
+            downloaded[fname] = str(target)
             continue
-
-        # Check if already installed in game directory
-        codename = download_path.name
         
+        if target.exists():
+            target.unlink()
+
+        # Check if already installed
+        codename = download_path.name
         game_map_dir = None
         if config.game_directory:
             base_game_dir = config.game_directory
@@ -215,7 +233,7 @@ def download_files(
         found_in_game = False
         if game_map_dir and game_map_dir.exists():
             for fpath in game_map_dir.rglob(fname):
-                if fpath.is_file():
+                if fpath.is_file() and fpath.stat().st_size > 1024:
                     import shutil
                     logger.info("Found %s in existing game installation, copying to cache...", fname)
                     shutil.copy2(fpath, target)
@@ -223,57 +241,52 @@ def download_files(
                     break
         
         if found_in_game:
-            downloaded[fname] = target
+            downloaded[fname] = str(target)
             continue
 
         logger.info("Downloading %s... (%d/%d)", fname, idx + 1, total)
         if progress_callback:
             progress_callback(fname, idx + 1, total)
 
-        req = urllib.request.Request(url, headers={"User-Agent": config.user_agent})
+        success = False
         for attempt in range(1, config.max_retries + 1):
             try:
-                with urllib.request.urlopen(
-                    req, timeout=config.download_timeout_s
-                ) as response:
+                with session.get(url, stream=True, timeout=config.download_timeout_s) as r:
+                    if r.status_code == 403:
+                        logger.warning("HTTP 403 for %s (Attempt %d/%d)", fname, attempt, config.max_retries)
+                        if attempt < config.max_retries:
+                            time.sleep(config.retry_base_delay_s * attempt)
+                            continue
+                        else:
+                            break
+                            
+                    r.raise_for_status()
+                    total_size = int(r.headers.get('content-length', 0))
+                    
                     with open(target, "wb") as f:
-                        chunk_size = 1024 * 1024  # 1MB chunks
-                        while True:
-                            chunk = response.read(chunk_size)
-                            if not chunk:
-                                break
-                            f.write(chunk)
-                    break
-            except urllib.error.HTTPError as e:
-                if e.code == 429:
-                    retry_after = int(
-                        e.headers.get("Retry-After", config.retry_base_delay_s * attempt)
-                    )
-                    logger.warning(
-                        "Rate limited (429). Waiting %ds (%d/%d)...",
-                        retry_after, attempt, config.max_retries,
-                    )
-                    time.sleep(retry_after)
-                    continue
-                if e.code in (403, 404):
-                    logger.error("HTTP %d for %s -- links may have expired!", e.code, fname)
-                    break
-                if attempt < config.max_retries:
-                    delay = config.retry_base_delay_s * (2 ** (attempt - 1))
-                    time.sleep(delay)
-                else:
-                    logger.error("Failed to download %s: HTTP %d", fname, e.code)
+                        for chunk in r.iter_content(chunk_size=1024*1024):
+                            if chunk:
+                                f.write(chunk)
+                    
+                    # Verify download success (non-zero size)
+                    if target.stat().st_size > 1024:
+                        success = True
+                        break
+                    else:
+                        logger.warning("Download produced empty file for %s", fname)
             except Exception as e:
+                logger.warning("Download error for %s: %s (Attempt %d/%d)", fname, e, attempt, config.max_retries)
                 if attempt < config.max_retries:
-                    delay = config.retry_base_delay_s * (2 ** (attempt - 1))
-                    logger.warning("Download error: %s -- retrying in %ds...", e, delay)
-                    time.sleep(delay)
+                    time.sleep(config.retry_base_delay_s * (2 ** (attempt - 1)))
                 else:
-                    logger.error("Failed to download %s: %s", fname, e)
+                    break
+
+        if success:
+            downloaded[fname] = str(target)
+        else:
+            logger.error("Failed to download %s after %d attempts", fname, config.max_retries)
 
         time.sleep(config.inter_request_delay_s)
-        if os.path.exists(target):
-            downloaded[fname] = target
 
     return downloaded
 
@@ -575,7 +588,29 @@ class WebPlaywrightExtractor(BaseExtractor):
             download_dir = self._config.download_root / codename
             download_dir.mkdir(parents=True, exist_ok=True)
 
-        download_files(all_urls, download_dir, self._quality, self._config)
+        downloaded = download_files(all_urls, download_dir, self._quality, self._config)
+        
+        # 1b. Check for missing critical files (possible link expiration)
+        missing_critical = False
+        classified = _classify_urls(all_urls, self._quality)
+        for key in ("video", "audio", "mainscene"):
+            url = classified[key]
+            if url:
+                fname = get_filename_from_url(url)
+                if fname not in downloaded:
+                    missing_critical = True
+                    break
+        
+        if missing_critical and self._codenames:
+            logger.warning("Critical files missing (Expired links?). Attempting one re-scrape...")
+            scraped_fresh = []
+            for codename in self._codenames:
+                try:
+                    scraped_fresh.extend(asyncio.run(self._scrape_codename(codename)))
+                except: pass
+            if scraped_fresh:
+                all_urls = list(set(all_urls + scraped_fresh))
+                download_files(all_urls, download_dir, self._quality, self._config)
 
         # 2. Extract/Assemble into temporary output_dir
         extract_dir = output_dir / codename

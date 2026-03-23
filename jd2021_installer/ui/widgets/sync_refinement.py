@@ -119,16 +119,6 @@ class SyncRefinementWidget(QWidget):
         inc_row_video.addStretch()
         group_layout.addLayout(inc_row_video)
 
-        # -- Combined display -----------------------------------------------
-        combined_row = QHBoxLayout()
-        combined_row.addWidget(QLabel("Combined Offset:"))
-        self._combined_display = QLineEdit("0.0 ms")
-        self._combined_display.setReadOnly(True)
-        self._combined_display.setMaximumWidth(120)
-        self._combined_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        combined_row.addWidget(self._combined_display)
-        combined_row.addStretch()
-        group_layout.addLayout(combined_row)
 
         # -- Separator -------------------------------------------------------
         sep = QFrame()
@@ -195,7 +185,6 @@ class SyncRefinementWidget(QWidget):
 
     def _update_combined(self) -> None:
         combined = self._audio_spin.value() + self._video_spin.value()
-        self._combined_display.setText(f"{combined:+.1f} ms")
         self.offset_changed.emit(combined)
 
     def _adjust_audio(self, delta: float) -> None:
@@ -255,6 +244,7 @@ class SyncRefinementWidget(QWidget):
 
     def set_offsets(self, audio_ms: float = 0.0, video_ms: float = 0.0) -> None:
         """Programmatically set both offset spinboxes."""
+        logger.debug("SyncRefinementWidget.set_offsets calling: audio=%.1f, video=%.1f", audio_ms, video_ms)
         self._audio_spin.setValue(audio_ms)
         self._video_spin.setValue(video_ms)
         self._video_check.setChecked(video_ms != 0.0)

@@ -142,11 +142,13 @@ def _write_songdesc(target: Path, name: str, sd: SongDescription,
         "songColor_2A": dc.song_color_2a,
         "songColor_2B": dc.song_color_2b,
     }
-    colors_lua = ""
-    for key, val in color_fallbacks.items():
-        hex_val = color_array_to_hex(val)
-        colors_lua += f'\n\t\t\t\t\t\t{{\n\t\t\t\t\t\t\tKEY = "{key}",\n\t\t\t\t\t\t\tVAL = "{hex_val}"\n\t\t\t\t\t\t}},'
+    # Merge to ensure uniqueness and prevent Engine crash (zserializerobjectcontainers.h)
+    merged_colors = color_fallbacks.copy()
     for key, val in dc.extra.items():
+        merged_colors[key] = val
+
+    colors_lua = ""
+    for key, val in merged_colors.items():
         hex_val = color_array_to_hex(val)
         colors_lua += f'\n\t\t\t\t\t\t{{\n\t\t\t\t\t\t\tKEY = "{key}",\n\t\t\t\t\t\t\tVAL = "{hex_val}"\n\t\t\t\t\t\t}},'
 

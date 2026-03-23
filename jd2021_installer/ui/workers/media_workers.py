@@ -81,10 +81,14 @@ class PreviewMediaWorker(QObject):
         self.started.emit()
 
     def stop(self) -> None:
-        """Terminate the running FFplay process (if any)."""
+        """Terminate the running FFplay process (if any) gracefully."""
         if self._process is not None and self._process.state() != QProcess.ProcessState.NotRunning:
-            self._process.kill()
-            self._process.waitForFinished(3000)
+            logger.debug("Stopping ffplay process gracefully...")
+            self._process.terminate()
+            if not self._process.waitForFinished(3000):
+                logger.warning("ffplay did not terminate gracefully; killing.")
+                self._process.kill()
+                self._process.waitForFinished(1000)
         self.stopped.emit()
 
     def is_running(self) -> bool:

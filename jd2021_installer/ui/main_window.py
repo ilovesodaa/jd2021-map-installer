@@ -63,11 +63,23 @@ from jd2021_installer.ui.workers.pipeline_workers import (
 
 logger = logging.getLogger("jd2021.ui.main_window")
 
-# Checklist step names (displayed in the feedback panel)
+# Granular checklist steps (V1 Parity)
 PIPELINE_STEPS = [
     "Extract map data",
-    "Normalize map data",
-    "Install to game directory",
+    "Parse CKDs & Metadata",
+    "Normalize assets",
+    "Decode MenuArt textures",  # Placeholder during extraction finish
+    "Convert Audio (Pad/Trim)",
+    "Generate Intro AMB",
+    "Copy Video files",
+    "Convert Dance Tapes",
+    "Convert Karaoke Tapes",
+    "Convert Cinematic Tapes",
+    "Process Ambient Sounds",
+    "Decode Pictograms",
+    "Register in SkuScene",
+    "Integrate Move data",
+    "Finalizing Offsets",
 ]
 
 
@@ -165,6 +177,33 @@ class MainWindow(QMainWindow):
             if dont_show_again:
                 self._config.skip_quickstart = True
                 self._save_settings()
+
+    def _offer_ffmpeg_install(self, missing: list[str]) -> None:
+        """Prompt user to auto-download and install FFmpeg/FFplay."""
+        msg = (
+            f"The following required tools were not found: {', '.join(missing)}\n\n"
+            "Would you like the installer to automatically download and configure "
+            "FFmpeg for you? (Requires Internet connection)"
+        )
+        reply = QMessageBox.question(
+            self, "Missing Dependencies", msg,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            from jd2021_installer.ui.widgets.ffmpeg_dialog import FFmpegInstallDialog
+            # Ensure tools/ffmpeg exists
+            tools_dir = Path("tools/ffmpeg")
+            tools_dir.mkdir(parents=True, exist_ok=True)
+            
+            if FFmpegInstallDialog.install(tools_dir, self):
+                # Update config and save
+                ffmpeg_exe = tools_dir / ("ffmpeg.exe" if sys.platform == "win32" else "ffmpeg")
+                self._config.ffmpeg_path = str(ffmpeg_exe)
+                self._save_settings()
+                QMessageBox.information(self, "Success", "FFmpeg has been installed successfully.")
+            else:
+                QMessageBox.warning(self, "Failed", "FFmpeg installation was cancelled or failed.")
 
     # ==================================================================
     # UI COMPOSITION  (Phase 3)
@@ -355,6 +394,8 @@ class MainWindow(QMainWindow):
                 self._sync_refinement.setVisible(True)
                 
                 # Use calculated offsets from Normalizer
+                logger.info("Readjust: setting UI offsets: audio=%.1f, video=%.1f", 
+                            map_data.sync.audio_ms, map_data.sync.video_ms)
                 self._sync_refinement.set_offsets(
                     audio_ms=map_data.sync.audio_ms, 
                     video_ms=map_data.sync.video_ms
@@ -400,13 +441,7 @@ class MainWindow(QMainWindow):
             missing_binaries.append("ffplay")
             
         if missing_binaries:
-            QMessageBox.critical(
-                self, 
-                "Missing Dependencies", 
-                f"The following required tools were not found: {', '.join(missing_binaries)}\n\n"
-                "Please download FFmpeg/FFplay and place their executables in "
-                "the 'tools/ffmpeg' folder or add them to your system PATH."
-            )
+            self._offer_ffmpeg_install(missing_binaries)
             return
 
         # Pre-flight check for disk space (Minimum 500MB required on target drive)
@@ -498,9 +533,18 @@ class MainWindow(QMainWindow):
 
         self._current_map = map_data
         self._feedback_panel.update_checklist_step("Extract map data", StepStatus.DONE)
-        self._feedback_panel.update_checklist_step("Normalize map data", StepStatus.DONE)
+        self._feedback_panel.update_checklist_step("Parse CKDs & Metadata", StepStatus.DONE)
+        self._feedback_panel.update_checklist_step("Normalize assets", StepStatus.DONE)
         self._feedback_panel.update_checklist_step(
-            "Install to game directory", StepStatus.IN_PROGRESS
+            "Decode MenuArt textures", StepStatus.IN_PROGRESS
+        )
+
+        # Update UI offsets from calculated normalization data
+        logger.info("Setting UI offsets from normalization: audio=%.1f ms, video=%.1f ms", 
+                    map_data.sync.audio_ms, map_data.sync.video_ms)
+        self._sync_refinement.set_offsets(
+            audio_ms=map_data.sync.audio_ms,
+            video_ms=map_data.sync.video_ms
         )
 
         # Check metadata for non-ASCII characters
@@ -537,7 +581,7 @@ class MainWindow(QMainWindow):
 
         thread.started.connect(worker.run)
         worker.progress.connect(self._feedback_panel.set_progress)
-        worker.status.connect(self.append_log)
+        worker.status.connect(self._on_status_updated)
         worker.error.connect(self._on_install_error)
         worker.finished.connect(lambda ok: self._on_install_finished(ok))
         worker.finished.connect(thread.quit)
@@ -549,18 +593,36 @@ class MainWindow(QMainWindow):
         self._active_worker = worker
         thread.start()
 
+    def _on_status_updated(self, msg: str) -> None:
+        """Map backend status messages to checklist steps for visual feedback."""
+        self.append_log(msg)
+        
+        if msg in PIPELINE_STEPS:
+            # Mark this step as in progress
+            self._feedback_panel.update_checklist_step(msg, StepStatus.IN_PROGRESS)
+            
+            # Heuristic: Mark the previous logical step as DONE
+            try:
+                idx = PIPELINE_STEPS.index(msg)
+                if idx > 0:
+                    # Special case: if we just started "Convert Audio", then "Decode MenuArt" (the previous one) is likely done
+                    # but normalization steps are already marked DONE by _on_extract_finished.
+                    prev_step = PIPELINE_STEPS[idx - 1]
+                    self._feedback_panel.update_checklist_step(prev_step, StepStatus.DONE)
+            except ValueError:
+                pass
+
     def _on_install_error(self, msg: str) -> None:
         self._feedback_panel.update_checklist_step(
-            "Install to game directory", StepStatus.ERROR
+            "Decode MenuArt textures", StepStatus.ERROR
         )
         self.append_log(f"ERROR: {msg}")
         self._lock_ui(False)
         self._stop_file_logging()
 
     def _on_install_finished(self, success: bool) -> None:
-        status = StepStatus.DONE if success else StepStatus.ERROR
-        self._feedback_panel.update_checklist_step("Install to game directory", status)
         if success:
+            self._feedback_panel.update_checklist_step("Finalizing Offsets", StepStatus.DONE)
             self._set_status("Installation complete!")
             self.append_log("✅  Map installed successfully!")
 
@@ -571,6 +633,8 @@ class MainWindow(QMainWindow):
                 self._sync_refinement.set_nav_visible(False)
 
                 # Ensure the sync panel reflects the current map's calculated offsets
+                logger.info("Installation finished. Syncing UI offsets: audio=%.1f ms, video=%.1f ms", 
+                            self._current_map.sync.audio_ms, self._current_map.sync.video_ms)
                 self._sync_refinement.set_offsets(
                     self._current_map.sync.audio_ms,
                     self._current_map.sync.video_ms
@@ -603,6 +667,8 @@ class MainWindow(QMainWindow):
             self._sync_refinement.set_nav_visible(False)
             
         # Preview the first map
+        logger.info("Batch finished: setting UI offsets for first map: audio=%.1f, video=%.1f", 
+                    self._current_map.sync.audio_ms, self._current_map.sync.video_ms)
         self._sync_refinement.set_offsets(
             self._current_map.sync.audio_ms,
             self._current_map.sync.video_ms
@@ -627,6 +693,8 @@ class MainWindow(QMainWindow):
             self.append_log(f"Switched to: {self._current_map.codename}")
             
             # Update UI offsets
+            logger.info("Nav requested: setting UI offsets: audio=%.1f, video=%.1f", 
+                        self._current_map.sync.audio_ms, self._current_map.sync.video_ms)
             self._sync_refinement.set_offsets(
                 self._current_map.sync.audio_ms,
                 self._current_map.sync.video_ms
@@ -647,11 +715,13 @@ class MainWindow(QMainWindow):
                 audio = str(self._current_map.media.audio_path) if self._current_map.media.audio_path else None
                 if not audio:
                     self.append_log("No audio available for preview.")
-                    self._sync_refinement._btn_preview.setChecked(False)
+                    self._sync_refinement.set_preview_state(False)
                     return
 
                 v_override = self._current_map.effective_video_start_time
                 a_offset = self._sync_refinement._audio_spin.value() / 1000.0
+                
+                logger.debug("Preview launch: v_override=%.3f, a_offset=%.3f", v_override, a_offset)
 
                 self._preview_widget.launch(
                     video, audio,
@@ -660,17 +730,30 @@ class MainWindow(QMainWindow):
                 )
             else:
                 self.append_log("No video available for preview.")
-                self._sync_refinement._btn_preview.setChecked(False)
+                self._sync_refinement.set_preview_state(False)
         else:
             self._preview_widget.stop()
 
     def _on_offset_spin_changed(self, offset_ms: float) -> None:
-        """Auto-restart preview when offsets change."""
-        if self._preview_widget.is_playing and self._current_map and self._current_map.media.video_path:
+        """Debounced preview restart when offsets change."""
+        if not self._preview_widget.is_playing:
+            return
+            
+        # Debounce to prevent spam-launching ffplay while rapid clicking
+        from PyQt6.QtCore import QTimer
+        if not hasattr(self, "_preview_debounce_timer"):
+            self._preview_debounce_timer = QTimer(self)
+            self._preview_debounce_timer.setSingleShot(True)
+            self._preview_debounce_timer.timeout.connect(self._restart_preview_now)
+        
+        self._preview_debounce_timer.start(500) # 0.5s delay
+
+    def _restart_preview_now(self) -> None:
+        if self._current_map and self._current_map.media.video_path:
             v_override = self._current_map.effective_video_start_time
             a_offset = self._sync_refinement._audio_spin.value() / 1000.0
             
-            # Restart at current playback position
+            logger.debug("Debounced preview restart...")
             self._preview_widget.launch(
                 str(self._current_map.media.video_path),
                 str(self._current_map.media.audio_path) if self._current_map.media.audio_path else None,
@@ -749,14 +832,6 @@ class MainWindow(QMainWindow):
             self._on_preview_toggle(True)
             self._prompt_cleanup()
 
-    def _prompt_cleanup(self) -> None:
-        """Ask user whether to delete downloaded source files after apply."""
-        if not self._current_map:
-            return
-            
-        # In batch mode, we probably don't want to prompt for EVERY map.
-        # Maybe just once at the end? Or follow V1's "Cleanup Behavior" setting.
-        # For now, let's just ask if it's a single map or at the end of nav.
     def _prompt_cleanup(self) -> None:
         """Ask user or auto-delete source files based on cleanup_behavior."""
         if not self._current_map:
@@ -909,7 +984,7 @@ class MainWindow(QMainWindow):
 
         self._lock_ui(True)
         self._feedback_panel.reset()
-        self._feedback_panel.set_checklist_steps(["Extract map data", "Normalize map data", "Install to game directory"])
+        self._feedback_panel.set_checklist_steps(PIPELINE_STEPS)
         self._feedback_panel.update_checklist_step("Extract map data", StepStatus.IN_PROGRESS)
 
         worker = BatchInstallWorker(
