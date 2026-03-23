@@ -18,10 +18,36 @@ def get_original_maps(rar_path, seven_zip_path):
     return original_maps
 
 def clean_data():
-    base_dir = r"D:\jd2021pc"
+    # Attempt to resolve project root and load game directory from settings
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    settings_path = os.path.join(project_root, "installer_settings.json")
+    
+    base_dir = r"D:\jd2021pc" # Default fallback
+    if os.path.exists(settings_path):
+        try:
+            with open(settings_path, "r") as f:
+                import json
+                data = json.load(f)
+                game_dir = data.get("game_directory")
+                if game_dir:
+                    # If game_dir is D:\jd2021pc\jd21, base_dir should be D:\jd2021pc
+                    base_dir = os.path.dirname(os.path.abspath(game_dir))
+                    print(f"Using game base directory from settings: {base_dir}")
+        except Exception as e:
+            print(f"Warning: Could not read settings, using default paths: {e}")
+
     jd21_dir = os.path.join(base_dir, "jd21")
     rar_path = os.path.join(base_dir, "jd21.rar")
-    seven_zip_path = r"C:\Program Files\7-Zip\7z.exe"
+    
+    # Common 7-Zip installation paths
+    seven_zip_candidates = [
+        r"C:\Program Files\7-Zip\7z.exe",
+        r"C:\Program Files (x86)\7-Zip\7z.exe",
+        shutil.which("7z.exe") or ""
+    ]
+    seven_zip_path = next((p for p in seven_zip_candidates if p and os.path.exists(p)), None)
+
     maps_dir = os.path.join(jd21_dir, "data", "World", "MAPS")
     skuscene_dir = os.path.join(jd21_dir, "data", "World", "SkuScenes")
     itf_cooked_maps_dir = os.path.join(jd21_dir, "data", "cache", "itf_cooked", "pc", "world", "maps")
@@ -30,10 +56,11 @@ def clean_data():
         print(f"Error: Archive not found at {rar_path}")
         return
 
-    if not os.path.exists(seven_zip_path):
-        print(f"Error: 7-Zip not found at {seven_zip_path}")
+    if not seven_zip_path or not os.path.exists(seven_zip_path):
+        print("Error: 7-Zip (7z.exe) not found. Please install 7-Zip or add it to PATH.")
         return
 
+    print(f"Cleaning data at: {jd21_dir}")
     print("This will selectively delete custom map folders and restore modified SkuScenes.")
     confirm = input("Are you sure you want to proceed? (y/n): ")
     if confirm.lower() != 'y':
