@@ -416,7 +416,7 @@ def install_map_to_game(
         if status_callback: status_callback("Decode Pictograms")
         picto_src = map_data.source_dir / "pictos"
         if picto_src.exists():
-            decode_pictograms(picto_src, map_target / "Timeline" / "pictos")
+            decode_pictograms(picto_src, map_target / "timeline" / "pictos")
 
     # 5. Moves
     if media.moves_dir and media.moves_dir.exists():

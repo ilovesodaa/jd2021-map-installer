@@ -223,10 +223,14 @@ class ArchiveIPKExtractor(BaseExtractor):
 
     def extract(self, output_dir: Path) -> Path:
         result = extract_ipk(self._ipk_path, output_dir)
-        # Try to infer codename from directory contents
+        # Try to infer codename from directory contents, ignoring generic structure folders
         for item in output_dir.iterdir():
             if item.is_dir() and not item.name.startswith("."):
+                name_low = item.name.lower()
+                if name_low in ("world", "data", "cache", "temp", "_extraction"):
+                    continue
                 self._codename = item.name
+                break
                 break
         return result
 

@@ -268,6 +268,15 @@ params =
 \t\t\t\t\t\t\turl = "jmcs://jd-contents/{name}/{name}.ogg",
 \t\t\t\t\t\t\tstructure = structure
 \t\t\t\t\t\t}}
+\t\t\t\t\t}},
+\t\t\t\t\tautodanceData =
+\t\t\t\t\t{{
+\t\t\t\t\t\tJD_AutodanceData =
+\t\t\t\t\t\t{{
+\t\t\t\t\t\t\tpath = "world/maps/{name.lower()}/timeline/autodance/{name.lower()}_autodance.tpl",
+\t\t\t\t\t\t\turl = "jmcs://jd-contents/{name}/{name}.ogg",
+\t\t\t\t\t\t\tstructure = structure
+\t\t\t\t\t\t}}
 \t\t\t\t\t}}
 \t\t\t\t}}
 \t\t\t}}
