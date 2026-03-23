@@ -181,8 +181,6 @@ class ModeSelectorWidget(QWidget):
             file_filter="HTML Files (*.html *.htm)",
             placeholder="No file selected",
         )
-        # Emit target selected specifically for the asset HTML to maintain signature compatibility
-        asset_row.path_changed.connect(lambda t: self.target_selected.emit(t))
         lay.addWidget(asset_row)
 
         nohud_row = FileRowWidget(
@@ -195,6 +193,52 @@ class ModeSelectorWidget(QWidget):
 
         self.inputs["html"]["asset"] = asset_row.line_edit
         self.inputs["html"]["nohud"] = nohud_row.line_edit
+
+        # Auto-detect counterparts
+        def auto_detect(source_path: str, is_asset: bool):
+            if not source_path: return
+            src = Path(source_path)
+            target_obj = self.inputs["html"]["nohud"] if is_asset else self.inputs["html"]["asset"]
+            if target_obj.text() and Path(target_obj.text()).exists(): return
+            
+            # Simple heuristic guessing: "assets" <-> "nohud" or "asset" <-> "nohud"
+            stem = src.stem.lower()
+            name_lower = src.name.lower()
+            candidate = None
+            if is_asset and ("asset" in name_lower or "hud" not in name_lower):
+                # Try replacing asset with nohud, or just append _nohud
+                for test in ["_nohud.html", "_no_hud.html", "nohud.html"]:
+                    c = src.parent / (stem.replace("assets", "nohud").replace("asset", "nohud") + test if "asset" not in stem else stem.replace("assets", "nohud").replace("asset", "nohud") + ".html")
+                    if not c.exists():
+                        c = src.parent / (stem + test)
+                    if c.exists():
+                        candidate = c
+                        break
+            elif not is_asset and "nohud" in name_lower:
+                for test in ["_assets.html", "_asset.html", "assets.html", "asset.html"]:
+                    c = src.parent / (stem.replace("nohud", "assets") + ".html")
+                    if not c.exists():
+                        c = src.parent / stem.replace("nohud", "").strip("_") / ".html"
+                    if c.exists():
+                        candidate = c
+                        break
+                        
+            # More aggressive counterpart heuristic: if there are only 2 HTML files in the dir
+            if not candidate and src.parent.exists():
+                htmls = list(src.parent.glob("*.html"))
+                if len(htmls) == 2:
+                    candidate = next(h for h in htmls if h != src)
+
+            if candidate and candidate.exists():
+                logger.info("Auto-detected HTML counterpart: %s", candidate)
+                target_obj.setText(str(candidate))
+                
+            if is_asset:
+                self.target_selected.emit(source_path)
+
+        asset_row.path_changed.connect(lambda p: auto_detect(p, True))
+        nohud_row.path_changed.connect(lambda p: auto_detect(p, False))
+
         return page
 
     def _build_ipk_page(self) -> QWidget:

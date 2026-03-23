@@ -89,7 +89,7 @@ class MainWindow(QMainWindow):
 
         # -- Window setup -----------------------------------------------------
         self.setWindowTitle("JD2021 Map Installer v2")
-        self.setMinimumSize(1060, 700)
+        self.setMinimumSize(1060, 800)
 
         self._build_ui()
         self._wire_signals()
@@ -176,6 +176,14 @@ class MainWindow(QMainWindow):
         # Apply loaded settings to config panel
         if self._config.game_directory:
             self._config_panel.set_game_directory(str(self._config.game_directory))
+        else:
+            from jd2021_installer.core.path_discovery import resolve_game_paths
+            from pathlib import Path
+            cand = resolve_game_paths(Path.cwd())
+            if cand:
+                self._config.game_directory = cand
+                self._config_panel.set_game_directory(str(cand))
+                
         self._config_panel.set_video_quality(self._config.video_quality)
 
     # ==================================================================
@@ -320,8 +328,62 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Game Dir", "Please set the game directory first.")
             return
 
+        # Pre-flight check for FFmpeg/FFplay (required for media + preview)
+        import shutil
+        missing_binaries = []
+        if not shutil.which(self._config.ffmpeg_path):
+            missing_binaries.append("ffmpeg")
+        # Ensure ffplay is present for preview features
+        if not shutil.which("ffplay") and not shutil.which(self._config.ffmpeg_path.replace("ffmpeg", "ffplay")):
+            missing_binaries.append("ffplay")
+            
+        if missing_binaries:
+            QMessageBox.critical(
+                self, 
+                "Missing Dependencies", 
+                f"The following required tools were not found: {', '.join(missing_binaries)}\n\n"
+                "Please download FFmpeg/FFplay and place their executables in "
+                "the 'tools/ffmpeg' folder or add them to your system PATH."
+            )
+            return
+
+        # Pre-flight check for disk space (Minimum 500MB required on target drive)
+        try:
+            free_space_bytes = shutil.disk_usage(self._config.game_directory).free
+            free_mb = free_space_bytes / (1024 * 1024)
+            if free_mb < 500:
+                QMessageBox.warning(
+                    self,
+                    "Low Disk Space",
+                    f"You only have {int(free_mb)} MB of free space on the destination drive.\n"
+                    "Map installation may fail. Proceed with caution."
+                )
+        except OSError:
+            pass  # Non-fatal if we can't look up disk space (e.g. read-only volume edge cases)
+
         # Start dynamic per-map logging immediately if target is available
         self._start_file_logging(self._current_target)
+
+        # Intercept batch mode - it has a completely different pipeline structure
+        from jd2021_installer.ui.widgets.mode_selector import MODE_BATCH
+        if self._mode_selector.current_mode_index == MODE_BATCH:
+            self._start_batch_install()
+            return
+
+        # Bundle IPK support
+        from jd2021_installer.ui.widgets.mode_selector import MODE_IPK
+        if self._mode_selector.current_mode_index == MODE_IPK and Path(self._current_target).is_file():
+            from jd2021_installer.extractors.archive_ipk import inspect_ipk
+            maps_found = inspect_ipk(self._current_target)
+            if len(maps_found) > 1:
+                from jd2021_installer.ui.widgets.bundle_dialog import BundleSelectDialog
+                selected_maps = BundleSelectDialog.show_dialog(Path(self._current_target).name, maps_found, self)
+                if not selected_maps:
+                    return # User cancelled
+                
+                # Defer to batch installer to handle everything cleanly
+                self._start_batch_install(selected_maps=set(selected_maps))
+                return
 
         # Resolve the correct extractor based on mode
         extractor = self._resolve_extractor()
@@ -609,13 +671,50 @@ class MainWindow(QMainWindow):
                 }
             )
 
-        # Batch is not fully implemented yet
+        # Mode not implemented yet
         QMessageBox.information(
             self,
             "Not Implemented",
             f"The '{self._current_mode}' mode is not yet fully implemented.",
         )
         return None
+
+    def _start_batch_install(self, selected_maps: set[str] | None = None) -> None:
+        """Launches the dedicated Batch mode worker."""
+        if not self._current_target:
+            return
+            
+        from jd2021_installer.ui.workers.pipeline_workers import BatchInstallWorker
+
+        self._lock_ui(True)
+        self._feedback_panel.reset()
+        self._feedback_panel.set_checklist_steps(["Extract map data", "Normalize map data", "Install to game directory"])
+        self._feedback_panel.update_checklist_step("Extract map data", StepStatus.IN_PROGRESS)
+
+        worker = BatchInstallWorker(
+            batch_source_dir=Path(self._current_target),
+            target_game_dir=self._config.game_directory, # type: ignore[arg-type]
+            config=self._config,
+            selected_maps=selected_maps,
+        )
+        thread = QThread()
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._feedback_panel.set_progress)
+        worker.status.connect(self.append_log)
+        
+        # Share the error and success callbacks so the UI gets unlocked
+        worker.error.connect(self._on_install_error)
+        worker.finished.connect(self._on_install_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda t=thread: self._cleanup_thread(t, "batch"))
+
+        self._active_threads.add(thread)
+        self._active_worker = worker
+        thread.start()
 
     def _lock_ui(self, locked: bool) -> None:
         """Disable input panels while a worker is active."""

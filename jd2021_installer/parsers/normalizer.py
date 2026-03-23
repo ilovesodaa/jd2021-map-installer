@@ -314,6 +314,11 @@ def _discover_media(directory: str, codename: Optional[str] = None) -> MapMedia:
     if picto_dirs:
         media.pictogram_dir = picto_dirs[0]
 
+    # Moves directory
+    move_dirs = [d for d in dir_path.rglob("moves") if d.is_dir()]
+    if move_dirs:
+        media.moves_dir = move_dirs[0]
+
     return media
 
 

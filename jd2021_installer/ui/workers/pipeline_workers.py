@@ -125,12 +125,11 @@ class InstallMapWorker(QObject):
                     copy_video(media.map_preview_video, preview_dst)
 
             if media.audio_path and media.audio_path.exists():
-                self.status.emit("Copying audio file...")
+                self.status.emit("Copying/Transcoding audio file...")
                 self.progress.emit(60)
                 from jd2021_installer.installers.media_processor import copy_audio
-                # Determine audio extension — keep .ogg for game engine
-                audio_ext = media.audio_path.suffix  # .ogg or .wav
-                audio_dst = map_target / "Audio" / f"{codename}{audio_ext}"
+                # Force .wav for legacy PC engine support
+                audio_dst = map_target / "Audio" / f"{codename}.wav"
                 copy_audio(media.audio_path, audio_dst)
 
             # 3. Copy cover/coach images to MenuArt/textures
@@ -147,6 +146,15 @@ class InstallMapWorker(QObject):
                     import shutil
                     textures_dir = map_target / "MenuArt" / "textures"
                     shutil.copy2(coach_img, textures_dir / coach_img.name)
+
+            # Moves
+            if media.moves_dir and media.moves_dir.exists():
+                self.status.emit("Integrating cross-platform move data...")
+                from jd2021_installer.installers.media_processor import copy_moves
+                moves_copied = copy_moves(media.moves_dir, map_target)
+                logger.info("Integrated %d move skeleton(s) for %s", moves_copied, codename)
+            else:
+                logger.info("No 'moves' folder found for %s; autodance may fail.", codename)
 
             # 4. Register map in SkuScene ISC
             self.status.emit("Registering map in song list...")
@@ -223,3 +231,148 @@ class ApplyAndFinishWorker(QObject):
             logger.error("ApplyAndFinish failed: %s\n%s", e, traceback.format_exc())
             self.error.emit(str(e))
             self.finished.emit(False)
+
+
+class BatchInstallWorker(QObject):
+    """Iterate through a directory and install all discovered maps (folders/IPKs)."""
+
+    progress = pyqtSignal(int)          # overall progress 0-100
+    status = pyqtSignal(str)            # status text
+    error = pyqtSignal(str)             # error message
+    finished = pyqtSignal(bool)         # success flag
+
+    def __init__(
+        self,
+        batch_source_dir: Path,
+        target_game_dir: Path,
+        config: AppConfig,
+        selected_maps: Optional[set[str]] = None,
+        parent: Optional[QObject] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._source_dir = batch_source_dir
+        self._target_dir = target_game_dir
+        self._config = config
+        self._selected_maps = selected_maps
+
+    def run(self) -> None:
+        try:
+            self.status.emit("Scanning for maps in batch directory...")
+            
+            candidates: list[Path] = []
+            if self._source_dir and self._source_dir.is_dir():
+                for path in self._source_dir.iterdir():
+                    if path.is_file() and path.suffix.lower() == ".ipk":
+                        candidates.append(path)
+                    elif path.is_dir():
+                        has_ckd = any(path.rglob("*.ckd"))
+                        if has_ckd:
+                            candidates.append(path)
+            
+            total = len(candidates)
+            if total == 0:
+                self.error.emit("No valid IPK files or map folders found in the selected batch directory.")
+                self.finished.emit(False)
+                return
+
+            self.status.emit(f"Found {total} map(s) to process.")
+            success_count = 0
+            
+            # Temporary cache for extracted IPKs
+            batch_cache = self._config.cache_directory / "_batch_temp"
+            batch_cache.mkdir(parents=True, exist_ok=True)
+
+            for i, candidate in enumerate(candidates):
+                progress_pct = int((i / total) * 100)
+                self.progress.emit(progress_pct)
+                
+                try:
+                    self.status.emit(f"[{i+1}/{total}] Processing {candidate.name}...")
+                    
+                    map_dir = candidate
+                    if candidate.is_file() and candidate.suffix.lower() == ".ipk":
+                        # Extract IPK to temp dir
+                        from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor
+                        self.status.emit(f"[{i+1}/{total}] Unpacking IPK: {candidate.name}")
+                        extractor = ArchiveIPKExtractor(candidate)
+                        import shutil
+                        shutil.rmtree(batch_cache, ignore_errors=True)
+                        map_dir = extractor.extract(batch_cache)
+                    
+                    # If the source is a bundle IPK, map_dir will have multiple subfolders without ckd files at root
+                    from jd2021_installer.parsers.normalizer import _find_ckd_files
+                    if candidate.is_file() and candidate.suffix.lower() == ".ipk" and not _find_ckd_files(str(map_dir), "*songdesc*.tpl.ckd"):
+                        sub_maps = [d for d in map_dir.iterdir() if d.is_dir()]
+                    else:
+                        sub_maps = [map_dir]
+
+                    for sub_map in sub_maps:
+                        if self._selected_maps and sub_map.name not in self._selected_maps:
+                            # If it's a map folder and not in selected_maps, skip it.
+                            # (If it's just batch processing standalone maps, it'll still work if selected_maps is None)
+                            continue
+                            
+                        self.status.emit(f"[{i+1}/{total}] Normalizing {sub_map.name}...")
+                        from jd2021_installer.parsers.normalizer import normalize
+                        map_data = normalize(sub_map)
+                        
+                        self.status.emit(f"[{i+1}/{total}] Installing {map_data.codename}...")
+                        self._install_map_synchronously(map_data)
+                        success_count += 1
+                        logger.info("Batch installed map: %s", map_data.codename)
+                    
+                except Exception as e:
+                    logger.warning("Failed to install map from %s: %s", candidate.name, e)
+                    self.status.emit(f"Warning: Failed {candidate.name} ({str(e)[:30]})")
+
+            import shutil
+            shutil.rmtree(batch_cache, ignore_errors=True)
+
+            self.progress.emit(100)
+            self.status.emit(f"Batch install complete. {success_count}/{total} maps installed.")
+            self.finished.emit(True)
+
+        except Exception as e:
+            logger.error("BatchInstallWorker failed: %s\n%s", e, traceback.format_exc())
+            self.error.emit(str(e))
+            self.finished.emit(False)
+            
+    def _install_map_synchronously(self, map_data: NormalizedMapData) -> None:
+        """Execute the same steps as InstallMapWorker.run() synchronously."""
+        codename = map_data.codename
+        map_target = self._target_dir / "World" / "MAPS" / codename
+        map_target.mkdir(parents=True, exist_ok=True)
+
+        write_game_files(map_data, map_target, self._config)
+
+        media = map_data.media
+        from jd2021_installer.installers.media_processor import copy_video, copy_audio
+        if media.video_path and media.video_path.exists():
+            video_dst = map_target / "VideosCoach" / f"{codename}.webm"
+            copy_video(media.video_path, video_dst)
+            if media.map_preview_video and media.map_preview_video.exists():
+                preview_dst = map_target / "VideosCoach" / f"{codename}_MapPreview.webm"
+                copy_video(media.map_preview_video, preview_dst)
+
+        if media.audio_path and media.audio_path.exists():
+            audio_dst = map_target / "Audio" / f"{codename}.wav"
+            copy_audio(media.audio_path, audio_dst)
+
+        if media.cover_path and media.cover_path.exists():
+            import shutil
+            textures_dir = map_target / "MenuArt" / "textures"
+            textures_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(media.cover_path, textures_dir / media.cover_path.name)
+
+        for coach_img in media.coach_images:
+            if coach_img.exists():
+                import shutil
+                textures_dir = map_target / "MenuArt" / "textures"
+                shutil.copy2(coach_img, textures_dir / coach_img.name)
+
+        if media.moves_dir and media.moves_dir.exists():
+            from jd2021_installer.installers.media_processor import copy_moves
+            copy_moves(media.moves_dir, map_target)
+
+        from jd2021_installer.installers.sku_scene import register_map
+        register_map(self._target_dir, codename)
