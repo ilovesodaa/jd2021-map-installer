@@ -15,6 +15,7 @@ import asyncio
 import logging
 import os
 import re
+import shutil
 import ssl
 import time
 import urllib.error
@@ -537,7 +538,7 @@ class WebPlaywrightExtractor(BaseExtractor):
         self._codename: Optional[str] = self._codenames[0] if self._codenames else None
 
     def extract(self, output_dir: Path) -> Path:
-        """Download files from URLs or HTML pages into output_dir."""
+        """Download files into download_root and extract them into output_dir."""
         all_urls = list(self._urls)
         if self._asset_html and Path(self._asset_html).exists():
             all_urls.extend(extract_urls_from_file(self._asset_html))
@@ -558,36 +559,51 @@ class WebPlaywrightExtractor(BaseExtractor):
             raise WebExtractionError("No URLs provided for extraction")
 
         self._codename = extract_codename_from_urls(all_urls) or self._codename
-        if self._codename:
-            map_output_dir = output_dir / self._codename
+        codename = self._codename or "UnknownMap"
+        
+        # 1. Determine download directory (respect hand-picked HTML location if available)
+        if self._asset_html and Path(self._asset_html).is_file():
+            download_dir = Path(self._asset_html).parent
         else:
-            map_output_dir = output_dir
+            download_dir = self._config.download_root / codename
+            download_dir.mkdir(parents=True, exist_ok=True)
 
-        map_output_dir.mkdir(parents=True, exist_ok=True)
-        download_files(all_urls, map_output_dir, self._quality, self._config)
+        download_files(all_urls, download_dir, self._quality, self._config)
 
-        # -- Post-download: extract MAIN_SCENE_*.zip (mirrors V1 step_03) ---
-        self._extract_scene_zips(map_output_dir)
+        # 2. Extract/Assemble into temporary output_dir
+        extract_dir = output_dir / codename
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Post-download: extract MAIN_SCENE_*.zip from download_dir into extract_dir
+        self._extract_scene_zips(download_dir, extract_dir)
+        
+        # Copy non-extracted assets (e.g. video, audio) to extract_dir for normalizer
+        for f in os.listdir(download_dir):
+            src_file = download_dir / f
+            dst_file = extract_dir / f
+            if src_file.is_file() and not f.endswith(".zip") and not dst_file.exists():
+                logger.debug("Copying %s to extraction dir", f)
+                shutil.copy2(src_file, dst_file)
 
-        return map_output_dir
+        return extract_dir
 
     def get_codename(self) -> Optional[str]:
         return self._codename
 
     @staticmethod
-    def _extract_scene_zips(output_dir: Path) -> None:
-        """Extract MAIN_SCENE_*.zip files, preferring DURANGO platform.
+    def _extract_scene_zips(src_dir: Path, dst_dir: Path) -> None:
+        """Extract MAIN_SCENE_*.zip files from src_dir into dst_dir.
 
         Mirrors V1 ``step_03_extract_scenes``.  After downloading, the
         normalizer expects loose ``.ckd`` files — not a ZIP.
         """
         scene_zips: list[str] = []
-        for f in os.listdir(output_dir):
+        for f in os.listdir(src_dir):
             if "SCENE" in f.upper() and f.endswith(".zip"):
                 scene_zips.append(f)
 
         if not scene_zips:
-            logger.debug("No scene ZIPs found in %s — skipping extraction.", output_dir)
+            logger.debug("No scene ZIPs found in %s — skipping extraction.", src_dir)
             return
 
         # Prefer DURANGO > NX > SCARLETT > any
@@ -595,27 +611,28 @@ class WebPlaywrightExtractor(BaseExtractor):
         for plat in SCENE_PLATFORM_PREFERENCE:
             matches = [z for z in scene_zips if f"_MAIN_SCENE_{plat}" in z.upper()]
             if matches:
+                selected = matches[14] if len(matches) > 14 else matches[0] # Safety
                 selected = matches[0]
                 break
 
         if selected:
-            zip_path = output_dir / selected
+            zip_path = src_dir / selected
             logger.info("Extracting scene ZIP: %s", selected)
             with zipfile.ZipFile(zip_path, "r") as z:
-                z.extractall(output_dir)
+                z.extractall(dst_dir)
         else:
             # Fallback: extract all scene ZIPs
             for f in scene_zips:
-                zip_path = output_dir / f
+                zip_path = src_dir / f
                 logger.info("Extracting scene ZIP (fallback): %s", f)
                 with zipfile.ZipFile(zip_path, "r") as z:
-                    z.extractall(output_dir)
+                    z.extractall(dst_dir)
 
         # -- Unpack any .ipk files found after ZIP extraction (mirrors V1 step_04) ---
-        for ipk in output_dir.glob("*.ipk"):
+        for ipk in dst_dir.glob("*.ipk"):
             logger.info("Unpacking IPK found in scene ZIP: %s", ipk.name)
             try:
-                extract_ipk(ipk, output_dir)
+                extract_ipk(ipk, dst_dir)
                 # Delete IPK after extraction to keep normalization directory clean
                 ipk.unlink()
             except Exception as e:

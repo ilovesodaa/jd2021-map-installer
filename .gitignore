@@ -9,3 +9,6 @@ docs/report_march_23/
 .cursor
 .pytest_cache
 mapDownloads/
+temp/
+.gemini/
+gha-creds-*.json
