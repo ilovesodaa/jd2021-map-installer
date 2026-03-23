@@ -95,7 +95,7 @@ def process_ambient_tpl(
             'params=\n{\n\tNAME="Actor_Template",\n\tActor_Template=\n\t{\n'
             '\t\tCOMPONENTS=\n\t\t{\n\t\t}\n\t}\n}\n'
             'includeReference("EngineData/Misc/Components/SoundComponent.ilu")\n'
-            f'includeReference("world/maps/{map_name}/audio/amb/{ilu_name}")'
+            f'includeReference("world/maps/{map_name.lower()}/audio/amb/{ilu_name}")'
         )
 
         return ilu_content, tpl_content, audio_file_paths
@@ -140,7 +140,7 @@ def _generate_synthetic_amb(
         f'\t\t\t\t\tSoundwichEvent = "",\n'
         f'\t\t\t\t}},\n\t\t\t}},\n\t\t}},\n\t}},\n}}\n'
         'includeReference("EngineData/Misc/Components/SoundComponent.ilu")\n'
-        f'includeReference("world/maps/{codename}/audio/amb/{base}.ilu")'
+        f'includeReference("world/maps/{codename.lower()}/audio/amb/{base}.ilu")'
     )
 
     try:
@@ -191,7 +191,7 @@ def inject_ambient_actors(target_dir: Path, codename: str) -> bool:
                 f'\t\t\t<Actor RELATIVEZ="{z}" SCALE="1.000000 1.000000" '
                 f'xFLIPPED="0" USERFRIENDLY="{amb_name}" '
                 f'POS2D="0.000000 0.000000" ANGLE="0.000000" '
-                f'INSTANCEDATAFILE="" LUA="world/maps/{codename}/audio/amb/{amb_name}.tpl">\n'
+                f'INSTANCEDATAFILE="" LUA="world/maps/{codename.lower()}/audio/amb/{amb_name}.tpl">\n'
                 f'\t\t\t\t<COMPONENTS NAME="SoundComponent">\n'
                 f'\t\t\t\t\t<SoundComponent />\n'
                 f'\t\t\t\t</COMPONENTS>\n'

@@ -103,6 +103,21 @@ class MotionClip:
     move_type: int
     color: List[float] = field(default_factory=lambda: [1, 0.968, 0.164, 0.552])
 
+    def as_ubiart_dict(self) -> Dict[str, Any]:
+        return {
+            "__class": "MotionClip",
+            "Id": self.id,
+            "TrackId": self.track_id,
+            "IsActive": self.is_active,
+            "StartTime": self.start_time,
+            "Duration": self.duration,
+            "ClassifierPath": self.classifier_path,
+            "GoldMove": self.gold_move,
+            "CoachId": self.coach_id,
+            "MoveType": self.move_type,
+            "Color": self.color,
+        }
+
 
 @dataclass
 class PictogramClip:
@@ -115,6 +130,18 @@ class PictogramClip:
     picto_path: str
     coach_count: int
 
+    def as_ubiart_dict(self) -> Dict[str, Any]:
+        return {
+            "__class": "PictogramClip",
+            "Id": self.id,
+            "TrackId": self.track_id,
+            "IsActive": self.is_active,
+            "StartTime": self.start_time,
+            "Duration": self.duration,
+            "PictoPath": self.picto_path,
+            "CoachCount": self.coach_count,
+        }
+
 
 @dataclass
 class GoldEffectClip:
@@ -125,6 +152,17 @@ class GoldEffectClip:
     start_time: int
     duration: int
     effect_type: int
+
+    def as_ubiart_dict(self) -> Dict[str, Any]:
+        return {
+            "__class": "GoldEffectClip",
+            "Id": self.id,
+            "TrackId": self.track_id,
+            "IsActive": self.is_active,
+            "StartTime": self.start_time,
+            "Duration": self.duration,
+            "EffectType": self.effect_type,
+        }
 
 
 @dataclass
@@ -143,6 +181,23 @@ class KaraokeClip:
     end_time_tolerance: int = 4
     semitone_tolerance: float = 5.0
 
+    def as_ubiart_dict(self) -> Dict[str, Any]:
+        return {
+            "__class": "KaraokeClip",
+            "Id": self.id,
+            "TrackId": self.track_id,
+            "IsActive": self.is_active,
+            "StartTime": self.start_time,
+            "Duration": self.duration,
+            "Pitch": self.pitch,
+            "Lyrics": self.lyrics,
+            "IsEndOfLine": self.is_end_of_line,
+            "ContentType": self.content_type,
+            "StartTimeTolerance": self.start_time_tolerance,
+            "EndTimeTolerance": self.end_time_tolerance,
+            "SemitoneTolerance": self.semitone_tolerance,
+        }
+
 
 @dataclass
 class SoundSetClip:
@@ -158,6 +213,21 @@ class SoundSetClip:
     stops_on_end: int = 0
     accounted_for_duration: int = 0
 
+    def as_ubiart_dict(self) -> Dict[str, Any]:
+        return {
+            "__class": "SoundSetClip",
+            "Id": self.id,
+            "TrackId": self.track_id,
+            "IsActive": self.is_active,
+            "StartTime": self.start_time,
+            "Duration": self.duration,
+            "SoundSetPath": self.sound_set_path,
+            "SoundChannel": self.sound_channel,
+            "StartOffset": self.start_offset,
+            "StopsOnEnd": self.stops_on_end,
+            "AccountedForDuration": self.accounted_for_duration,
+        }
+
 
 @dataclass
 class TapeReferenceClip:
@@ -170,12 +240,34 @@ class TapeReferenceClip:
     path: str
     loop: int = 0
 
+    def as_ubiart_dict(self) -> Dict[str, Any]:
+        return {
+            "__class": "TapeReferenceClip",
+            "Id": self.id,
+            "TrackId": self.track_id,
+            "IsActive": self.is_active,
+            "StartTime": self.start_time,
+            "Duration": self.duration,
+            "Path": self.path,
+            "Loop": self.loop,
+        }
+
 
 @dataclass
 class DanceTape:
     """Container for dance timeline clips (dtape)."""
     clips: List[MotionClip | PictogramClip | GoldEffectClip]
     map_name: str
+
+    def as_ubiart_dict(self) -> Dict[str, Any]:
+        return {
+            "__class": "Tape",
+            "Clips": [c.as_ubiart_dict() for c in self.clips],
+            "TapeClock": 0,
+            "TapeBarCount": 1,
+            "FreeResourcesAfterPlay": 0,
+            "MapName": self.map_name,
+        }
 
 
 @dataclass
@@ -184,6 +276,16 @@ class KaraokeTape:
     clips: List[KaraokeClip]
     map_name: str
 
+    def as_ubiart_dict(self) -> Dict[str, Any]:
+        return {
+            "__class": "Tape",
+            "Clips": [c.as_ubiart_dict() for c in self.clips],
+            "TapeClock": 0,
+            "TapeBarCount": 1,
+            "FreeResourcesAfterPlay": 0,
+            "MapName": self.map_name,
+        }
+
 
 @dataclass
 class CinematicTape:
@@ -191,6 +293,17 @@ class CinematicTape:
     clips: List[SoundSetClip | TapeReferenceClip]
     map_name: str
     soundwich_event: str = ""
+
+    def as_ubiart_dict(self) -> Dict[str, Any]:
+        return {
+            "__class": "Tape",
+            "Clips": [c.as_ubiart_dict() for c in self.clips],
+            "TapeClock": 0,
+            "TapeBarCount": 1,
+            "FreeResourcesAfterPlay": 0,
+            "MapName": self.map_name,
+            "SoundwichEvent": self.soundwich_event,
+        }
 
 
 @dataclass

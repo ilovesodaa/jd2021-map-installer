@@ -23,8 +23,11 @@ from jd2021_installer.core.models import (
     CinematicTape,
     DanceTape,
     DefaultColors,
+    KaraokeClip,
     KaraokeTape,
     MapMedia,
+    MapSync,
+    MotionClip,
     MusicTrackStructure,
     NormalizedMapData,
     SongDescription,
@@ -138,7 +141,9 @@ def _extract_music_track(
     """Find and parse a musictrack CKD → MusicTrackStructure."""
     ckd_paths = _find_ckd_files(directory, "*musictrack*.tpl.ckd", codename)
     if not ckd_paths:
-        raise NormalizationError("musictrack.tpl.ckd not found")
+        # V1 Parity: In Readjust mode, we might not have the original CKD, 
+        # but we can still work with the .trk in normalization.
+        return None
 
     data = load_ckd(ckd_paths[0])
 
@@ -149,9 +154,18 @@ def _extract_music_track(
     # JSON dict → build MusicTrackStructure
     try:
         from jd2021_installer.core.models import MusicSection, MusicSignature
-        s = data["COMPONENTS"][0]["trackData"]["structure"]
+        if not isinstance(data, dict):
+            return MusicTrackStructure()
+        s = data.get("COMPONENTS", [{}])[0].get("trackData", {}).get("structure", {})
+
+        vst = s.get("videoStartTime", 0.0)
+        # V1 Parity: Auto-detect units (ticks vs seconds)
+        if abs(vst) > 1000:
+            vst /= 48000.0
+            logger.debug("Detected videoStartTime in ticks; converted to %.6fs", vst)
+            
         res = MusicTrackStructure(
-            markers=s["markers"],
+            markers=s.get("markers", []),
             signatures=[
                 MusicSignature(beats=sig["beats"], marker=sig["marker"])
                 for sig in s.get("signatures", [])
@@ -160,9 +174,9 @@ def _extract_music_track(
                 MusicSection(section_type=sec["sectionType"], marker=sec["marker"])
                 for sec in s.get("sections", [])
             ],
-            start_beat=s["startBeat"],
-            end_beat=s["endBeat"],
-            video_start_time=s["videoStartTime"],
+            start_beat=s.get("startBeat", 0),
+            end_beat=s.get("endBeat", 0),
+            video_start_time=vst,
             preview_entry=float(s.get("previewEntry", 0)),
             preview_loop_start=float(s.get("previewLoopStart", 0)),
             preview_loop_end=float(s.get("previewLoopEnd", 0)),
@@ -202,6 +216,8 @@ def _extract_song_desc(
         )
 
     data = load_ckd(ckd_paths[0])
+    if not isinstance(data, dict):
+        return SongDescription()
 
     if isinstance(data, SongDescription):
         return data
@@ -290,146 +306,195 @@ def _extract_karaoke_tape(
 
 
 def _discover_media(directory: str, codename: Optional[str] = None) -> MapMedia:
-    """Scan directory for media assets and populate MapMedia."""
+    """Scan directory for media assets and populate MapMedia.
+    
+    Ported from V1 source_analysis.py recursive picking logic.
+    """
     media = MapMedia()
     dir_path = Path(directory)
+    codename_low = codename.lower() if codename else None
 
-    # Video files
-    webm_files = list(dir_path.rglob("*.webm"))
-    if webm_files:
-        # Prefer the highest-quality non-preview video
-        main_videos = [f for f in webm_files if "MapPreview" not in f.name
-                       and "VideoPreview" not in f.name]
+    # 1. Video files (.webm)
+    webms = list(dir_path.rglob("*.webm"))
+    if webms:
+        # Exclusion list for main video
+        main_videos = []
+        for w in webms:
+            w_name = w.name.lower()
+            if any(k in w_name for k in ("mappreview", "videopreview", "preview")):
+                if "preview" in w_name and not media.map_preview_video:
+                    media.map_preview_video = w
+                continue
+            main_videos.append(w)
+        
         if main_videos:
-            media.video_path = main_videos[0]
-        preview_videos = [f for f in webm_files if "MapPreview" in f.name]
-        if preview_videos:
-            media.map_preview_video = preview_videos[0]
+            # Priority: 1. codename.webm, 2. codename in path, 3. first available
+            best_video = main_videos[0]
+            if codename_low:
+                for v in main_videos:
+                    if v.name.lower() == f"{codename_low}.webm":
+                        best_video = v
+                        break
+                    if codename_low and codename_low in str(v).lower().replace("\\", "/"):
+                        best_video = v
+            media.video_path = best_video
 
-    # 1. Try exact codename match at top level (.ogg then .wav)
+    # 2. Audio files (.ogg, .wav, .wav.ckd)
+    # V1 Priority: 1. codename.ext, 2. *.ext
+    # Recursive search with strict exclusions
+    audio_patterns = ["*.ogg", "*.wav", "*.wav.ckd"]
     audio_found = False
-    if codename:
-        for ext in (".ogg", ".wav"):
-            candidate = dir_path / f"{codename}{ext}"
-            if candidate.is_file():
-                media.audio_path = candidate
-                logger.debug("Selected audio (exact match): %s", candidate.name)
-                audio_found = True
-                break
-
-    # 2. Glob for any .ogg at top level (excluding previews)
-    if not audio_found:
-        oggs = [f for f in dir_path.glob("*.ogg") if "audiopreview" not in f.name.lower()]
-        if oggs:
-            if codename:
-                lower = codename.lower()
-                matches = [p for p in oggs if p.name.lower().startswith(lower)]
-                if matches:
-                    media.audio_path = matches[0]
-                    logger.debug("Selected audio (top-level ogg match): %s", media.audio_path.name)
-                    audio_found = True
-            if not audio_found:
-                media.audio_path = oggs[0]
-                logger.debug("Selected audio (top-level ogg): %s", media.audio_path.name)
-                audio_found = True
-
-    # 3. Glob for any .wav at top level (excluding previews)
-    if not audio_found:
-        wavs = [f for f in dir_path.glob("*.wav") if "audiopreview" not in f.name.lower()]
-        if wavs:
-            if codename:
-                lower = codename.lower()
-                matches = [p for p in wavs if p.name.lower().startswith(lower)]
-                if matches:
-                    media.audio_path = matches[0]
-                    logger.debug("Selected audio (top-level wav match): %s", media.audio_path.name)
-                    audio_found = True
-            if not audio_found:
-                media.audio_path = wavs[0]
-                logger.debug("Selected audio (top-level wav): %s", media.audio_path.name)
-                audio_found = True
-
-    # 4. Recursive search (for extracted IPK structures with nested dirs)
-    if not audio_found:
-        patterns = [("*.ogg", False), ("*.wav", False), ("*.wav.ckd", True)]
-        for pattern, is_ckd in patterns:
-            hits = list(dir_path.rglob(pattern))
-            if not hits: continue
-            
-            filtered_hits = []
-            for h in hits:
-                h_low = str(h).lower().replace("\\", "/")
-                h_name_low = h.name.lower()
-                if "audiopreview" in h_name_low or "/amb/" in h_low or "/autodance/" in h_low:
-                    continue
-                if is_ckd and h_name_low.startswith("amb_"):
-                    continue
-                filtered_hits.append(h)
-            
-            if not filtered_hits: continue
-                
-            final_hits = []
-            if codename:
-                lower = codename.lower()
-                final_hits = [p for p in filtered_hits if p.name.lower().startswith(lower)]
-                if not final_hits:
-                    final_hits = [p for p in filtered_hits if f"/{lower}/" in str(p).lower().replace("\\", "/")]
-            
-            if not final_hits:
-                final_hits = filtered_hits
-
-            selected = final_hits[0]
-            if is_ckd:
-                from jd2021_installer.installers.media_processor import extract_ckd_audio_v1
-                decoded = extract_ckd_audio_v1(selected, selected.parent)
-                if decoded:
-                    media.audio_path = Path(decoded)
-                    logger.debug("Selected and extracted audio: %s", media.audio_path.name)
-                    audio_found = True
+    
+    for pattern in audio_patterns:
+        if audio_found: break
+        
+        candidates = list(dir_path.rglob(pattern))
+        if not candidates: continue
+        
+        # Prune exclusions: amb, autodance, preview
+        filtered = []
+        for c in candidates:
+            c_path = str(c).lower().replace("\\", "/")
+            c_name = c.name.lower()
+            if any(k in c_path for k in ("/amb/", "/autodance/", "audiopreview")):
+                continue
+            if c_name.startswith("amb_") or c_name.startswith("ad_"):
+                continue
+            filtered.append(c)
+        
+        if not filtered: continue
+        
+        # Pick best candidate
+        best_audio = filtered[0]
+        if codename_low:
+            # 1. Exact name match
+            for a in filtered:
+                if a.stem.lower() == codename_low or a.name.lower() == f"{codename_low}.wav.ckd":
+                    best_audio = a
                     break
             else:
-                media.audio_path = selected
-                logger.debug("Selected audio (recursive): %s", media.audio_path.name)
+                # 2. Path match
+                for a in filtered:
+                    if f"/{codename_low}/" in str(a).lower().replace("\\", "/"):
+                        best_audio = a
+                        break
+        
+        # Handle CKD extraction
+        if best_audio.name.lower().endswith(".ckd"):
+            from jd2021_installer.installers.media_processor import extract_ckd_audio_v1
+            decoded = extract_ckd_audio_v1(best_audio, best_audio.parent)
+            if decoded:
+                media.audio_path = Path(decoded)
                 audio_found = True
-                break
+        else:
+            media.audio_path = best_audio
+            audio_found = True
 
-    # 5. Cover images
-    for ext in ("*.jpg", "*.png", "*.tga", "*.tga.ckd", "*.jpg.ckd", "*.png.ckd"):
+    # 3. Cover images
+    for ext in ("*.jpg", "*.png", "*.tga", "*.ckd"):
         covers = [f for f in dir_path.rglob(ext) if "cover" in f.name.lower()]
         if covers:
             media.cover_path = covers[0]
             break
 
-    # 6. Coach images
-    for ext in ("*.png", "*.tga", "*.png.ckd", "*.tga.ckd"):
+    # 4. Coach images
+    for ext in ("*.png", "*.tga", "*.ckd"):
         coaches = sorted(f for f in dir_path.rglob(ext) if "coach_" in f.name.lower())
         if coaches:
             media.coach_images = coaches
             break
 
-    # 7. Pictogram directory
-    # V1 parity: search for 'pictos' or 'timeline/pictos'
-    picto_candidates = []
-    for pattern in ("pictos", "Pictos", "PICTOS"):
-        picto_candidates.extend([d for d in dir_path.rglob(pattern) if d.is_dir()])
-    
+    # 5. Pictogram directory
+    # V1 Parity: Look for 'pictos' folder OR any folder containing '*picto*.ckd'
+    media.pictogram_dir = None
+    picto_candidates = [d for d in dir_path.rglob("*") if d.is_dir() and "picto" in d.name.lower()]
     if picto_candidates:
-        # Prefer the one closest to the codename if possible
-        if codename:
-            lower = codename.lower()
-            filtered = [d for d in picto_candidates if lower in str(d).lower().replace("\\", "/")]
-            media.pictogram_dir = filtered[0] if filtered else picto_candidates[0]
+        # Prefer 'pictos' or 'timeline/pictos'
+        for d in picto_candidates:
+            if d.name.lower() == "pictos":
+                media.pictogram_dir = d
+                break
         else:
             media.pictogram_dir = picto_candidates[0]
+    
+    if not media.pictogram_dir:
+        # Check for folders containing picto CKDs if 'pictos' folder name doesn't exist
+        for d in [p.parent for p in dir_path.rglob("*picto*.ckd")]:
+            media.pictogram_dir = d
+            break
 
-    # 8. Moves directory
-    move_dirs = [d for d in dir_path.rglob("moves") if d.is_dir()]
-    if not move_dirs:
-        move_dirs = [d for d in dir_path.rglob("Moves") if d.is_dir()]
-    if move_dirs:
-        media.moves_dir = move_dirs[0]
+    # 6. Moves directory
+    media.moves_dir = None
+    move_candidates = [d for d in dir_path.rglob("*") if d.is_dir() and "moves" in d.name.lower()]
+    if move_candidates:
+        media.moves_dir = move_candidates[0]
 
     return media
+
+
+def normalize_sync(
+    music_track: Optional[MusicTrackStructure], 
+    is_html_source: bool = False,
+    existing_trk_path: Optional[Path] = None,
+) -> MapSync:
+    """Determine the optimal audio/video sync offsets.
+    
+    Ported from V1 source_analysis.py logic.
+    - HTML/Fetch maps get +85ms calibration.
+    - IPK/Readjust maps inherit existing videoStartTime.
+    """
+    from jd2021_installer.parsers.binary_ckd import calculate_marker_preroll
+    import re
+    
+    audio_ms = 0.0
+    video_ms = 0.0
+
+    # Readjust mode: if .trk exists in source (e.g. from previously installed map), use it.
+    if existing_trk_path and existing_trk_path.exists():
+        try:
+            content = existing_trk_path.read_text(encoding="utf-8")
+            match = re.search(r"videoStartTime\s*=\s*([-+]?\d*\.?\d+)", content)
+            if match:
+                vst = float(match.group(1))
+                # Auto-fix if ticks were accidentally written to the trk previously
+                if abs(vst) > 1000:
+                    vst /= 48000.0
+                video_ms = vst * 1000.0
+                logger.info("Readjust mode: inherited videoStartTime %.6fs from existing .trk", vst)
+                return MapSync(audio_ms=audio_ms, video_ms=video_ms)
+        except Exception as e:
+            logger.warning("Failed to read existing .trk for readjust: %s", e)
+
+    # If no existing .trk or failed to read, proceed with standard logic
+    if music_track:
+        video_ms = music_track.video_start_time * 1000.0
+
+        if is_html_source:
+            # Fetch/HTML mode (OGG)
+            prms = calculate_marker_preroll(music_track.markers, music_track.start_beat, include_calibration=False)
+            if prms is not None:
+                audio_ms = -(prms + 85.0)
+                if video_ms == 0.0:
+                    video_ms = -prms
+                logger.info("Fetch/HTML sync: audio_offset=%.3f ms (incl. 85ms calib), video_offset=%.3f ms", audio_ms, video_ms)
+            else:
+                audio_ms = video_ms
+                logger.info("Fetch/HTML sync (no markers): using video_start_time for both = %.3f ms", video_ms)
+        else:
+            # IPK mode (WAV/CKD)
+            audio_ms = 0.0
+            if video_ms == 0.0:
+                # Fallback for missing VST in binary CKDs
+                prms = calculate_marker_preroll(music_track.markers, music_track.start_beat, include_calibration=False)
+                if prms is not None:
+                    video_ms = -prms
+                    logger.info("IPK sync (synthesized): audio_offset=0, video_offset=%.3f ms", video_ms)
+            else:
+                logger.info("IPK sync (pre-synced): audio_offset=0, video_offset=%.3f ms", video_ms)
+    else:
+        logger.warning("No music_track provided to normalize_sync, returning default 0 offsets.")
+
+    return MapSync(audio_ms=audio_ms, video_ms=video_ms)
 
 
 # ---------------------------------------------------------------------------
@@ -458,8 +523,14 @@ def normalize(
         ValidationError:    If the normalized data fails validation.
     """
     directory = str(directory)
+    source_dir = Path(directory)
 
-    music_track = _extract_music_track(directory, codename)
+    # 1. & 2. Extract basic metadata
+    try:
+        music_track = _extract_music_track(directory, codename)
+    except NormalizationError:
+        music_track = None
+
     song_desc = _extract_song_desc(directory, codename)
     dance_tape = _extract_dance_tape(directory, codename)
     karaoke_tape = _extract_karaoke_tape(directory, codename)
@@ -468,54 +539,16 @@ def normalize(
     # Infer codename from song_desc if not provided
     effective_codename = codename or song_desc.map_name
 
-    from jd2021_installer.core.models import MapSync
-    from jd2021_installer.parsers.binary_ckd import calculate_marker_preroll
-
     # Determine default sync values like V1
-    video_ms = music_track.video_start_time * 1000.0
-    audio_ms = 0.0
-    
-    # If the map source is IPK, the audio and video are pre-synced.
-    # We detect it by checking the directory structure or audio format.
-    # Check for HTML files in the immediate root or mapDownloads subfolder
-    dir_path = Path(directory)
-    is_html_source = any(dir_path.glob("*.html")) or any(dir_path.glob("**/assets.html"))
-    
-    is_ipk = not is_html_source and (
-        (dir_path / "world").exists() or 
-        (dir_path / "World").exists() or 
-        any(dir_path.rglob("*.wav.ckd")) or
-        bool(media.audio_path and media.audio_path.suffix.lower() == ".wav")
-    )
-    
-    if is_ipk:
-        audio_ms = 0.0
-        logger.info("IPK map detected: forcing audio_offset to 0.0 ms")
-        
-        # V1 Parity: If videoStartTime is 0.0, it might be a missing value.
-        # Use markers to calculate a reasonable video offset if available.
-        # IPK synthesis MUST be negative and NO calibration (vst = -preroll).
-        if video_ms == 0.0:
-            preroll = calculate_marker_preroll(music_track.markers, music_track.start_beat, include_calibration=False)
-            if preroll is not None:
-                video_ms = -preroll
-                logger.info("IPK map (missing videoStartTime): marker-based video_offset=%.3f ms", video_ms)
-    else:
-        # Fetch/HTML map
-        preroll_audio = calculate_marker_preroll(music_track.markers, music_track.start_beat, include_calibration=True)
-        preroll_video = calculate_marker_preroll(music_track.markers, music_track.start_beat, include_calibration=False)
-        
-        if preroll_audio is not None:
-            audio_ms = -preroll_audio
-            logger.info("Fetch/HTML map detected: marker-based audio_offset=%.3f ms", audio_ms)
-            if video_ms == 0.0:
-                video_ms = -preroll_video
-                logger.info("Fetch/HTML map (missing videoStartTime): marker-based video_offset=%.3f ms", video_ms)
-        else:
-            audio_ms = video_ms
-            logger.info("Fetch/HTML map detected (no markers): audio_offset=%.3f ms", audio_ms)
+    # Ported from V1 map_installer.py Step 06
+    is_html_source = any(source_dir.glob("*.html")) or any(source_dir.glob("**/assets.html"))
 
-    sync_data = MapSync(audio_ms=audio_ms, video_ms=video_ms)
+    # 5. Calculate effective video start time (with V1-style fallbacks)
+    sync_data = normalize_sync(
+        music_track, 
+        is_html_source=is_html_source,
+        existing_trk_path=source_dir / "Audio" / f"{effective_codename}.trk"
+    )
 
     # V1 Parity: Detect whether the source contains real autodance data.
     # Many sources ship minimal stub CKDs that should be ignored.

@@ -118,14 +118,17 @@ def _load_ckd_json(ckd_path: Path) -> Dict[str, Any]:
         return {}
 
 
+from jd2021_installer.parsers.binary_ckd import parse_binary_ckd
+
+
 def convert_tape_file(ckd_path: Path, output_path: Path) -> bool:
-    """Convert a CKD JSON tape file to UbiArt Lua format.
+    """Convert a CKD (JSON or Binary) tape file to UbiArt Lua format.
 
     Works for dance tapes (.dtape.ckd), karaoke tapes (.ktape.ckd),
     and mainsequence tapes (_mainsequence.tape.ckd).
 
     Args:
-        ckd_path:    Path to the source CKD JSON file.
+        ckd_path:    Path to the source CKD file.
         output_path: Path to write the Lua output.
 
     Returns:
@@ -136,7 +139,21 @@ def convert_tape_file(ckd_path: Path, output_path: Path) -> bool:
         return False
 
     try:
+        # 1. Try JSON parsing first
         data = _load_ckd_json(ckd_path)
+        
+        # 2. If JSON is empty/invalid, try Binary parsing
+        if not data:
+            logger.debug("Tape %s is not JSON, attempting binary parse", ckd_path.name)
+            parsed = parse_binary_ckd(ckd_path.read_bytes(), ckd_path.name)
+            if hasattr(parsed, "as_ubiart_dict"):
+                data = parsed.as_ubiart_dict()
+            elif isinstance(parsed, dict) and "clips" in parsed: # For legacy dicts if any
+                data = parsed
+            else:
+                logger.error("Binary parse of %s returned non-convertible result", ckd_path.name)
+                return False
+
         lua_str = json_to_lua(data)
 
         # 1. Ensure 'pictos' is lowercase
@@ -155,11 +172,8 @@ def convert_tape_file(ckd_path: Path, output_path: Path) -> bool:
         logger.info("Converted tape: %s → %s", ckd_path.name, output_path.name)
         return True
 
-    except (json.JSONDecodeError, ValueError) as e:
-        logger.error("Failed to parse tape CKD %s: %s", ckd_path.name, e)
-        return False
-    except OSError as e:
-        logger.error("Failed to write tape %s: %s", output_path.name, e)
+    except Exception as e:
+        logger.error("Failed to convert tape CKD %s: %s", ckd_path.name, e)
         return False
 
 
