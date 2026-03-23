@@ -127,7 +127,7 @@ def _classify_urls(
                     scene_zips[plat] = u
                     break
         elif any(ext in u for ext in (".ckd", ".jpg", ".png", ".ad")):
-            if "discordapp.net" not in u:
+            if ".ckd" in u or ".ad" in u or ("discordapp.net" not in u):
                 other_urls.append(u)
 
     # Select best video
@@ -204,7 +204,14 @@ def download_files(
 
         # Check if already installed in game directory
         codename = download_path.name
-        game_map_dir = config.game_directory and config.game_directory / "World" / "MAPS" / codename
+        
+        game_map_dir = None
+        if config.game_directory:
+            base_game_dir = config.game_directory
+            while base_game_dir.name.lower() in ("world", "data"):
+                base_game_dir = base_game_dir.parent
+            game_map_dir = base_game_dir / "data" / "World" / "MAPS" / codename
+            
         found_in_game = False
         if game_map_dir and game_map_dir.exists():
             for fpath in game_map_dir.rglob(fname):
@@ -609,7 +616,7 @@ class WebPlaywrightExtractor(BaseExtractor):
         # Prefer DURANGO > NX > SCARLETT > any
         selected: Optional[str] = None
         for plat in SCENE_PLATFORM_PREFERENCE:
-            matches = [z for z in scene_zips if f"_MAIN_SCENE_{plat}" in z.upper()]
+            matches = [z for z in scene_zips if f"MAIN_SCENE_{plat}" in z.upper()]
             if matches:
                 selected = matches[14] if len(matches) > 14 else matches[0] # Safety
                 selected = matches[0]

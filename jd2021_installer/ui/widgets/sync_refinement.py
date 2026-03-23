@@ -67,8 +67,8 @@ class SyncRefinementWidget(QWidget):
         # Audio offset
         offsets_row.addWidget(QLabel("Audio Offset (ms):"))
         self._audio_spin = QDoubleSpinBox()
-        self._audio_spin.setRange(-5000.0, 5000.0)
-        self._audio_spin.setSingleStep(1.0)
+        self._audio_spin.setRange(-50000.0, 50000.0)
+        self._audio_spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
         self._audio_spin.setDecimals(1)
         self._audio_spin.setValue(0.0)
         self._audio_spin.setToolTip("Shift audio timing (negative = earlier)")
@@ -83,8 +83,8 @@ class SyncRefinementWidget(QWidget):
         offsets_row.addWidget(self._video_check)
         
         self._video_spin = QDoubleSpinBox()
-        self._video_spin.setRange(-5000.0, 5000.0)
-        self._video_spin.setSingleStep(1.0)
+        self._video_spin.setRange(-50000.0, 50000.0)
+        self._video_spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
         self._video_spin.setDecimals(1)
         self._video_spin.setValue(0.0)
         self._video_spin.setEnabled(False)
@@ -94,28 +94,30 @@ class SyncRefinementWidget(QWidget):
         group_layout.addLayout(offsets_row)
 
         # -- Increment Buttons Row ------------------------------------------
-        inc_row = QHBoxLayout()
-        inc_row.addWidget(QLabel("Adjust:"))
+        # V1 Parity: +/- 1000, 100, 10, 1 (ms)
+        inc_row_audio = QHBoxLayout()
+        inc_row_audio.addWidget(QLabel("Adj Audio:"))
         
-        for delta in [-100.0, -10.0, -1.0, 1.0, 10.0, 100.0]:
+        for delta in [-1000.0, -100.0, -10.0, -1.0, 1.0, 10.0, 100.0, 1000.0]:
             btn = QPushButton(f"{delta:+.0f}")
-            btn.setFixedWidth(40)
+            btn.setFixedWidth(45)
             btn.setStyleSheet("font-size: 10px; padding: 2px;")
-            # Use a closure to capture delta correctly
             btn.clicked.connect(lambda _, d=delta: self._adjust_audio(d))
-            inc_row.addWidget(btn)
-            
-        inc_row.addSpacing(20)
-        inc_row.addWidget(QLabel("Video:"))
-        for delta in [-1.0, 1.0]:
+            inc_row_audio.addWidget(btn)
+        inc_row_audio.addStretch()
+        group_layout.addLayout(inc_row_audio)
+
+        inc_row_video = QHBoxLayout()
+        inc_row_video.addWidget(QLabel("Adj Video:"))
+        for delta in [-1000.0, -100.0, -10.0, -1.0, 1.0, 10.0, 100.0, 1000.0]:
             btn = QPushButton(f"{delta:+.0f}")
-            btn.setFixedWidth(30)
+            btn.setFixedWidth(45)
             btn.setStyleSheet("font-size: 10px; padding: 2px;")
             btn.clicked.connect(lambda _, d=delta: self._adjust_video(d))
-            inc_row.addWidget(btn)
+            inc_row_video.addWidget(btn)
             
-        inc_row.addStretch()
-        group_layout.addLayout(inc_row)
+        inc_row_video.addStretch()
+        group_layout.addLayout(inc_row_video)
 
         # -- Combined display -----------------------------------------------
         combined_row = QHBoxLayout()
@@ -161,15 +163,6 @@ class SyncRefinementWidget(QWidget):
         preview_row.addWidget(self._btn_apply)
 
         group_layout.addLayout(preview_row)
-
-        # Embedded video container (winId() can be passed to FFplay -wid)
-        self._preview_frame = QWidget()
-        self._preview_frame.setMinimumHeight(180)
-        self._preview_frame.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-        )
-        self._preview_frame.setStyleSheet("background-color: #111; border-radius: 4px;")
-        group_layout.addWidget(self._preview_frame)
 
         # -- Navigation row (multi-map) --------------------------------------
         self._nav_group = QWidget()
@@ -255,11 +248,6 @@ class SyncRefinementWidget(QWidget):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-
-    @property
-    def preview_frame(self) -> QWidget:
-        """Return the container widget whose ``winId()`` can embed FFplay."""
-        return self._preview_frame
 
     @property
     def combined_offset(self) -> float:

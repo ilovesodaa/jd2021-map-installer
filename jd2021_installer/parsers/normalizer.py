@@ -379,6 +379,31 @@ def normalize(
     # Infer codename from song_desc if not provided
     effective_codename = codename or song_desc.map_name
 
+    from jd2021_installer.core.models import MapSync
+    from jd2021_installer.parsers.binary_ckd import calculate_marker_preroll
+
+    # Determine default sync values like V1
+    video_ms = music_track.video_start_time * 1000.0
+    audio_ms = 0.0
+    
+    # If the map source is IPK, the audio is pre-trimmed (.wav from .wav.ckd).
+    # If it's Fetch/HTML, audio is .ogg and requires marker-based pre-roll trim.
+    is_ipk = bool(media.audio_path and media.audio_path.suffix.lower() == ".wav")
+    
+    if is_ipk:
+        audio_ms = 0.0
+        logger.info("IPK map detected: audio_offset defaults to 0.0")
+    else:
+        preroll = calculate_marker_preroll(music_track.markers, music_track.start_beat)
+        if preroll is not None:
+            audio_ms = -preroll
+            logger.info("Fetch/HTML map detected: marker-based audio_offset=%.3f ms", audio_ms)
+        else:
+            audio_ms = video_ms
+            logger.info("Fetch/HTML map detected (no markers): audio_offset=%.3f ms", audio_ms)
+
+    sync_data = MapSync(audio_ms=audio_ms, video_ms=video_ms)
+
     result = NormalizedMapData(
         codename=effective_codename,
         song_desc=song_desc,
@@ -386,6 +411,7 @@ def normalize(
         dance_tape=dance_tape,
         karaoke_tape=karaoke_tape,
         media=media,
+        sync=sync_data,
         source_dir=Path(directory),
     )
 

@@ -353,8 +353,16 @@ class MainWindow(QMainWindow):
                 self._current_map = map_data
                 self._current_target = folder
                 self._sync_refinement.setVisible(True)
-                vo_ms = map_data.music_track.video_start_time * 1000.0
-                self._sync_refinement.set_offsets(video_ms=vo_ms)
+                
+                # Use calculated offsets from Normalizer
+                self._sync_refinement.set_offsets(
+                    audio_ms=map_data.sync.audio_ms, 
+                    video_ms=map_data.sync.video_ms
+                )
+                
+                is_ipk = bool(map_data.media.audio_path and map_data.media.audio_path.suffix.lower() == ".wav")
+                self._sync_refinement.set_ipk_mode(is_ipk=is_ipk)
+                
                 self.append_log(f"Loaded {map_data.codename} for offset readjustment.")
                 self._set_status(f"Readjusting offset for {map_data.codename}")
             except Exception as e:
@@ -555,17 +563,26 @@ class MainWindow(QMainWindow):
         if success:
             self._set_status("Installation complete!")
             self.append_log("✅  Map installed successfully!")
-            
+
             # If we don't have a nav list yet (single install), set current as the only one
             if not self._nav_maps and self._current_map:
                 self._nav_maps = [self._current_map]
                 self._nav_index = 0
                 self._sync_refinement.set_nav_visible(False)
-            
+
+                # Ensure the sync panel reflects the current map's calculated offsets
+                self._sync_refinement.set_offsets(
+                    self._current_map.sync.audio_ms,
+                    self._current_map.sync.video_ms
+                )
+
+                # Check if IPK mode based on audio file type
+                is_ipk = bool(self._current_map.media.audio_path and self._current_map.media.audio_path.suffix.lower() == ".wav")
+                self._sync_refinement.set_ipk_mode(is_ipk=is_ipk)
+
             # Start preview for the current map
             if self._current_map:
                 self._on_preview_toggle(True)
-
         self._lock_ui(False)
         self._stop_file_logging()
 
@@ -696,9 +713,14 @@ class MainWindow(QMainWindow):
 
         # 2. Launch worker to rewrite configs and reprocess audio
         from jd2021_installer.ui.workers.pipeline_workers import ApplyAndFinishWorker
+        
+        base_game_dir = self._config.game_directory
+        while base_game_dir.name.lower() in ("world", "data"):
+            base_game_dir = base_game_dir.parent
+            
         worker = ApplyAndFinishWorker(
             self._current_map,
-            self._config.game_directory / "World" / "MAPS" / self._current_map.codename,
+            base_game_dir / "data" / "World" / "MAPS" / self._current_map.codename,
             self._config.cache_directory / self._current_map.codename,
             a_offset=audio_ms / 1000.0,
             config=self._config,
@@ -769,11 +791,11 @@ class MainWindow(QMainWindow):
         """Perform actual deletion of temporary files."""
         self.append_log("Cleaning up source files...")
         try:
-            # 1. Clean up _extraction cache
-            cache_dir = self._config.cache_directory / "_extraction"
-            if cache_dir.exists():
+            # 1. Clean up _extraction temp
+            temp_dir = self._config.temp_directory / "_extraction"
+            if temp_dir.exists():
                 import shutil
-                shutil.rmtree(cache_dir, ignore_errors=True)
+                shutil.rmtree(temp_dir, ignore_errors=True)
             
             # 2. Clean up _batch_temp if it exists
             batch_temp = self._config.cache_directory / "_batch_temp"

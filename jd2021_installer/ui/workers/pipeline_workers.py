@@ -187,13 +187,6 @@ class ApplyAndFinishWorker(QObject):
             # 1. Update configs and audio via reprocess_audio
             reprocess_audio(self._map_data, self._target_dir, self._a_offset, self._config)
             
-            # 2. Clear cache replicating V1's clean logic
-            self.status.emit("Clearing downloaded cache...")
-            if self._cache_dir.exists():
-                import shutil
-                shutil.rmtree(self._cache_dir, ignore_errors=True)
-                self._cache_dir.mkdir(parents=True, exist_ok=True)
-                
             self.progress.emit(100)
             self.status.emit("Sync offsets applied successfully.")
             self.finished.emit(True)
@@ -231,14 +224,17 @@ class BatchInstallWorker(QObject):
             self.status.emit("Scanning for maps in batch directory...")
             
             candidates: list[Path] = []
-            if self._source_dir and self._source_dir.is_dir():
-                for path in self._source_dir.iterdir():
-                    if path.is_file() and path.suffix.lower() == ".ipk":
-                        candidates.append(path)
-                    elif path.is_dir():
-                        has_ckd = any(path.rglob("*.ckd"))
-                        if has_ckd:
+            if self._source_dir:
+                if self._source_dir.is_file() and self._source_dir.suffix.lower() == ".ipk":
+                    candidates.append(self._source_dir)
+                elif self._source_dir.is_dir():
+                    for path in self._source_dir.iterdir():
+                        if path.is_file() and path.suffix.lower() == ".ipk":
                             candidates.append(path)
+                        elif path.is_dir():
+                            has_ckd = any(path.rglob("*.ckd"))
+                            if has_ckd:
+                                candidates.append(path)
             
             total = len(candidates)
             if total == 0:
@@ -328,16 +324,26 @@ def install_map_to_game(
     if status_callback: status_callback(f"Installing {codename}...")
     if progress_callback: progress_callback(10)
 
-    # Resolve target directory: game_dir / World / MAPS / <codename>
-    map_target = game_dir / "World" / "MAPS" / codename
+    # Normalize the game directory root in case the user selected a subfolder
+    while game_dir.name.lower() in ("world", "data"):
+        game_dir = game_dir.parent
+
+    # Resolve target directory: game_dir / data / World / MAPS / <codename>
+    map_target = game_dir / "data" / "World" / "MAPS" / codename
     map_target.mkdir(parents=True, exist_ok=True)
 
-    # 1. Write all UbiArt config files
-    if status_callback: status_callback("Writing game configuration files...")
+    # 1. & 2. Write UbiArt config files and process audio WITH initial offsets
+    if status_callback: status_callback("Processing audio and game config...")
     if progress_callback: progress_callback(20)
-    write_game_files(map_data, map_target, config)
+    
+    # Calculate offset in seconds based on what was normalized
+    initial_a_offset = map_data.sync.audio_ms / 1000.0
+    
+    # Set the video override to the exact same as the parsed UI
+    # Note: reprocess_audio takes care of convert_audio, generate_intro_amb, and write_game_files
+    reprocess_audio(map_data, map_target, initial_a_offset, config)
 
-    # 2. Copy media files (video + audio)
+    # 2b. Copy Video (since reprocess_audio only does audio)
     media = map_data.media
     if media.video_path and media.video_path.exists():
         if status_callback: status_callback("Copying video file...")
@@ -348,13 +354,6 @@ def install_map_to_game(
         if media.map_preview_video and media.map_preview_video.exists():
             preview_dst = map_target / "VideosCoach" / f"{codename}_MapPreview.webm"
             copy_video(media.map_preview_video, preview_dst)
-
-    if media.audio_path and media.audio_path.exists():
-        if status_callback: status_callback("Copying/Transcoding audio file...")
-        if progress_callback: progress_callback(60)
-        from jd2021_installer.installers.media_processor import copy_audio
-        audio_dst = map_target / "Audio" / f"{codename}.wav"
-        copy_audio(media.audio_path, audio_dst)
 
     # 3. Copy cover/coach images
     textures_dir = map_target / "MenuArt" / "textures"

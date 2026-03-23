@@ -231,6 +231,13 @@ class MapMedia:
     map_preview_video: Optional[Path] = None
 
 
+@dataclass
+class MapSync:
+    """Sync offsets for the map UI."""
+    audio_ms: float = 0.0
+    video_ms: float = 0.0
+
+
 # ---------------------------------------------------------------------------
 # Top-level normalized model
 # ---------------------------------------------------------------------------
@@ -250,6 +257,7 @@ class NormalizedMapData:
     karaoke_tape: Optional[KaraokeTape] = None
     cinematic_tape: Optional[CinematicTape] = None
     media: MapMedia = field(default_factory=MapMedia)
+    sync: MapSync = field(default_factory=MapSync)
     source_dir: Optional[Path] = None
     video_start_time_override: Optional[float] = None
     has_autodance: bool = True

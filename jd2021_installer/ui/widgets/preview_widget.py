@@ -196,10 +196,8 @@ class _FrameReaderWorker(QObject):
                 pass
             if proc.poll() is None:
                 try:
-                    proc.terminate()
-                    proc.wait(timeout=3)
-                except subprocess.TimeoutExpired:
                     proc.kill()
+                    proc.wait(timeout=3)
                 except OSError:
                     pass
         self._ffmpeg = None

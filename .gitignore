@@ -12,3 +12,4 @@ mapDownloads/
 temp/
 .gemini/
 gha-creds-*.json
+dummy/
