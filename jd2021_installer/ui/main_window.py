@@ -209,6 +209,13 @@ class MainWindow(QMainWindow):
     # UI COMPOSITION  (Phase 3)
     # ==================================================================
 
+    def resizeEvent(self, event) -> None:
+        """Handle window resize by restarting/scaling the preview if active."""
+        super().resizeEvent(event)
+        if hasattr(self, "_preview_widget") and self._preview_widget.is_playing:
+            # Re-trigger preview with current offsets to pick up new dimensions
+            self._restart_preview_now()
+
     def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
@@ -547,6 +554,10 @@ class MainWindow(QMainWindow):
             video_ms=map_data.sync.video_ms
         )
 
+        # JDU/Fetch/HTML mode parity: Visually disable video offset but keep value applied
+        is_fetch = "Fetch" in self._current_mode or "HTML" in self._current_mode
+        self._sync_refinement.set_video_editable(not is_fetch)
+
         # Check metadata for non-ASCII characters
         self._check_metadata(map_data)
         
@@ -595,7 +606,8 @@ class MainWindow(QMainWindow):
 
     def _on_status_updated(self, msg: str) -> None:
         """Map backend status messages to checklist steps for visual feedback."""
-        self.append_log(msg)
+        # Main log console still gets everything
+        logger.info(msg)
         
         if msg in PIPELINE_STEPS:
             # Mark this step as in progress
@@ -786,6 +798,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Map", "Load a map before applying offsets.")
             return
 
+        # V1 Parity: Stop preview and DON'T restart it
+        self._preview_widget.stop()
+        self._sync_refinement.set_preview_state(False)
+
         if not self._config.game_directory:
             QMessageBox.warning(self, "No Game Dir", "Cannot apply without a game directory set.")
             return
@@ -827,9 +843,8 @@ class MainWindow(QMainWindow):
     def _on_reprocess_finished(self, success: bool) -> None:
         self._lock_ui(False)
         if success:
-            self.append_log("✅  Offsets applied and audio reprocessed.")
-            # Restart preview to show changes
-            self._on_preview_toggle(True)
+            logger.info("✅  Offsets applied and audio reprocessed.")
+            # V1 Parity: Don't auto-restart preview anymore after apply
             self._prompt_cleanup()
 
     def _prompt_cleanup(self) -> None:

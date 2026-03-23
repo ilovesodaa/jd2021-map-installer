@@ -289,9 +289,14 @@ def _discover_media(directory: str, codename: Optional[str] = None) -> MapMedia:
             media.map_preview_video = preview_videos[0]
 
     # Audio files
-    ogg_files = [f for f in dir_path.rglob("*.ogg") if "AudioPreview" not in f.name]
+    ogg_files = [f for f in dir_path.rglob("*.ogg") if "audiopreview" not in f.name.lower()]
     if ogg_files:
-        media.audio_path = ogg_files[0]
+        # Prioritize audio/ over autodance/ to avoid using the low-quality autodance audio
+        audio_folder_oggs = [f for f in ogg_files if "/audio/" in f.as_posix().lower()]
+        if audio_folder_oggs:
+            media.audio_path = audio_folder_oggs[0]
+        else:
+            media.audio_path = ogg_files[0]
     else:
         # Fallback: look for Xbox 360 .wav.ckd (XMA2) and auto-decode
         wav_ckd_files = [

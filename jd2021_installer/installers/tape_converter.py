@@ -93,9 +93,17 @@ def json_to_lua(data: Dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 def _load_ckd_json(ckd_path: Path) -> Dict[str, Any]:
-    """Load a CKD file as JSON. Handles the common UbiArt CKD JSON format."""
+    """Load a CKD file as JSON. Handles the common UbiArt CKD JSON format.
+    
+    Uses raw_decode to handle files with trailing garbage data (Extra data errors).
+    """
     content = ckd_path.read_text(encoding="utf-8-sig", errors="replace")
-    return json.loads(content)
+    try:
+        decoder = json.JSONDecoder()
+        obj, _ = decoder.raw_decode(content.strip())
+        return obj
+    except json.JSONDecodeError:
+        return json.loads(content)
 
 
 def convert_tape_file(ckd_path: Path, output_path: Path) -> bool:

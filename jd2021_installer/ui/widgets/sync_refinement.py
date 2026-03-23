@@ -212,6 +212,15 @@ class SyncRefinementWidget(QWidget):
         else:
             self._audio_spin.setToolTip("Shift audio timing (negative = earlier)")
 
+    def set_video_editable(self, editable: bool) -> None:
+        """Enable or disable the video offset checkbox/spinbox entirely."""
+        self._video_check.setEnabled(editable)
+        # If disabled, we still keep the value but the user can't change it
+        if not editable:
+            self._video_spin.setEnabled(False)
+        else:
+            self._video_spin.setEnabled(self._video_check.isChecked())
+
     def set_nav_visible(self, visible: bool, label_text: str = "") -> None:
         """Toggle multi-map navigation visibility."""
         self._nav_group.setVisible(visible)
