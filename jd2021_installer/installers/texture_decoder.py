@@ -1,0 +1,308 @@
+"""CKD texture decoder — binary CKD → DDS → TGA/PNG.
+
+Supports three platforms:
+- **PC**: CKD strip 44-byte header → DDS → Pillow → TGA/PNG
+- **NX (Switch)**: CKD strip header → XTX → deswizzle → DDS → TGA/PNG
+- **X360**: CKD strip header → byte-swap + untile → DDS → TGA/PNG
+
+Ported from V1's ``ckd_decode.py``.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import shutil
+import struct
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+logger = logging.getLogger("jd2021.installers.texture_decoder")
+
+CKD_HEADER_SIZE = 44
+CKD_MAGIC = b'\x00\x00\x00\x09'
+TEX_MAGIC = b'TEX'
+NVFD_MAGIC = b'\x44\x46\x76\x4E'  # "DFvN" (NvFD little-endian)
+
+# Xbox 360 GPU texture format codes
+_X360_FMT_DXT1 = 0x52
+_X360_FMT_DXT3 = 0x53
+_X360_FMT_DXT5 = 0x54
+_X360_GPU_DESC_SIZE = 52
+
+
+# ---------------------------------------------------------------------------
+# Xbox 360 untiling (ported from Xenia)
+# ---------------------------------------------------------------------------
+
+def _x360_tiled_combine(outer_inner_bytes, bank, pipe, y_lsb):
+    result = (y_lsb << 4) | (pipe << 6) | (bank << 11)
+    result |= (outer_inner_bytes & 0b1111)
+    result |= (((outer_inner_bytes >> 4) & 0b1) << 5)
+    result |= (((outer_inner_bytes >> 5) & 0b111) << 8)
+    result |= ((outer_inner_bytes >> 8) << 12)
+    return result
+
+
+def _x360_tiled_2d(x, y, pitch_aligned, bytes_per_block_log2):
+    outer_blocks = ((y >> 5) * (pitch_aligned >> 5) + (x >> 5)) << 6
+    inner_blocks = (((y >> 1) & 0b111) << 3) | (x & 0b111)
+    outer_inner_bytes = (outer_blocks | inner_blocks) << bytes_per_block_log2
+    bank = (y >> 4) & 0b1
+    pipe = ((x >> 3) & 0b11) ^ (((y >> 3) & 0b1) << 1)
+    return _x360_tiled_combine(outer_inner_bytes, bank, pipe, y & 1)
+
+
+def _x360_untile_dxt(data, pixel_width, pixel_height, block_bytes):
+    bw = max(1, (pixel_width + 3) // 4)
+    bh = max(1, (pixel_height + 3) // 4)
+    bpp_log2 = {8: 3, 16: 4}[block_bytes]
+    pitch_aligned = (bw + 31) & ~31
+    output = bytearray(bw * bh * block_bytes)
+    for by in range(bh):
+        for bx in range(bw):
+            src_offset = _x360_tiled_2d(bx, by, pitch_aligned, bpp_log2)
+            dst_offset = (by * bw + bx) * block_bytes
+            if 0 <= src_offset and src_offset + block_bytes <= len(data):
+                output[dst_offset:dst_offset + block_bytes] = (
+                    data[src_offset:src_offset + block_bytes])
+    return bytes(output)
+
+
+def _x360_byte_swap_16(data):
+    out = bytearray(len(data))
+    for i in range(0, len(data) - 1, 2):
+        out[i] = data[i + 1]
+        out[i + 1] = data[i]
+    return bytes(out)
+
+
+def _x360_build_dds(pixel_data, width, height, fourcc, block_bytes):
+    bw = max(1, (width + 3) // 4)
+    linear_size = bw * block_bytes
+
+    dds = b'DDS '
+    dds += struct.pack('<I', 124)
+    dds += struct.pack('<I', 0x1 | 0x2 | 0x4 | 0x1000 | 0x80000)
+    dds += struct.pack('<I', height)
+    dds += struct.pack('<I', width)
+    dds += struct.pack('<I', linear_size)
+    dds += struct.pack('<I', 0)
+    dds += struct.pack('<I', 1)
+    dds += b'\x00' * (4 * 11)
+
+    dds += struct.pack('<I', 32)
+    dds += struct.pack('<I', 0x4)
+    dds += fourcc
+    dds += b'\x00' * 20
+
+    dds += struct.pack('<I', 0x1000)
+    dds += b'\x00' * 16
+
+    dds += pixel_data
+    return dds
+
+
+# ---------------------------------------------------------------------------
+# Format detection and decoding
+# ---------------------------------------------------------------------------
+
+def strip_ckd_header(ckd_path: Path) -> Tuple[bytes, str]:
+    """Strip the 44-byte UbiArt CKD header and detect the payload format.
+
+    Returns:
+        (payload_bytes, format_str) where format_str is 'xtx', 'dds', or 'x360'.
+
+    Raises:
+        ValueError: If the file is not a valid texture CKD.
+    """
+    with open(ckd_path, 'rb') as f:
+        header = f.read(CKD_HEADER_SIZE)
+        payload = f.read()
+
+    if header[:4] != CKD_MAGIC:
+        raise ValueError(f"Not a CKD file: missing magic bytes (got {header[:4].hex()})")
+    if header[4:7] != TEX_MAGIC:
+        raise ValueError(f"Not a texture CKD: missing TEX marker (got {header[4:7]})")
+
+    if payload[:4] == NVFD_MAGIC:
+        return payload, 'xtx'
+    if payload[:4] == b'DDS ':
+        return payload, 'dds'
+
+    if len(payload) > _X360_GPU_DESC_SIZE:
+        fmt_code = struct.unpack_from('>I', payload, 32)[0]
+        if fmt_code in (_X360_FMT_DXT1, _X360_FMT_DXT3, _X360_FMT_DXT5):
+            return payload, 'x360'
+
+    raise ValueError(f"Unknown texture format: {payload[:4].hex()}")
+
+
+def x360_to_dds(payload: bytes) -> bytes:
+    """Decode Xbox 360 CKD payload: GPU descriptor + tiled DXT data → DDS."""
+    if len(payload) <= _X360_GPU_DESC_SIZE:
+        raise ValueError("X360 payload too small")
+
+    fmt_code = struct.unpack_from('>I', payload, 32)[0]
+    size_word = struct.unpack_from('>I', payload, 36)[0]
+    width = (size_word & 0x1FFF) + 1
+    height = ((size_word >> 13) & 0x1FFF) + 1
+
+    fmt_map = {
+        _X360_FMT_DXT1: (b'DXT1', 8),
+        _X360_FMT_DXT3: (b'DXT3', 16),
+        _X360_FMT_DXT5: (b'DXT5', 16),
+    }
+    if fmt_code not in fmt_map:
+        raise ValueError(f"Unsupported X360 format: 0x{fmt_code:02X}")
+
+    fourcc, block_bytes = fmt_map[fmt_code]
+    dxt_data = payload[_X360_GPU_DESC_SIZE:]
+    swapped = _x360_byte_swap_16(dxt_data)
+    untiled = _x360_untile_dxt(swapped, width, height, block_bytes)
+    return _x360_build_dds(untiled, width, height, fourcc, block_bytes)
+
+
+def dds_to_image(dds_data: bytes, output_path: Path) -> bool:
+    """Convert DDS data to TGA or PNG using Pillow."""
+    try:
+        from PIL import Image
+    except ImportError:
+        logger.warning("Pillow not installed; saving raw DDS instead")
+        dds_path = output_path.with_suffix('.dds')
+        dds_path.write_bytes(dds_data)
+        return True
+
+    temp_dds = output_path.with_suffix('.tmp.dds')
+    try:
+        temp_dds.write_bytes(dds_data)
+        img = Image.open(str(temp_dds))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(str(output_path))
+        logger.debug("Saved texture: %s (%dx%d)", output_path.name, img.size[0], img.size[1])
+        return True
+    except Exception as e:
+        # Fallback: save as DDS
+        dds_fallback = output_path.with_suffix('.dds')
+        shutil.copy2(str(temp_dds), str(dds_fallback))
+        logger.warning("Pillow can't decode this DDS format (%s); saved raw DDS", e)
+        return True
+    finally:
+        if temp_dds.exists():
+            temp_dds.unlink()
+
+
+def decode_ckd_texture(ckd_path: Path, output_path: Optional[Path] = None) -> bool:
+    """Full pipeline: CKD → detect format → DDS → TGA/PNG.
+
+    Args:
+        ckd_path:    Path to the binary texture CKD.
+        output_path: Path for output image. Defaults to same name with .tga.
+
+    Returns:
+        True if decoding succeeded.
+    """
+    if output_path is None:
+        output_path = ckd_path.with_suffix('.tga')
+
+    try:
+        raw_data, fmt = strip_ckd_header(ckd_path)
+    except ValueError as e:
+        logger.error("Cannot decode %s: %s", ckd_path.name, e)
+        return False
+
+    if fmt == 'dds':
+        return dds_to_image(raw_data, output_path)
+
+    if fmt == 'x360':
+        try:
+            dds_data = x360_to_dds(raw_data)
+        except Exception as e:
+            logger.error("X360 decode failed for %s: %s", ckd_path.name, e)
+            return False
+        return dds_to_image(dds_data, output_path)
+
+    # NX/Switch XTX format
+    try:
+        from xtx_extractor import xtx_extract
+        nv = xtx_extract.readNv(raw_data)
+        if nv.numImages == 0:
+            raise ValueError("No images in XTX data")
+        hdr, result = xtx_extract.get_deswizzled_data(0, nv)
+        if hdr == b'' or result == []:
+            raise ValueError("Failed to deswizzle XTX")
+        dds_data = hdr
+        for mip in result:
+            dds_data += mip
+    except ImportError:
+        logger.warning("xtx_extractor not available; saving raw XTX for %s", ckd_path.name)
+        xtx_path = output_path.with_suffix('.xtx')
+        xtx_path.write_bytes(raw_data)
+        return False
+    except Exception as e:
+        logger.error("XTX decode failed for %s: %s", ckd_path.name, e)
+        xtx_path = output_path.with_suffix('.xtx')
+        xtx_path.write_bytes(raw_data)
+        return False
+
+    return dds_to_image(dds_data, output_path)
+
+
+# ---------------------------------------------------------------------------
+# Batch decoders
+# ---------------------------------------------------------------------------
+
+def decode_pictograms(picto_dir: Path, output_dir: Path) -> int:
+    """Decode all pictogram CKD textures in a directory.
+
+    Args:
+        picto_dir:  Directory containing ``*picto*.ckd`` files.
+        output_dir: Directory to write decoded PNG/TGA files.
+
+    Returns:
+        Number of textures successfully decoded.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    success = 0
+
+    for ckd in picto_dir.rglob("*.ckd"):
+        if "picto" not in ckd.name.lower():
+            continue
+
+        # Determine output name: strip .ckd, ensure .png extension
+        out_name = ckd.stem  # e.g. "mapname_picto_001.tga"
+        if not out_name.lower().endswith(('.tga', '.png')):
+            out_name += '.png'
+        out_path = output_dir / out_name
+
+        if decode_ckd_texture(ckd, out_path):
+            success += 1
+
+    logger.info("Decoded %d pictogram textures from %s", success, picto_dir)
+    return success
+
+
+def decode_menuart_textures(menuart_dir: Path, output_dir: Path) -> int:
+    """Decode all MenuArt CKD textures in a directory.
+
+    Args:
+        menuart_dir: Directory containing MenuArt ``*.ckd`` files.
+        output_dir:  Directory to write decoded TGA files.
+
+    Returns:
+        Number of textures successfully decoded.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    success = 0
+
+    for ckd in menuart_dir.rglob("*.ckd"):
+        out_name = ckd.stem
+        if not out_name.lower().endswith(('.tga', '.png')):
+            out_name += '.tga'
+        out_path = output_dir / out_name
+
+        if decode_ckd_texture(ckd, out_path):
+            success += 1
+
+    logger.info("Decoded %d MenuArt textures from %s", success, menuart_dir)
+    return success

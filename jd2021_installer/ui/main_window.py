@@ -562,7 +562,54 @@ class MainWindow(QMainWindow):
                 quality=self._config.video_quality,
             )
 
-        # HTML, Batch, Manual are not fully implemented yet
+        if idx == MODE_HTML:
+            from jd2021_installer.extractors.web_playwright import WebPlaywrightExtractor
+            
+            asset_html = self._mode_selector.inputs["html"]["asset"].text()
+            nohud_html = self._mode_selector.inputs["html"]["nohud"].text()
+            
+            if not asset_html and not nohud_html:
+                QMessageBox.warning(self, "Missing Files", "Please select at least one HTML file.")
+                return None
+
+            return WebPlaywrightExtractor(
+                asset_html=asset_html,
+                nohud_html=nohud_html,
+                config=self._config,
+                quality=self._config.video_quality,
+            )
+
+        if idx == MODE_MANUAL:
+            from jd2021_installer.extractors.manual_extractor import ManualExtractor
+            inputs = self._mode_selector.inputs["manual"]
+            codename = inputs["codename"].text().strip()
+            root_dir = inputs["root"].text().strip()
+            
+            if not codename and not root_dir:
+                QMessageBox.warning(self, "Missing Data", "Codename or Root Directory is required for Manual mode.")
+                return None
+                
+            return ManualExtractor(
+                codename=codename,
+                root_dir=root_dir,
+                files={
+                    "audio": inputs["audio"].text().strip(),
+                    "video": inputs["video"].text().strip(),
+                    "mtrack": inputs["mtrack"].text().strip(),
+                    "sdesc": inputs["sdesc"].text().strip(),
+                    "dtape": inputs["dtape"].text().strip(),
+                    "ktape": inputs["ktape"].text().strip(),
+                    "mseq": inputs["mseq"].text().strip(),
+                },
+                dirs={
+                    "moves": inputs["moves"].text().strip(),
+                    "pictos": inputs["pictos"].text().strip(),
+                    "menuart": inputs["menuart"].text().strip(),
+                    "amb": inputs["amb"].text().strip(),
+                }
+            )
+
+        # Batch is not fully implemented yet
         QMessageBox.information(
             self,
             "Not Implemented",
