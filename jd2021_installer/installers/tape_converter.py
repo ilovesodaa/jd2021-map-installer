@@ -139,13 +139,16 @@ def convert_tape_file(ckd_path: Path, output_path: Path) -> bool:
         data = _load_ckd_json(ckd_path)
         lua_str = json_to_lua(data)
 
-        # Post-process Lua to fix pictogram paths:
         # 1. Ensure 'pictos' is lowercase
         # 2. Ensure '.png' is used instead of '.ckd' or '.tga' for pictos
         import re
         lua_str = re.sub(r'([Pp]ictos)/([^"]+)\.(ckd|tga)', r'pictos/\2.png', lua_str)
-        # Also fix any mixed case MapNames/etc if needed, but start with pictos
+        # 3. Align all system paths with V1 lowercase conventions
+        lua_str = lua_str.replace('"World/MAPS/', '"world/maps/')
+        lua_str = lua_str.replace('"MenuArt/', '"menuart/')
+        lua_str = lua_str.replace('"Autodance/', '"autodance/')
         lua_str = lua_str.replace('"Timeline/pictos/', '"timeline/pictos/')
+        lua_str = lua_str.replace('"Timeline/', '"timeline/')
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(lua_str, encoding="utf-8")

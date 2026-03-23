@@ -46,7 +46,7 @@ def _build_entry(codename: str) -> str:
         f'xFLIPPED="0" USERFRIENDLY="{codename}" '
         f'POS2D="0.000000 0.000000" ANGLE="0.000000" INSTANCEDATAFILE="" '
         f'LUA="enginedata/actortemplates/subscene.tpl" '
-        f'RELATIVEPATH="World/MAPS/{codename}/{codename}_MAIN_SCENE.isc" '
+        f'RELATIVEPATH="world/maps/{codename}/{codename}_MAIN_SCENE.isc" '
         f'EMBED_SCENE="0" IS_SINGLE_PIECE="0" ZFORCED="1" DIRECT_PICKING="1">\n'
         f'\t\t\t\t<ENUM NAME="viewType" SEL="2" />\n'
         f'\t\t\t</SubSceneActor>\n'
@@ -61,7 +61,7 @@ def is_registered(game_dir: str | Path, codename: str) -> bool:
         return False
     content = isc.read_text(encoding="utf-8", errors="replace")
     pattern = re.compile(
-        rf'RELATIVEPATH\s*=\s*"World/MAPS/{re.escape(codename)}/{re.escape(codename)}_MAIN_SCENE\.isc"',
+        rf'RELATIVEPATH\s*=\s*"world/maps/{re.escape(codename)}/{re.escape(codename)}_MAIN_SCENE\.isc"',
         re.IGNORECASE,
     )
     return bool(pattern.search(content))
@@ -121,7 +121,7 @@ def unregister_map(game_dir: str | Path, codename: str) -> None:
     # Match the full <ACTORS>...</ACTORS> block containing this map
     pattern = re.compile(
         r'[ \t]*<ACTORS\s+NAME="SubSceneActor">\s*'
-        r'<SubSceneActor[^>]*RELATIVEPATH="World/MAPS/'
+        r'<SubSceneActor[^>]*RELATIVEPATH="world/maps/'
         + re.escape(codename) + r'/'
         + re.escape(codename) + r'_MAIN_SCENE\.isc"[^>]*>'
         r'.*?</SubSceneActor>\s*</ACTORS>\s*\n?',

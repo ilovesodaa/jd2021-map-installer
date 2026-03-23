@@ -254,7 +254,16 @@ def _extract_dance_tape(
     data = load_ckd(ckd_paths[0])
     if isinstance(data, DanceTape):
         return data
-    # For JSON dtapes we'd construct from dict; minimal stub
+    if isinstance(data, dict):
+        # Best-effort clip count for JSON dtapes (Fetch/HTML mode maps)
+        clips = []
+        for comp in data.get("COMPONENTS", []):
+            if "JD_TapeComponent_Template" in comp:
+                tape_data = comp["JD_TapeComponent_Template"].get("tape", {})
+                for clip in tape_data.get("clips", []):
+                    # Minimal stub to allow counting in logs/UI
+                    clips.append(MotionClip(id=0, track_id=0, is_active=1, start_time=0, duration=0, classifier_path=""))
+        return DanceTape(clips=clips, map_name=codename or "Unknown")
     return None
 
 
@@ -268,6 +277,15 @@ def _extract_karaoke_tape(
     data = load_ckd(ckd_paths[0])
     if isinstance(data, KaraokeTape):
         return data
+    if isinstance(data, dict):
+        # Best-effort clip count for JSON ktapes
+        clips = []
+        for comp in data.get("COMPONENTS", []):
+            if "JD_TapeComponent_Template" in comp:
+                tape_data = comp["JD_TapeComponent_Template"].get("tape", {})
+                for clip in tape_data.get("clips", []):
+                    clips.append(KaraokeClip(id=0, track_id=0, is_active=1, start_time=0, duration=0, lyrics="", pitch=0))
+        return KaraokeTape(clips=clips, map_name=codename or "Unknown")
     return None
 
 
@@ -492,6 +510,30 @@ def normalize(
 
     sync_data = MapSync(audio_ms=audio_ms, video_ms=video_ms)
 
+    # V1 Parity: Detect whether the source contains real autodance data.
+    # Many sources ship minimal stub CKDs that should be ignored.
+    has_autodance = False
+    ad_tpls = _find_ckd_files(directory, "*autodance*.tpl.ckd", codename)
+    if ad_tpls:
+        try:
+            ad_data = load_ckd(ad_tpls[0])
+            # Look for markers of real data (recording structure, video structure, or events)
+            ad_str = str(ad_data).lower()
+            if any(k in ad_str for k in ("recording_structure", "video_structure", "playback_events")):
+                has_autodance = True
+        except Exception:
+            pass
+    
+    if not has_autodance:
+        # Check for separate autodance data files as fallback
+        for ext in ("adtape", "advideo", "adrecording"):
+            if _find_ckd_files(directory, f"*.{ext}.ckd", codename):
+                has_autodance = True
+                break
+
+    if has_autodance:
+        logger.info("Real autodance data detected for '%s'", effective_codename)
+
     result = NormalizedMapData(
         codename=effective_codename,
         song_desc=song_desc,
@@ -501,6 +543,7 @@ def normalize(
         media=media,
         sync=sync_data,
         source_dir=Path(directory),
+        has_autodance=has_autodance,
     )
 
     # Validation
