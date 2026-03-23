@@ -52,8 +52,11 @@ _CDN_PATTERN = re.compile(r'href="(https?://jd-s3\.cdn\.ubi\.com[^"]+)"', re.IGN
 # ---------------------------------------------------------------------------
 
 def extract_urls_from_html(html_content: str) -> List[str]:
-    """Extract all href URLs from HTML content, deduplicating."""
-    urls = re.findall(r'href="(https?://[^"]+)"', html_content)
+    """Extract all URLs from HTML content, deduplicating.
+    Finds links even outside of href attributes, useful for Discord embeds
+    where the actual CDN link is plaintext inside an anchor tag.
+    """
+    urls = re.findall(r'(https?://[^\s<"\']+)', html_content)
     clean: Set[str] = set()
     for url in urls:
         if "discordapp.net" in url:

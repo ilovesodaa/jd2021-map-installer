@@ -240,6 +240,7 @@ class BatchInstallWorker(QObject):
     status = pyqtSignal(str)            # status text
     error = pyqtSignal(str)             # error message
     finished = pyqtSignal(bool)         # success flag
+    finished_with_data = pyqtSignal(list) # list[NormalizedMapData]
 
     def __init__(
         self,
@@ -277,6 +278,7 @@ class BatchInstallWorker(QObject):
 
             self.status.emit(f"Found {total} map(s) to process.")
             success_count = 0
+            installed_maps: list[NormalizedMapData] = []
             
             # Temporary cache for extracted IPKs
             batch_cache = self._config.cache_directory / "_batch_temp"
@@ -319,6 +321,7 @@ class BatchInstallWorker(QObject):
                         self.status.emit(f"[{i+1}/{total}] Installing {map_data.codename}...")
                         self._install_map_synchronously(map_data)
                         success_count += 1
+                        installed_maps.append(map_data)
                         logger.info("Batch installed map: %s", map_data.codename)
                     
                 except Exception as e:
@@ -330,6 +333,7 @@ class BatchInstallWorker(QObject):
 
             self.progress.emit(100)
             self.status.emit(f"Batch install complete. {success_count}/{total} maps installed.")
+            self.finished_with_data.emit(installed_maps)
             self.finished.emit(True)
 
         except Exception as e:
