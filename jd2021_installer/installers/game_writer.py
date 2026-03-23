@@ -90,18 +90,13 @@ def _write_musictrack_trk(target: Path, name: str, mt: MusicTrackStructure, vst:
     pls = mt.preview_loop_start if 0 <= mt.preview_loop_start <= num_markers else 0.0
     ple = mt.preview_loop_end if 0 <= mt.preview_loop_end <= num_markers else 0.0
 
-    # V1/V2 parity: videoStartTime in .trk MUST be in ticks (ms * 48).
-    # vst is passed in seconds; convert to ticks.
-    TICKS_PER_MS = 48
-    vst_ticks = vst * 1000.0 * TICKS_PER_MS
-
     content = (
         f"structure = {{ MusicTrackStructure = {{ markers = {{ {markers} }}, "
         f"signatures = {{ {sigs} }}, sections = {{ {sects} }}, "
         f"startBeat = {mt.start_beat}, endBeat = {mt.end_beat}, "
         f"fadeStartBeat = 0, useFadeStartBeat = 0, "
         f"fadeEndBeat = 0, useFadeEndBeat = 0, "
-        f"videoStartTime = {vst_ticks:.6f}, "
+        f"videoStartTime = {vst:.6f}, "
         f"previewEntry = {pe:.1f}, "
         f"previewLoopStart = {pls:.1f}, "
         f"previewLoopEnd = {ple:.1f}, "
