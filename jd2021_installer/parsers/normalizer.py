@@ -216,11 +216,11 @@ def _extract_song_desc(
         )
 
     data = load_ckd(ckd_paths[0])
-    if not isinstance(data, dict):
-        return SongDescription()
-
     if isinstance(data, SongDescription):
         return data
+
+    if not isinstance(data, dict):
+        return SongDescription(map_name=codename or "unknown")
 
     # JSON dict
     try:
