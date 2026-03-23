@@ -68,7 +68,7 @@ PIPELINE_STEPS = [
     "Extract map data",
     "Parse CKDs & Metadata",
     "Normalize assets",
-    "Decode MenuArt textures",  # Placeholder during extraction finish
+    "Decode XMA2 Audio",
     "Convert Audio (Pad/Trim)",
     "Generate Intro AMB",
     "Copy Video files",
@@ -76,9 +76,10 @@ PIPELINE_STEPS = [
     "Convert Karaoke Tapes",
     "Convert Cinematic Tapes",
     "Process Ambient Sounds",
+    "Decode MenuArt textures",
     "Decode Pictograms",
-    "Register in SkuScene",
     "Integrate Move data",
+    "Register in SkuScene",
     "Finalizing Offsets",
 ]
 
@@ -543,7 +544,7 @@ class MainWindow(QMainWindow):
         self._feedback_panel.update_checklist_step("Parse CKDs & Metadata", StepStatus.DONE)
         self._feedback_panel.update_checklist_step("Normalize assets", StepStatus.DONE)
         self._feedback_panel.update_checklist_step(
-            "Decode MenuArt textures", StepStatus.IN_PROGRESS
+            "Decode XMA2 Audio", StepStatus.IN_PROGRESS
         )
 
         # Update UI offsets from calculated normalization data
@@ -625,14 +626,12 @@ class MainWindow(QMainWindow):
             # Mark this step as in progress
             self._feedback_panel.update_checklist_step(clean_msg, StepStatus.IN_PROGRESS)
             
-            # Heuristic: Mark the previous logical step as DONE
+            # Heuristic: Mark ALL preceding steps as DONE. 
+            # This ensures that if steps are skipped or jump ahead, the UI catches up correctly.
             try:
                 idx = PIPELINE_STEPS.index(clean_msg)
-                if idx > 0:
-                    # Special case: if we just started "Convert Audio", then "Decode MenuArt" (the previous one) is likely done
-                    # but normalization steps are already marked DONE by _on_extract_finished.
-                    prev_step = PIPELINE_STEPS[idx - 1]
-                    self._feedback_panel.update_checklist_step(prev_step, StepStatus.DONE)
+                for i in range(idx):
+                    self._feedback_panel.update_checklist_step(PIPELINE_STEPS[i], StepStatus.DONE)
             except ValueError:
                 pass
 
