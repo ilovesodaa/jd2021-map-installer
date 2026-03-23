@@ -23,6 +23,9 @@ SKU_SCENE_REL = Path("World/SkuScenes/SkuScene_Maps_PC_All.isc")
 def _sku_scene_path(game_dir: str | Path) -> Path:
     """Resolve the SkuScene ISC path, trying common locations."""
     game = Path(game_dir)
+    while game.name.lower() in ("world", "data"):
+        game = game.parent
+        
     # Direct path
     candidate = game / SKU_SCENE_REL
     if candidate.is_file():
