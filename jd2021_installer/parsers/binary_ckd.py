@@ -615,3 +615,16 @@ def parse_binary_ckd(data: bytes, filename: str) -> ParseResult:
     raise BinaryCKDParseError(
         f"Unsupported template class 0x{template_crc:08X} in '{filename}'"
     )
+
+
+def calculate_marker_preroll(markers: List[int], start_beat: int) -> Optional[float]:
+    """Calculate pre-roll duration in ms from beat markers and start_beat.
+    
+    start_beat (negative) indicates how many beats before beat-0 the audio begins.
+    Returns duration in milliseconds.
+    """
+    idx = abs(start_beat)
+    if not markers or idx >= len(markers) or idx == 0:
+        return None
+    # 48 ticks per ms
+    return markers[idx] / 48.0

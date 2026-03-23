@@ -98,6 +98,14 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._wire_signals()
 
+        # Phase 4.4 Quickstart
+        if self._config.show_quickstart_on_launch:
+            from jd2021_installer.ui.widgets.quickstart_dialog import QuickstartDialog
+            dont_show_again = QuickstartDialog.show_guide(self)
+            if dont_show_again:
+                self._config.show_quickstart_on_launch = False
+                self._save_settings()
+
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
         self._status_bar.showMessage("Ready")
@@ -105,6 +113,20 @@ class MainWindow(QMainWindow):
         # Show Quickstart Guide if needed
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(500, self._show_quickstart_if_needed)
+
+    def closeEvent(self, event) -> None:
+        """Ensure all background processes (especially ffplay) are stopped."""
+        logger.info("Closing application. Cleaning up...")
+        self._preview_widget.stop()
+        
+        # Give threads a moment to finish, but don't hang if they are stuck
+        for thread in list(self._active_threads):
+            if thread.isRunning():
+                thread.quit()
+                thread.wait(1000)
+        
+        self._save_settings()
+        event.accept()
 
     # ==================================================================
     # SETTINGS PERSISTENCE
@@ -229,6 +251,11 @@ class MainWindow(QMainWindow):
         self._sync_refinement.offset_changed.connect(self._on_offset_spin_changed)
         self._sync_refinement.pad_audio_requested.connect(self._on_pad_audio)
         self._sync_refinement.nav_requested.connect(self._on_nav_requested)
+        
+        # -- Preview widget signals -----------------------------------------
+        self._preview_widget.preview_stopped.connect(
+            lambda: self._sync_refinement.set_preview_state(False)
+        )
 
     # ==================================================================
     # SLOT IMPLEMENTATIONS
@@ -289,6 +316,14 @@ class MainWindow(QMainWindow):
                 f"Delete all files in {cache}?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
+            # Safety check: don't delete if cache is inside game directory (prevents accidental wipeout)
+            if self._config.game_directory and (
+                self._config.game_directory in cache.parents or 
+                self._config.game_directory == cache
+            ):
+                QMessageBox.critical(self, "Safety Error", "Cache directory cannot be inside or equal to the game directory.")
+                return
+
             if reply == QMessageBox.StandardButton.Yes:
                 shutil.rmtree(cache, ignore_errors=True)
                 cache.mkdir(parents=True, exist_ok=True)
@@ -318,8 +353,8 @@ class MainWindow(QMainWindow):
                 self._current_map = map_data
                 self._current_target = folder
                 self._sync_refinement.setVisible(True)
-                vo = map_data.music_track.video_start_time
-                self._sync_refinement.set_offsets(video_ms=vo)
+                vo_ms = map_data.music_track.video_start_time * 1000.0
+                self._sync_refinement.set_offsets(video_ms=vo_ms)
                 self.append_log(f"Loaded {map_data.codename} for offset readjustment.")
                 self._set_status(f"Readjusting offset for {map_data.codename}")
             except Exception as e:
@@ -401,10 +436,15 @@ class MainWindow(QMainWindow):
                     return # User cancelled
                 
                 # Defer to batch installer to handle everything cleanly
+                self._sync_refinement.set_ipk_mode(is_ipk=True)
                 self._start_batch_install(selected_maps=set(selected_maps))
                 return
 
         # Resolve the correct extractor based on mode
+        from jd2021_installer.ui.widgets.mode_selector import MODE_IPK
+        is_ipk = self._mode_selector.current_mode_index == MODE_IPK
+        self._sync_refinement.set_ipk_mode(is_ipk=is_ipk)
+
         extractor = self._resolve_extractor()
         if extractor is None:
             return
@@ -583,7 +623,7 @@ class MainWindow(QMainWindow):
                     self._sync_refinement._btn_preview.setChecked(False)
                     return
 
-                v_override = self._current_map.effective_video_start_time / 1000.0
+                v_override = self._current_map.effective_video_start_time
                 a_offset = self._sync_refinement._audio_spin.value() / 1000.0
 
                 self._preview_widget.launch(
@@ -600,7 +640,7 @@ class MainWindow(QMainWindow):
     def _on_offset_spin_changed(self, offset_ms: float) -> None:
         """Auto-restart preview when offsets change."""
         if self._preview_widget.is_playing and self._current_map and self._current_map.media.video_path:
-            v_override = self._current_map.effective_video_start_time / 1000.0
+            v_override = self._current_map.effective_video_start_time
             a_offset = self._sync_refinement._audio_spin.value() / 1000.0
             
             # Restart at current playback position
@@ -630,7 +670,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.append_log(f"Pad audio failed to compute duration: {e}")
 
-    def _on_apply_offset(self, offset_ms: float) -> None:
+    def _on_apply_offset(self, audio_ms: float, video_ms: float) -> None:
         """Apply the combined offset to the current map data."""
         if self._current_map is None:
             QMessageBox.warning(self, "No Map", "Load a map before applying offsets.")
@@ -640,18 +680,17 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Game Dir", "Cannot apply without a game directory set.")
             return
 
-        # V2 native behavior: We modify the video_start_time_override directly.
-        # This replaces V1's ffmpeg hard-padding logic, relying strictly on UbiArt configuration.
-        # Note: offset_ms is in milliseconds; video_start_time is in seconds.
-        # Phase 4.8: Ensure ticks_per_ms parity? 
-        # Actually V2 tracks seconds. 1 ms = 0.001s.
-        original = self._current_map.music_track.video_start_time
-        self._current_map.video_start_time_override = original + (offset_ms / 1000.0)
+        # 1. Update videoStartTime override (in seconds)
+        original_v = self._current_map.music_track.video_start_time
+        self._current_map.video_start_time_override = original_v + (video_ms / 1000.0)
 
+        # 2. Launch worker to rewrite configs and reprocess audio
+        from jd2021_installer.ui.workers.pipeline_workers import ApplyAndFinishWorker
         worker = ApplyAndFinishWorker(
-            map_data=self._current_map,
-            target_dir=Path(self._config.game_directory),
-            cache_dir=self._config.cache_directory,
+            self._current_map,
+            self._config.game_directory / "World" / "MAPS" / self._current_map.codename,
+            self._config.cache_directory / self._current_map.codename,
+            a_offset=audio_ms / 1000.0,
             config=self._config,
         )
         thread = QThread()
@@ -660,7 +699,7 @@ class MainWindow(QMainWindow):
         thread.started.connect(worker.run)
         worker.status.connect(self.append_log)
         worker.error.connect(lambda msg: self.append_log(f"ERROR: {msg}"))
-        worker.finished.connect(self._on_offset_applied)
+        worker.finished.connect(self._on_reprocess_finished)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
@@ -670,13 +709,12 @@ class MainWindow(QMainWindow):
         self._active_worker = worker
         thread.start()
 
-    def _on_offset_applied(self, success: bool) -> None:
-        if success and self._current_map:
-            self._set_status(
-                f"Offset applied & Map updated — effective start: "
-                f"{self._current_map.effective_video_start_time:.2f} ms"
-            )
-            # Phase 4.5: Prompt for cleanup
+    def _on_reprocess_finished(self, success: bool) -> None:
+        self._lock_ui(False)
+        if success:
+            self.append_log("✅  Offsets applied and audio reprocessed.")
+            # Restart preview to show changes
+            self._on_preview_toggle(True)
             self._prompt_cleanup()
 
     def _prompt_cleanup(self) -> None:
@@ -687,36 +725,55 @@ class MainWindow(QMainWindow):
         # In batch mode, we probably don't want to prompt for EVERY map.
         # Maybe just once at the end? Or follow V1's "Cleanup Behavior" setting.
         # For now, let's just ask if it's a single map or at the end of nav.
+    def _prompt_cleanup(self) -> None:
+        """Ask user or auto-delete source files based on cleanup_behavior."""
+        if not self._current_map:
+            return
+            
+        # 1. Check if we should skip (batch mid-review)
         if len(self._nav_maps) > 1 and self._nav_index < len(self._nav_maps) - 1:
             return # Don't prompt yet
             
-        reply = QMessageBox.question(
-            self,
-            "Cleanup Source Files?",
-            "The installation and sync are complete.\n\n"
-            "Would you like to delete the temporary downloaded/extracted source files to save space?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
+        behavior = self._config.cleanup_behavior
+        should_delete = False
         
-        if reply == QMessageBox.StandardButton.Yes:
-            self.append_log("Cleaning up source files...")
-            try:
-                # 1. Clean up _extraction cache
-                cache_dir = self._config.cache_directory / "_extraction"
-                if cache_dir.exists():
-                    import shutil
-                    shutil.rmtree(cache_dir, ignore_errors=True)
-                
-                # 2. Clean up _batch_temp if it exists
-                batch_temp = self._config.cache_directory / "_batch_temp"
-                if batch_temp.exists():
-                    import shutil
-                    shutil.rmtree(batch_temp, ignore_errors=True)
-                
-                self.append_log("✅  Source files cleaned up.")
-            except Exception as e:
-                self.append_log(f"Warning: Cleanup failed ({e})")
+        if behavior == "delete":
+            should_delete = True
+        elif behavior == "keep":
+            should_delete = False
+        else: # behavior == "ask"
+            reply = QMessageBox.question(
+                self,
+                "Cleanup Source Files?",
+                "The installation and sync are complete.\n\n"
+                "Would you like to delete the temporary downloaded/extracted source files to save space?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            should_delete = (reply == QMessageBox.StandardButton.Yes)
+        
+        if should_delete:
+            self._do_cleanup()
+
+    def _do_cleanup(self) -> None:
+        """Perform actual deletion of temporary files."""
+        self.append_log("Cleaning up source files...")
+        try:
+            # 1. Clean up _extraction cache
+            cache_dir = self._config.cache_directory / "_extraction"
+            if cache_dir.exists():
+                import shutil
+                shutil.rmtree(cache_dir, ignore_errors=True)
+            
+            # 2. Clean up _batch_temp if it exists
+            batch_temp = self._config.cache_directory / "_batch_temp"
+            if batch_temp.exists():
+                import shutil
+                shutil.rmtree(batch_temp, ignore_errors=True)
+            
+            self.append_log("✅  Source files cleaned up.")
+        except Exception as e:
+            self.append_log(f"Warning: Cleanup failed ({e})")
 
     # ==================================================================
     # HELPERS

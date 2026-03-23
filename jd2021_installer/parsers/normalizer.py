@@ -386,6 +386,7 @@ def normalize(
         dance_tape=dance_tape,
         karaoke_tape=karaoke_tape,
         media=media,
+        source_dir=Path(directory),
     )
 
     # Validation

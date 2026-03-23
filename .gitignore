@@ -4,3 +4,8 @@ cache/
 installer_settings.json
 logs/
 .browser-profile/
+maps/
+docs/report_march_23/
+.cursor
+.pytest_cache
+mapDownloads/

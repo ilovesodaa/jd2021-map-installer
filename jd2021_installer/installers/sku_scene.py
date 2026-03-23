@@ -17,7 +17,7 @@ from jd2021_installer.core.exceptions import GameWriterError
 logger = logging.getLogger("jd2021.installers.sku_scene")
 
 # SkuScene ISC location relative to the game root
-SKU_SCENE_REL = Path("World/MAPS/SkuScene_Maps_PC_All.isc")
+SKU_SCENE_REL = Path("World/SkuScenes/SkuScene_Maps_PC_All.isc")
 
 
 def _sku_scene_path(game_dir: str | Path) -> Path:
@@ -28,7 +28,7 @@ def _sku_scene_path(game_dir: str | Path) -> Path:
     if candidate.is_file():
         return candidate
     # Some installs have a nested cache/ or data/ folder
-    for sub in ("", "bundle", "cache/bundle"):
+    for sub in ("", "bundle", "cache/bundle", "data"):
         alt = game / sub / SKU_SCENE_REL
         if alt.is_file():
             return alt
