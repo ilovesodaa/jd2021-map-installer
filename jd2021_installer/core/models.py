@@ -61,12 +61,12 @@ class MusicTrackStructure:
     Parsed from a musictrack CKD. Contains beat markers used for
     synchronizing dance moves, karaoke, and video playback.
     """
-    markers: List[int]
-    signatures: List[MusicSignature]
-    sections: List[MusicSection]
-    start_beat: int
-    end_beat: int
-    video_start_time: float
+    markers: List[int] = field(default_factory=list)
+    signatures: List[MusicSignature] = field(default_factory=list)
+    sections: List[MusicSection] = field(default_factory=list)
+    start_beat: int = 0
+    end_beat: int = 0
+    video_start_time: float = 0.0
     preview_entry: float = 0.0
     preview_loop_start: float = 0.0
     preview_loop_end: float = 0.0
@@ -309,9 +309,9 @@ class CinematicTape:
 @dataclass
 class SongDescription:
     """Metadata extracted from a songdesc CKD."""
-    map_name: str
-    title: str
-    artist: str
+    map_name: str = "unknown"
+    title: str = "Unknown Title"
+    artist: str = "Unknown Artist"
     dancer_name: str = "Unknown Dancer"
     credits: str = ""
     num_coach: int = 1
