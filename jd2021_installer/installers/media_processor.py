@@ -224,7 +224,7 @@ def convert_audio(
     a_offset: float = 0.0,
     config: Optional[AppConfig] = None,
 ) -> None:
-    """Ported from V1: FFmpeg-based audio padding/trimming.
+    """Process map audio, handling .ckd extraction, padding, and previews.
     
     Generates both .wav (for PC) and .ogg (for menu preview).
     """
@@ -234,34 +234,122 @@ def convert_audio(
     ogg_out = target_dir / "Audio" / f"{map_name}.ogg"
     wav_out.parent.mkdir(parents=True, exist_ok=True)
 
-    if not ogg_out.exists():
-        if audio_path.suffix.lower() == ".ogg":
-            logger.info("Copying menu preview OGG...")
-            shutil.copy2(audio_path, ogg_out)
-        else:
-            logger.info("Converting to menu preview OGG...")
-            run_ffmpeg(["-y", "-i", str(audio_path), str(ogg_out)], config=config)
+    # 1. Handle .ckd extraction if needed
+    effective_audio = audio_path
+    temp_dir = target_dir / "_temp_audio"
+    if audio_path.suffix.lower() == ".ckd":
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        extracted = extract_ckd_audio_v1(audio_path, temp_dir)
+        if extracted:
+            effective_audio = Path(extracted)
+            logger.info("Using extracted audio payload for conversion: %s", effective_audio.name)
 
-    if a_offset == 0.0:
-        logger.info("Converting to 48kHz WAV (no offset)...")
-        run_ffmpeg(["-y", "-i", str(audio_path), "-ar", "48000", str(wav_out)], config=config)
-    elif a_offset < 0:
-        trim_s = abs(a_offset)
-        logger.info("Converting to 48kHz WAV (trimming first %.3fs)...", trim_s)
-        run_ffmpeg([
-            "-y", "-i", str(audio_path), 
-            "-ss", f"{trim_s:.6f}",
-            "-ar", "48000", str(wav_out)
-        ], config=config)
-    else:
-        delay_ms = int(a_offset * 1000)
-        logger.info("Converting to 48kHz WAV (padding %dms silence)...", delay_ms)
-        af_filter = f"adelay={delay_ms}|{delay_ms},asetpts=PTS-STARTPTS"
-        run_ffmpeg([
-            "-y", "-i", str(audio_path), 
-            "-af", af_filter,
-            "-ar", "48000", str(wav_out)
-        ], config=config)
+    try:
+        # 2. Generate menu preview OGG
+        if not ogg_out.exists():
+            if effective_audio.suffix.lower() == ".ogg":
+                logger.debug("Copying menu preview OGG...")
+                shutil.copy2(effective_audio, ogg_out)
+            else:
+                logger.debug("Converting to menu preview OGG...")
+                run_ffmpeg(["-y", "-i", str(effective_audio), str(ogg_out)], config=config)
+
+        # 3. Generate engine WAV with offset/alignment
+        if a_offset == 0.0:
+            logger.info("Converting to 48kHz WAV (no offset)...")
+            run_ffmpeg(["-y", "-i", str(effective_audio), "-ar", "48000", str(wav_out)], config=config)
+        elif a_offset < 0:
+            trim_s = abs(a_offset)
+            logger.info("Converting to 48kHz WAV (trimming first %.3fs)...", trim_s)
+            run_ffmpeg([
+                "-y", "-i", str(effective_audio), 
+                "-ss", f"{trim_s:.6f}",
+                "-ar", "48000", str(wav_out)
+            ], config=config)
+        else:
+            delay_ms = int(a_offset * 1000)
+            logger.info("Converting to 48kHz WAV (padding %dms silence)...", delay_ms)
+            af_filter = f"adelay={delay_ms}|{delay_ms},asetpts=PTS-STARTPTS"
+            run_ffmpeg([
+                "-y", "-i", str(effective_audio), 
+                "-af", af_filter,
+                "-ar", "48000", str(wav_out)
+            ], config=config)
+    finally:
+        # Cleanup temp directory
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+
+
+def process_menu_art(
+    target_dir: str | Path,
+    codename: str,
+) -> int:
+    """Validate and synthesize MenuArt TGAs (V1 parity).
+    
+    Ensures cover_generic and cover_online exist, and re-saves all 
+    as uncompressed 32-bit RGBA TGAs to prevent black-box glitches.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return 0
+
+    tex_dir = Path(target_dir) / "menuart" / "textures"
+    if not tex_dir.is_dir():
+        return 0
+
+    codename_low = codename.lower()
+    expected_tgas = [
+        f"{codename}_cover_generic.tga",
+        f"{codename}_cover_online.tga",
+        f"{codename}_cover_albumbkg.tga",
+        f"{codename}_cover_albumcoach.tga",
+    ]
+
+    # 1. Case fix and discovery
+    found_tgas = {}
+    for f in tex_dir.iterdir():
+        if f.suffix.lower() == ".tga":
+            found_tgas[f.name.lower()] = f
+
+    # 2. Synthesis for online/generic parity
+    online_key = f"{codename_low}_cover_online.tga"
+    generic_key = f"{codename_low}_cover_generic.tga"
+
+    if online_key not in found_tgas and generic_key in found_tgas:
+        src = found_tgas[generic_key]
+        dst = tex_dir / f"{codename}_cover_online.tga"
+        shutil.copy2(src, dst)
+        found_tgas[online_key] = dst
+        logger.info("Synthesized cover_online from cover_generic")
+
+    if generic_key not in found_tgas and online_key in found_tgas:
+        src = found_tgas[online_key]
+        dst = tex_dir / f"{codename}_cover_generic.tga"
+        shutil.copy2(src, dst)
+        found_tgas[generic_key] = dst
+        logger.info("Synthesized cover_generic from cover_online")
+
+    # 3. Re-save as uncompressed RGBA 32-bit
+    resaved = 0
+    for key, path in found_tgas.items():
+        if key not in [e.lower() for e in expected_tgas]:
+            continue
+        try:
+            img = Image.open(path)
+            if img.mode != 'RGBA':
+                img = img.convert('RGBA')
+            # Save without RLE compression manually defined
+            img.save(path, format='TGA')
+            resaved += 1
+        except Exception as e:
+            logger.warning("Failed to resave TGA %s: %s", path.name, e)
+
+    if resaved:
+        logger.info("Validated and resaved %d MenuArt TGA(s) as uncompressed RGBA", resaved)
+    
+    return resaved
 
 
 def generate_intro_amb(
@@ -469,7 +557,17 @@ def generate_cover_tga(
     size: tuple[int, int] = (720, 720),
 ) -> Path:
     """Convert a cover image to TGA format for the game engine."""
-    return convert_image(src_path, dst_path, target_size=size)
+    res = convert_image(src_path, dst_path, target_size=size)
+    # Trigger a re-save as uncompressed RGBA
+    try:
+        from PIL import Image
+        img = Image.open(res)
+        if img.mode != 'RGBA':
+            img = img.convert('RGBA')
+        img.save(res, format='TGA')
+    except:
+        pass
+    return res
 
 
 # ---------------------------------------------------------------------------

@@ -119,16 +119,27 @@ def extract_ipk(target_file: str | Path, output_dir: str | Path) -> Path:
 
             base_offset = _unpack(ipk_header["base_offset"]["value"])
             created_dirs = set()
+            codenames_found = set()
 
             for k, chunk in enumerate(file_chunks):
+                path_ori = chunk["path_name"]["value"].decode().lower().replace('\\', '/')
+                if "world/maps/" in path_ori:
+                    after_maps = path_ori.split("world/maps/")[1]
+                    parts = after_maps.split("/")
+                    if parts and parts[0]:
+                        codenames_found.add(parts[0])
+
                 if k % 100 == 0:
-                    logger.info("IPK: Extracting file %d/%d...", k + 1, num_files)
+                    status = f"file {k + 1}/{num_files}"
+                    if codenames_found:
+                        status += f" (maps: {', '.join(sorted(codenames_found))})"
+                    logger.info("IPK: Extracting %s...", status)
 
                 offset = _unpack(chunk["offset"]["value"])
                 data_size = _unpack(chunk["size"]["value"])
 
-                path_ori = chunk["path_name"]["value"].decode()
-                if os.path.basename(path_ori) == path_ori:
+                path_ori_raw = chunk["path_name"]["value"].decode()
+                if os.path.basename(path_ori_raw) == path_ori_raw:
                     file_path = output_path / chunk["file_name"]["value"].decode()
                     file_name = chunk["path_name"]["value"].decode()
                 else:

@@ -217,6 +217,22 @@ class SongDescription:
     default_colors: DefaultColors = field(default_factory=DefaultColors)
     phone_images: Dict[str, str] = field(default_factory=dict)
 
+    def sanitize(self) -> None:
+        """Sanitize Title and Artist fields by removing/replacing non-ASCII characters.
+        
+        Uses NFKD normalization to strip accents and preserves only ASCII.
+        """
+        import unicodedata
+        for field_name in ("title", "artist"):
+            val = getattr(self, field_name)
+            if not val:
+                continue
+            # Normalize to NFKD and strip accents
+            nfkd_form = unicodedata.normalize('NFKD', val)
+            ascii_val = nfkd_form.encode('ASCII', 'ignore').decode('ASCII').strip()
+            if ascii_val:
+                setattr(self, field_name, ascii_val)
+
 
 @dataclass
 class MapMedia:

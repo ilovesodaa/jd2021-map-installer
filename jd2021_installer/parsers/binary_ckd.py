@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import struct
 import zlib
-from typing import List, Union
+from typing import List, Optional, Union
 
 from jd2021_installer.core.exceptions import BinaryCKDParseError
 from jd2021_installer.core.models import (
@@ -617,16 +617,19 @@ def parse_binary_ckd(data: bytes, filename: str) -> ParseResult:
     )
 
 
-def calculate_marker_preroll(markers: List[int], start_beat: int) -> Optional[float]:
+def calculate_marker_preroll(markers: List[int], start_beat: int, include_calibration: bool = True) -> Optional[float]:
     """Calculate pre-roll duration in ms from beat markers and start_beat.
     
     start_beat (negative) indicates how many beats before beat-0 the audio begins.
     Returns duration in milliseconds.
     
-    Note: Adds 85ms calibration to match V1 parity (OGG decode latency).
+    Note: Adds 85ms calibration only for OGG/Fetch maps (include_calibration=True).
     """
     idx = abs(start_beat)
     if not markers or idx >= len(markers) or idx == 0:
         return None
-    # 48 ticks per ms + 85ms calibration
-    return (markers[idx] / 48.0) + 85.0
+    # 48 ticks per ms
+    preroll_ms = (markers[idx] / 48.0)
+    if include_calibration:
+        preroll_ms += 85.0
+    return preroll_ms

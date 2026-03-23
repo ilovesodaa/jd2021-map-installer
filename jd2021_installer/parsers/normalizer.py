@@ -494,16 +494,23 @@ def normalize(
         
         # V1 Parity: If videoStartTime is 0.0, it might be a missing value.
         # Use markers to calculate a reasonable video offset if available.
+        # IPK synthesis MUST be negative and NO calibration (vst = -preroll).
         if video_ms == 0.0:
-            preroll = calculate_marker_preroll(music_track.markers, music_track.start_beat)
+            preroll = calculate_marker_preroll(music_track.markers, music_track.start_beat, include_calibration=False)
             if preroll is not None:
-                video_ms = preroll
+                video_ms = -preroll
                 logger.info("IPK map (missing videoStartTime): marker-based video_offset=%.3f ms", video_ms)
     else:
-        preroll = calculate_marker_preroll(music_track.markers, music_track.start_beat)
-        if preroll is not None:
-            audio_ms = -preroll
+        # Fetch/HTML map
+        preroll_audio = calculate_marker_preroll(music_track.markers, music_track.start_beat, include_calibration=True)
+        preroll_video = calculate_marker_preroll(music_track.markers, music_track.start_beat, include_calibration=False)
+        
+        if preroll_audio is not None:
+            audio_ms = -preroll_audio
             logger.info("Fetch/HTML map detected: marker-based audio_offset=%.3f ms", audio_ms)
+            if video_ms == 0.0:
+                video_ms = -preroll_video
+                logger.info("Fetch/HTML map (missing videoStartTime): marker-based video_offset=%.3f ms", video_ms)
         else:
             audio_ms = video_ms
             logger.info("Fetch/HTML map detected (no markers): audio_offset=%.3f ms", audio_ms)
@@ -542,6 +549,7 @@ def normalize(
         karaoke_tape=karaoke_tape,
         media=media,
         sync=sync_data,
+        video_start_time_override=sync_data.video_ms / 1000.0,
         source_dir=Path(directory),
         has_autodance=has_autodance,
     )
