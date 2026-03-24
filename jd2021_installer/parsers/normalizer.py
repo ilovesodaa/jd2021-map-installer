@@ -572,9 +572,14 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
 
     # 3. & 4. Images (Cover/Coach/Banner/Background)
     # Collect all potential image/CKD files once to avoid discovery order issues
-    all_media_files = []
+    all_media_files: List[Path] = []
     for ext in ("*.jpg", "*.png", "*.tga", "*.ckd"):
         all_media_files.extend(list(dir_path.rglob(ext)))
+        if search_root and bg_search_dir != dir_path:
+            all_media_files.extend(list(bg_search_dir.rglob(ext)))
+    if all_media_files:
+        # Preserve scan order while removing duplicates from merged roots.
+        all_media_files = list(dict.fromkeys(all_media_files))
 
     def _get_best_asset(keyword: str, files: List[Path]) -> Optional[Path]:
         candidates = [f for f in files if keyword in f.name.lower()]
@@ -605,6 +610,7 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
             if not media.cover_generic_path: media.cover_generic_path = general_cover
             if not media.cover_online_path: media.cover_online_path = general_cover
 
+    media.banner_path = _get_best_asset("banner", all_media_files)
     media.banner_bkg_path = _get_best_asset("banner", all_media_files)
     media.map_bkg_path = _get_best_asset("map_bkg", all_media_files)
     media.cover_albumbkg_path = _get_best_asset("albumbkg", all_media_files)
@@ -632,6 +638,12 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
     # V1 Parity: strictly scope to codename if possible
     media.pictogram_dir = None
     picto_candidates = [d for d in dir_path.rglob("*") if d.is_dir() and "picto" in d.name.lower()]
+    if search_root and bg_search_dir != dir_path:
+        picto_candidates.extend(
+            [d for d in bg_search_dir.rglob("*") if d.is_dir() and "picto" in d.name.lower()]
+        )
+    if picto_candidates:
+        picto_candidates = list(dict.fromkeys(picto_candidates))
     if codename_low:
         picto_candidates = [d for d in picto_candidates if _path_has_codename_component(d)]
     
@@ -640,6 +652,10 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
     else:
         # Fallback: finding parent of any picto CKD
         picto_files = list(dir_path.rglob("*picto*.ckd"))
+        if search_root and bg_search_dir != dir_path:
+            picto_files.extend(list(bg_search_dir.rglob("*picto*.ckd")))
+        if picto_files:
+            picto_files = list(dict.fromkeys(picto_files))
         if codename_low:
             picto_files = [f for f in picto_files if _path_has_codename_component(f)]
         if picto_files:
@@ -648,6 +664,12 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
     # 6. Moves directory
     media.moves_dir = None
     move_candidates = [d for d in dir_path.rglob("*") if d.is_dir() and "moves" in d.name.lower()]
+    if search_root and bg_search_dir != dir_path:
+        move_candidates.extend(
+            [d for d in bg_search_dir.rglob("*") if d.is_dir() and "moves" in d.name.lower()]
+        )
+    if move_candidates:
+        move_candidates = list(dict.fromkeys(move_candidates))
     if codename_low:
         move_candidates = [d for d in move_candidates if _path_has_codename_component(d)]
     if move_candidates:

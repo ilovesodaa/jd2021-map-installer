@@ -71,5 +71,33 @@ class TestBundleParity(unittest.TestCase):
         self.assertEqual(len(res_b), 1)
         self.assertIn("MapB", res_b[0])
 
+    def test_search_root_discovers_bundle_menuart_pictos_moves(self):
+        # map subtree used for normalization
+        map_subtree = self.test_dir / "world" / "maps" / "MapA"
+        map_subtree.mkdir(parents=True)
+
+        # assets in cache layout outside world/maps/<codename>
+        cache_root = self.test_dir / "cache" / "itf_cooked" / "x360" / "world" / "maps" / "MapA"
+        menuart = cache_root / "menuart" / "textures"
+        pictos = cache_root / "timeline" / "pictos"
+        moves = cache_root / "timeline" / "moves"
+        menuart.mkdir(parents=True)
+        pictos.mkdir(parents=True)
+        moves.mkdir(parents=True)
+
+        cover = menuart / "MapA_cover_generic.tga.ckd"
+        coach = menuart / "MapA_coach_1.tga.ckd"
+        cover.touch()
+        coach.touch()
+        (pictos / "MapA_picto_001.png.ckd").touch()
+        (moves / "MapA_move_001.gesture").touch()
+
+        media = _discover_media(map_subtree, codename="MapA", search_root=self.test_dir)
+
+        self.assertEqual(media.cover_generic_path, cover)
+        self.assertIn(coach, media.coach_images)
+        self.assertEqual(media.pictogram_dir, pictos)
+        self.assertEqual(media.moves_dir, moves)
+
 if __name__ == "__main__":
     unittest.main()

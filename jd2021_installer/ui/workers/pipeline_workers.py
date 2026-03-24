@@ -223,6 +223,47 @@ class ApplyAndFinishWorker(QObject):
             self.finished.emit(False)
 
 
+class ApplyOffsetsBatchWorker(QObject):
+    """Apply offset finalization across multiple maps in one background task."""
+
+    progress = pyqtSignal(int)
+    status = pyqtSignal(str)
+    error = pyqtSignal(str)
+    finished = pyqtSignal(bool)
+
+    def __init__(
+        self,
+        entries: list[tuple[NormalizedMapData, Path, float]],
+        config: Optional[AppConfig] = None,
+        parent: Optional[QObject] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._entries = entries
+        self._config = config
+
+    def run(self) -> None:
+        try:
+            total = len(self._entries)
+            if total == 0:
+                self.finished.emit(True)
+                return
+
+            for idx, (map_data, target_dir, a_offset) in enumerate(self._entries, start=1):
+                codename = map_data.codename
+                self.status.emit(f"[{codename}] Finalizing Offsets")
+                progress = int(((idx - 1) / total) * 100)
+                self.progress.emit(progress)
+                reprocess_audio(map_data, target_dir, a_offset, self._config)
+
+            self.progress.emit(100)
+            self.status.emit("Sync offsets applied successfully.")
+            self.finished.emit(True)
+        except Exception as e:
+            logger.error("ApplyOffsetsBatch failed: %s\n%s", e, traceback.format_exc())
+            self.error.emit(str(e))
+            self.finished.emit(False)
+
+
 class BatchInstallWorker(QObject):
     """Iterate through a directory and install all discovered maps (folders/IPKs)."""
 
@@ -331,8 +372,10 @@ class BatchInstallWorker(QObject):
                             
                         self.status.emit(f"[{sub_map.name}] Parse CKDs & Metadata")
                         from jd2021_installer.parsers.normalizer import normalize
-                        # V1 parity: in bundle processing, scope normalization to the current map codename.
-                        map_data = normalize(sub_map, codename=sub_map.name, search_root=map_dir)
+                        # V1 parity: normalize from full extracted root, scoped by codename.
+                        # This keeps map-local lookups scoped while still allowing shared bundle assets
+                        # (menuart/moves/pictos/tapes) to be discovered outside world/maps/<codename>.
+                        map_data = normalize(map_dir, codename=sub_map.name, search_root=map_dir)
                         
                         self.status.emit(f"[{map_data.codename}] Normalize assets")
                         
