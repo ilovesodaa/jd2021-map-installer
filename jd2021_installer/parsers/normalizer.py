@@ -119,14 +119,24 @@ def _find_ckd_files(
     filtered = _filter_by_codename(paths, codename, directory)
     result = _prefer_non_legacy(filtered)
 
-    # V1 Parity: STRICT SCOPING. If codename was provided, do NOT fall back to unfiltered.
-    # This prevents picking up assets from other maps in a multi-map (bundle) IPK.
-    if not result and paths and not codename:
-        logger.debug(
-            "CKD search returned 0 results; falling back to unfiltered (%d candidates)",
-            len(paths),
-        )
-        result = _prefer_non_legacy(paths)
+    # V1 Parity: STRICT SCOPING for bundles.
+    # If a codename was specified but scoped search returned 0 while candidates exist, 
+    # we only fall back if there's a single candidate (meaning codename inference was just slightly off).
+    # If multiple candidates exist but none match, it's safer to return 0 than to pick a random map.
+    if not result and paths:
+        if not codename or len(paths) == 1:
+            logger.debug(
+                "CKD search for '%s' returned 0 results; falling back to unfiltered (candidate count: %d)",
+                codename or "None",
+                len(paths),
+            )
+            result = _prefer_non_legacy(paths)
+        else:
+            logger.warning(
+                "CKD search for '%s' returned 0 results in bundle (%d other candidates found). Skipping to avoid mis-assignment.",
+                codename,
+                len(paths),
+            )
 
     return result
 
@@ -337,22 +347,32 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
             # Filter by codename first if in bundle
             if codename_low:
                 matches = [v for v in main_videos if v.name.lower().startswith(codename_low)]
+                if not matches:
+                    # V1 Parity: Path-based scoping for bundle IPKs (e.g. world/maps/MapName/videos/MapName.webm)
+                    matches = [v for v in main_videos if f"/{codename_low}/" in str(v).lower().replace("\\", "/")]
+                
                 if matches:
                     main_videos = matches
+                elif len(main_videos) > 1:
+                    # If we have multiple videos but none match the codename, we are likely in a bundle
+                    # and picking a random video is dangerous.
+                    logger.warning("No video match for codename %s in multi-map bundle; skipping video discovery", codename)
+                    main_videos = []
             
-            # Priority: 1. Requested quality suffix, 2. any quality suffix, 3. first available
-            best_video = main_videos[0]
-            found_quality = False
-            for q in SUPPORTED_QUALITIES:
-                suffix = f"_{q}.webm"
-                for v in main_videos:
-                    if v.name.upper().endswith(suffix):
-                        best_video = v
-                        found_quality = True
-                        break
-                if found_quality: break
-            
-            media.video_path = best_video
+            if main_videos:
+                # Priority: 1. Requested quality suffix, 2. any quality suffix, 3. first available
+                best_video = main_videos[0]
+                found_quality = False
+                for q in SUPPORTED_QUALITIES:
+                    suffix = f"_{q}.webm"
+                    for v in main_videos:
+                        if v.name.upper().endswith(suffix):
+                            best_video = v
+                            found_quality = True
+                            break
+                    if found_quality: break
+                
+                media.video_path = best_video
 
     # 2. Audio files (.ogg, .wav, .wav.ckd)
     # V1 Priority: .ogg > .wav > .wav.ckd
@@ -527,7 +547,7 @@ def normalize_sync(
             # V1 Parity: use markers for audio trim calibration (OGG codec delay)
             prms = calculate_marker_preroll(music_track.markers, music_track.start_beat, include_calibration=False)
             if prms is not None:
-                audio_ms = -(prms + 85.0)
+                audio_ms = -prms
             else:
                 # Fallback to metadata if no markers
                 audio_ms = music_track.video_start_time * 1000.0
@@ -537,10 +557,10 @@ def normalize_sync(
             metadata_ms = music_track.video_start_time * 1000.0
             if abs(metadata_ms) > 0.1:
                 video_ms = metadata_ms
-                logger.info("Fetch/HTML sync (metadata preserved): audio_offset=%.3f ms (marker+85), video_offset=%.3f ms (metadata)", audio_ms, video_ms)
+                logger.info("Fetch/HTML sync (metadata preserved): audio_offset=%.3f ms (marker), video_offset=%.3f ms (metadata)", audio_ms, video_ms)
             elif prms is not None:
                 video_ms = -prms
-                logger.info("Fetch/HTML sync (synthesized): audio_offset=%.3f ms (marker+85), video_offset=%.3f ms (marker)", audio_ms, video_ms)
+                logger.info("Fetch/HTML sync (synthesized): audio_offset=%.3f ms (marker), video_offset=%.3f ms (marker)", audio_ms, video_ms)
             else:
                 video_ms = metadata_ms
                 logger.info("Fetch/HTML sync (fallback): using metadata for both = %.3f ms", video_ms)
