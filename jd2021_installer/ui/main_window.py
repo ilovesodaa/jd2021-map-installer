@@ -60,6 +60,7 @@ from jd2021_installer.ui.workers.pipeline_workers import (
     ExtractAndNormalizeWorker,
     InstallMapWorker,
     ApplyAndFinishWorker,
+    ApplyOffsetsBatchWorker,
 )
 
 logger = logging.getLogger("jd2021.ui.main_window")
@@ -104,6 +105,7 @@ class MainWindow(QMainWindow):
         # Phase 4: Multi-map navigation
         self._nav_maps: list[NormalizedMapData] = []
         self._nav_index: int = 0
+        self._pending_offsets: dict[str, tuple[float, float]] = {}
 
         # -- Window setup -----------------------------------------------------
         self.setWindowTitle("JD2021 Map Installer v2")
@@ -448,6 +450,9 @@ class MainWindow(QMainWindow):
     def _on_reset_state(self) -> None:
         self._current_map = None
         self._current_target = None
+        self._nav_maps = []
+        self._nav_index = 0
+        self._pending_offsets.clear()
         self._sync_refinement.reset()
         self._feedback_panel.reset()
         self._set_status("State reset.")
@@ -722,6 +727,10 @@ class MainWindow(QMainWindow):
             if not self._nav_maps and self._current_map:
                 self._nav_maps = [self._current_map]
                 self._nav_index = 0
+                self._pending_offsets[self._current_map.codename] = (
+                    self._current_map.sync.audio_ms,
+                    self._current_map.sync.video_ms,
+                )
                 self._sync_refinement.set_nav_visible(False)
 
                 # Ensure the sync panel reflects the current map's calculated offsets
@@ -750,6 +759,9 @@ class MainWindow(QMainWindow):
         self._nav_maps = installed_maps
         self._nav_index = 0
         self._current_map = self._nav_maps[0]
+        self._pending_offsets = {
+            m.codename: (m.sync.audio_ms, m.sync.video_ms) for m in self._nav_maps
+        }
         
         # Show nav controls if multiple maps
         if len(self._nav_maps) > 1:
@@ -761,9 +773,13 @@ class MainWindow(QMainWindow):
         # Preview the first map
         logger.info("Batch finished: setting UI offsets for first map: audio=%.1f, video=%.1f", 
                     self._current_map.sync.audio_ms, self._current_map.sync.video_ms)
+        first_audio_ms, first_video_ms = self._pending_offsets.get(
+            self._current_map.codename,
+            (self._current_map.sync.audio_ms, self._current_map.sync.video_ms),
+        )
         self._sync_refinement.set_offsets(
-            self._current_map.sync.audio_ms,
-            self._current_map.sync.video_ms
+            first_audio_ms,
+            first_video_ms,
         )
         self._on_preview_toggle(True)
 
@@ -771,6 +787,13 @@ class MainWindow(QMainWindow):
         """Switch between maps in a batch/bundle review."""
         if not self._nav_maps:
             return
+
+        # Preserve current map edits before switching.
+        if self._current_map is not None:
+            self._pending_offsets[self._current_map.codename] = (
+                self._sync_refinement._audio_spin.value(),
+                self._sync_refinement._video_spin.value(),
+            )
             
         new_index = self._nav_index + direction
         if 0 <= new_index < len(self._nav_maps):
@@ -787,9 +810,13 @@ class MainWindow(QMainWindow):
             # Update UI offsets
             logger.info("Nav requested: setting UI offsets: audio=%.1f, video=%.1f", 
                         self._current_map.sync.audio_ms, self._current_map.sync.video_ms)
+            audio_ms, video_ms = self._pending_offsets.get(
+                self._current_map.codename,
+                (self._current_map.sync.audio_ms, self._current_map.sync.video_ms),
+            )
             self._sync_refinement.set_offsets(
-                self._current_map.sync.audio_ms,
-                self._current_map.sync.video_ms
+                audio_ms,
+                video_ms,
             )
             
             # Start preview for the new map
@@ -832,6 +859,12 @@ class MainWindow(QMainWindow):
 
     def _on_offset_spin_changed(self, offset_ms: float) -> None:
         """Debounced preview restart when offsets change."""
+        if self._current_map is not None:
+            self._pending_offsets[self._current_map.codename] = (
+                self._sync_refinement._audio_spin.value(),
+                self._sync_refinement._video_spin.value(),
+            )
+
         if not self._preview_widget.is_playing:
             return
             
@@ -893,6 +926,48 @@ class MainWindow(QMainWindow):
         # 1. Update videoStartTime override (in seconds)
         # V1 Parity: use the absolute offset from the spinbox directly
         self._current_map.video_start_time_override = (video_ms / 1000.0)
+        self._pending_offsets[self._current_map.codename] = (audio_ms, video_ms)
+
+        # Bundle parity: apply reviewed offsets to every map in the bundle, not only the active one.
+        if len(self._nav_maps) > 1:
+            entries: list[tuple[NormalizedMapData, Path, float]] = []
+            base_game_dir = self._config.game_directory
+            while base_game_dir.name.lower() in ("world", "data"):
+                base_game_dir = base_game_dir.parent
+
+            for map_data in self._nav_maps:
+                map_audio_ms, map_video_ms = self._pending_offsets.get(
+                    map_data.codename,
+                    (map_data.sync.audio_ms, map_data.sync.video_ms),
+                )
+                map_data.video_start_time_override = map_video_ms / 1000.0
+                entries.append(
+                    (
+                        map_data,
+                        base_game_dir / "data" / "World" / "MAPS" / map_data.codename,
+                        map_audio_ms / 1000.0,
+                    )
+                )
+
+            worker = ApplyOffsetsBatchWorker(entries=entries, config=self._config)
+            thread = QThread()
+            worker.moveToThread(thread)
+
+            thread.started.connect(worker.run)
+            worker.progress.connect(self._feedback_panel.set_progress)
+            worker.status.connect(self._on_status_updated)
+            worker.error.connect(self._on_install_error)
+            worker.finished.connect(self._on_reprocess_finished)
+            worker.finished.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(lambda t=thread: self._cleanup_thread(t, "apply_finish_batch"))
+
+            self._active_threads.add(thread)
+            self._active_worker = worker
+            self._lock_ui(True)
+            thread.start()
+            return
 
         # 2. Launch worker to rewrite configs and reprocess audio
         from jd2021_installer.ui.workers.pipeline_workers import ApplyAndFinishWorker
