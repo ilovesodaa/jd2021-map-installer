@@ -314,6 +314,8 @@ def process_menu_art(
         f"{codename}_cover_online.tga",
         f"{codename}_cover_albumbkg.tga",
         f"{codename}_cover_albumcoach.tga",
+        f"{codename}_banner_bkg.tga",
+        f"{codename}_map_bkg.tga",
     ]
 
     # 1. Case fix and discovery
@@ -324,16 +326,22 @@ def process_menu_art(
             
             # V1 Parity Case Correction: if this file matches an expected name case-insensitively,
             # rename it to the exact expected case.
+            matched_expected = False
             for expected in expected_tgas:
-                if f_name_lower == expected.lower() and f.name != expected:
-                    target = f.parent / expected
-                    logger.info("Case fix: %s -> %s", f.name, expected)
-                    if target.exists():
-                        target.unlink()
-                    f.rename(target)
-                    found_tgas[expected.lower()] = target
+                if f_name_lower == expected.lower():
+                    matched_expected = True
+                    if f.name != expected:
+                        target = f.parent / expected
+                        logger.info("Case fix: %s -> %s", f.name, expected)
+                        if target.exists():
+                            target.unlink()
+                        f.rename(target)
+                        found_tgas[expected.lower()] = target
+                    else:
+                        found_tgas[expected.lower()] = f
                     break
-            else:
+            
+            if not matched_expected:
                 found_tgas[f_name_lower] = f
 
     # 2. Synthesis for online/generic parity
@@ -358,16 +366,17 @@ def process_menu_art(
         found_tgas[generic_key] = dst
         logger.info("Synthesized cover_generic from cover_online")
 
-    # 3. Re-save as uncompressed RGBA 32-bit
+    # 3. Re-save as uncompressed RGBA 32-bit (V1 parity to avoid engine black-boxes)
     resaved = 0
     for key, path in found_tgas.items():
-        if key not in [e.lower() for e in expected_tgas]:
+        # Only re-save those that are part of the expected set
+        if not any(key == e.lower() for e in expected_tgas):
             continue
+            
         try:
             img = Image.open(path)
             if img.mode != 'RGBA':
                 img = img.convert('RGBA')
-            # Save without RLE compression manually defined
             img.save(path, format='TGA')
             resaved += 1
         except Exception as e:
@@ -377,6 +386,7 @@ def process_menu_art(
         logger.info("Validated and resaved %d MenuArt TGA(s) as uncompressed RGBA", resaved)
     
     return resaved
+
 
 
 def generate_intro_amb(
@@ -689,10 +699,19 @@ def extract_ckd_audio_v1(ckd_path: str | Path, output_dir: str | Path) -> Option
     vgm_raw_out = output_dir / f"{base}_raw_vgm.wav"
     try:
         decoded = decode_xma2_audio(ckd_path, vgm_raw_out)
-        if decoded and is_valid_wav(decoded):
-            logger.info("Decoded raw CKD directly via vgmstream: %s", decoded.name)
-            return str(decoded)
-    except Exception:
+        if decoded and decoded.exists():
+            if is_valid_wav(decoded):
+                logger.info("Decoded raw CKD directly via vgmstream: %s", decoded.name)
+                return str(decoded)
+            else:
+                # Transcode to 48kHz Stereo if it's a valid audio file but wrong format
+                logger.info("Decoded WAV has wrong format; transcoding to 48kHz Stereo...")
+                fixed_wav = output_dir / f"{base}_fixed.wav"
+                run_ffmpeg(["-y", "-i", str(decoded), "-ar", "48000", "-ac", "2", str(fixed_wav)])
+                if fixed_wav.exists():
+                    return str(fixed_wav)
+    except Exception as e:
+        logger.debug("vgmstream raw attempt failed: %s", e)
         if vgm_raw_out.exists():
             vgm_raw_out.unlink()
 
@@ -722,8 +741,15 @@ def extract_ckd_audio_v1(ckd_path: str | Path, output_dir: str | Path) -> Option
             
             try:
                 decoded = decode_xma2_audio(temp_payload, out_path)
-                if decoded and is_valid_wav(decoded):
-                    return str(decoded)
+                if decoded and decoded.exists():
+                    if is_valid_wav(decoded):
+                        return str(decoded)
+                    else:
+                        logger.info("Fallback decoded WAV has wrong format; transcoding...")
+                        fixed_wav = output_dir / f"{base}_fallback_fixed.wav"
+                        run_ffmpeg(["-y", "-i", str(decoded), "-ar", "48000", "-ac", "2", str(fixed_wav)])
+                        if fixed_wav.exists():
+                            return str(fixed_wav)
             except Exception as e:
                 logger.warning("vgmstream fallback failed for payload %s: %s", ckd_path.name, e)
             finally:

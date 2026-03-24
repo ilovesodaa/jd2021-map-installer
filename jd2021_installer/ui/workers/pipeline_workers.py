@@ -148,7 +148,7 @@ def reprocess_audio(
         
         # Generates audio/amb/<intro>.wav/tpl/ilu and injects into audio ISC
         ogg_path = target_dir / "audio" / f"{codename}.ogg"
-        v_override = map_data.video_start_time_override
+        v_override = map_data.effective_video_start_time
         
         # Use beat marker data if available for precise pre-roll
         preroll = None
@@ -313,7 +313,7 @@ class BatchInstallWorker(QObject):
                             
                         self.status.emit(f"[{sub_map.name}] Parse CKDs & Metadata")
                         from jd2021_installer.parsers.normalizer import normalize
-                        map_data = normalize(sub_map)
+                        map_data = normalize(sub_map, search_root=map_dir)
                         
                         self.status.emit(f"[{map_data.codename}] Normalize assets")
                         
@@ -325,6 +325,12 @@ class BatchInstallWorker(QObject):
                             if not persisted_video.exists():
                                 shutil.copy2(map_data.media.video_path, persisted_video)
                             map_data.media.video_path = persisted_video
+                        
+                        if map_data.media.map_preview_video and map_data.media.map_preview_video.exists():
+                            persisted_preview = map_cache / map_data.media.map_preview_video.name
+                            if not persisted_preview.exists():
+                                shutil.copy2(map_data.media.map_preview_video, persisted_preview)
+                            map_data.media.map_preview_video = persisted_preview
                         if map_data.media.audio_path and map_data.media.audio_path.exists():
                             persisted_audio = map_cache / map_data.media.audio_path.name
                             if not persisted_audio.exists():
@@ -460,15 +466,48 @@ def install_map_to_game(
             preview_dst = map_target / "videoscoach" / f"{codename}_MapPreview.webm"
             copy_video(media.map_preview_video, preview_dst)
 
-    # 3. Copy cover/coach images
+    # 3. Copy/Rename MenuArt assets (Cover, Banner, Coach, etc.)
     textures_dir = map_target / "menuart" / "textures"
     textures_dir.mkdir(parents=True, exist_ok=True)
     import shutil
-    if media.cover_path and media.cover_path.exists():
-        shutil.copy2(media.cover_path, textures_dir / media.cover_path.name)
-    for coach_img in media.coach_images:
+    
+    # Map of MapMedia fields to V1 canonical art suffixes
+    art_map = {
+        "cover_path": "cover_generic",
+        "banner_path": "banner_bkg",  # Map generic banner to banner_bkg if specific one missing
+        "banner_bkg_path": "banner_bkg",
+        "map_bkg_path": "map_bkg",
+        "cover_albumbkg_path": "cover_albumbkg",
+        "cover_albumcoach_path": "cover_albumcoach",
+    }
+    
+    for field_name, art_suffix in art_map.items():
+        src_path = getattr(media, field_name, None)
+        if src_path and src_path.exists():
+            # Canonical name: {codename}_{suffix}{ext}
+            # We preserve .ckd suffix if present so texture_decoder can pick it up
+            suffix = src_path.suffix.lower()
+            if src_path.name.lower().endswith(".tga.ckd"):
+                ext = ".tga.ckd"
+            elif src_path.name.lower().endswith(".png.ckd"):
+                ext = ".png.ckd"
+            else:
+                ext = suffix
+                
+            dst_name = f"{codename}_{art_suffix}{ext}"
+            shutil.copy2(src_path, textures_dir / dst_name)
+    
+    # Coaches are a list
+    for i, coach_img in enumerate(media.coach_images, 1):
         if coach_img.exists():
-            shutil.copy2(coach_img, textures_dir / coach_img.name)
+            suffix = coach_img.suffix.lower()
+            if coach_img.name.lower().endswith(".tga.ckd"):
+                ext = ".tga.ckd"
+            else:
+                ext = suffix
+            dst_name = f"{codename}_coach_{i}{ext}"
+            shutil.copy2(coach_img, textures_dir / dst_name)
+
 
     # 4. Physical Converters (Tape, Texture, Ambient)
     if map_data.source_dir and map_data.source_dir.exists():
@@ -489,9 +528,16 @@ def install_map_to_game(
         if status_callback: status_callback("Decode MenuArt textures")
         if progress_callback: progress_callback(80)
         from jd2021_installer.installers.texture_decoder import decode_menuart_textures, decode_pictograms
+        
+        # V1 Parity: Decode textures directly in the target directory 
+        # to handle loose assets copied from Fetch/HTML mode.
+        decode_menuart_textures(textures_dir, textures_dir)
+        
+        # Also decode from source if the standard structure exists
         menuart_src = map_data.source_dir / "MenuArt" / "textures"
         if menuart_src.exists():
             decode_menuart_textures(menuart_src, textures_dir)
+
             
         # V1 Parity: Validate and heal MenuArt (case-fix + RGBA re-save)
         from jd2021_installer.installers.media_processor import process_menu_art

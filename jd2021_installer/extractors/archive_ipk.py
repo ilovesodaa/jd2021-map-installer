@@ -215,8 +215,9 @@ def inspect_ipk(target_file: str | Path) -> list[str]:
                     if parts and parts[0]:
                         root_dirs.add(parts[0])
 
-            # Filter out random junk
-            return sorted({d for d in root_dirs if d and not d.startswith(".")})
+            # V1 Parity: Filter out engine-specific internal folders that are not maps
+            ignore_list = {"cache", "common", "etc", "enginedata", "audio", "videoscoach", "localization"}
+            return sorted({d for d in root_dirs if d and not d.startswith(".") and d.lower() not in ignore_list})
 
     except Exception as exc:
         logger.warning("Fast inspect failed for IPK %s: %s", target_file, exc)
@@ -236,14 +237,19 @@ class ArchiveIPKExtractor(BaseExtractor):
         import re
         result = extract_ipk(self._ipk_path, output_dir)
         
-        # Ported from V1: _extract_codename_from_ipk_name
-        base = self._ipk_path.name
-        stem = self._ipk_path.stem
-        # Strip platform suffixes: _x360, _durango, _scarlett, _nx, _orbis, _prospero, _pc
-        stem = re.sub(r"_(x360|durango|scarlett|nx|orbis|prospero|pc)$", "", stem, flags=re.IGNORECASE)
-        self._codename = stem
-        
-        logger.info("Inferred codename from IPK filename: %s", self._codename)
+        # V1 Parity: Prioritize codename from internal IPK paths over filename
+        maps_found = inspect_ipk(self._ipk_path)
+        if len(maps_found) == 1:
+            self._codename = maps_found[0]
+            logger.info("Inferred codename from IPK internal structure: %s", self._codename)
+        else:
+            # Fallback to filename inference (ported from V1: _extract_codename_from_ipk_name)
+            base = self._ipk_path.name
+            stem = self._ipk_path.stem
+            # Strip platform suffixes: _x360, _durango, _scarlett, _nx, _orbis, _prospero, _pc
+            stem = re.sub(r"_(x360|durango|scarlett|nx|orbis|prospero|pc)$", "", stem, flags=re.IGNORECASE)
+            self._codename = stem
+            logger.info("Inferred codename from IPK filename: %s", self._codename)
         return result
 
     def get_codename(self) -> Optional[str]:
