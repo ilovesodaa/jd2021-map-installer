@@ -11,10 +11,40 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 logger = logging.getLogger("jd2021.installers.tape_converter")
+
+
+def _path_has_codename_component(path: Path, codename: str) -> bool:
+    parts = [p.lower() for p in path.as_posix().split("/") if p]
+    return codename.lower() in parts
+
+
+def _filename_matches_codename(path: Path, codename: str) -> bool:
+    cn = codename.lower()
+    return bool(re.match(rf"^{re.escape(cn)}(?:[^a-z0-9]|$)", path.name.lower()))
+
+
+def _pick_best_tape(candidates: List[Path], codename: str, preferred_tokens: List[str]) -> Optional[Path]:
+    if not candidates:
+        return None
+
+    scoped = [p for p in candidates if _path_has_codename_component(p, codename)]
+    if not scoped:
+        scoped = [p for p in candidates if _filename_matches_codename(p, codename)]
+    if not scoped:
+        return None
+
+    token_hits = [p for p in scoped if any(tok in p.name.lower() for tok in preferred_tokens)]
+    if token_hits:
+        scoped = token_hits
+
+    # Stable selection so repeated installs pick the same source file.
+    scoped = sorted(scoped, key=lambda p: p.as_posix().lower())
+    return scoped[0]
 
 
 # ---------------------------------------------------------------------------
@@ -217,24 +247,29 @@ def auto_convert_tapes(source_dir: Path, target_dir: Path, codename: str) -> int
         Number of tapes successfully converted.
     """
     converted = 0
-    cn_lower = codename.lower()
 
-    for ckd in source_dir.rglob("*.ckd"):
-        name_lower = ckd.name.lower()
+    dance_candidates = [
+        p for p in source_dir.rglob("*dtape*.ckd")
+        if "adtape" not in p.name.lower()
+    ]
+    karaoke_candidates = [
+        p for p in source_dir.rglob("*ktape*.ckd")
+    ]
+    cinematic_candidates = [
+        p for p in source_dir.rglob("*mainsequence*tape*.ckd")
+    ]
 
-        # Relaxed matching: match dtape, ktape, or mainsequence anywhere in name
-        # If multiple files exist, we take the first one or prioritize codename if present
-        if "dtape" in name_lower:
-            if convert_dance_tape(ckd, target_dir, codename):
-                converted += 1
+    dance_src = _pick_best_tape(dance_candidates, codename, ["tml_dance", "dance"])
+    if dance_src and convert_dance_tape(dance_src, target_dir, codename):
+        converted += 1
 
-        elif "ktape" in name_lower:
-            if convert_karaoke_tape(ckd, target_dir, codename):
-                converted += 1
+    karaoke_src = _pick_best_tape(karaoke_candidates, codename, ["tml_karaoke", "karaoke"])
+    if karaoke_src and convert_karaoke_tape(karaoke_src, target_dir, codename):
+        converted += 1
 
-        elif "mainsequence" in name_lower and "tape" in name_lower:
-            if convert_cinematic_tape(ckd, target_dir, codename):
-                converted += 1
+    cinematic_src = _pick_best_tape(cinematic_candidates, codename, ["mainsequence"])
+    if cinematic_src and convert_cinematic_tape(cinematic_src, target_dir, codename):
+        converted += 1
 
     logger.info("Auto-converted %d tape(s) for '%s'", converted, codename)
     return converted

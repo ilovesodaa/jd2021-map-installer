@@ -602,6 +602,20 @@ def install_map_to_game(
         from jd2021_installer.installers.media_processor import copy_moves
         copy_moves(media.moves_dir, map_target)
 
+    # 5b. Autodance + stape payloads (V1 step_11 parity)
+    if map_data.has_autodance and map_data.source_dir and map_data.source_dir.exists():
+        if status_callback: status_callback("Extract moves & autodance")
+        from jd2021_installer.installers.autodance_processor import (
+            process_autodance_directory,
+            process_stape_file,
+        )
+        process_autodance_directory(map_data.source_dir, map_target, codename)
+        process_stape_file(map_data.source_dir, map_target, codename)
+    elif map_data.source_dir and map_data.source_dir.exists():
+        # Some maps ship stape without autodance blocks.
+        from jd2021_installer.installers.autodance_processor import process_stape_file
+        process_stape_file(map_data.source_dir, map_target, codename)
+
     # 6. Register map in SkuScene ISC
     if status_callback: status_callback("Register in SkuScene")
     if progress_callback: progress_callback(95)
