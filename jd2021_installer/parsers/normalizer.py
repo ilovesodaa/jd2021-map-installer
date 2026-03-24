@@ -440,8 +440,13 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
             codename_coaches = [c for c in all_coaches if f"/{codename_low}/" in str(c).lower().replace("\\", "/")]
         if codename_coaches:
             all_coaches = codename_coaches
-            
-    media.coach_images = sorted(list(set(all_coaches)))
+
+    # Sort and separate phone images
+    main_coaches = [f for f in all_coaches if "_phone" not in f.name.lower()]
+    phone_coaches = [f for f in all_coaches if "_phone" in f.name.lower()]
+    
+    media.coach_images = sorted(list(set(main_coaches)))
+    media.coach_phone_images = sorted(list(set(phone_coaches)))
 
 
 
@@ -508,31 +513,44 @@ def normalize_sync(
 
     # If no existing .trk or failed to read, proceed with standard logic
     if music_track:
-        video_ms = music_track.video_start_time * 1000.0
-
         if is_html_source:
             # Fetch/HTML mode (OGG)
-            # V1 Parity: Always use marker-based synthesis for HTML/Fetch sources,
-            # as the metadata VST is often for the console WAV and doesn't match the OGG.
+            # V1 Parity: use markers for audio trim calibration (OGG codec delay)
             prms = calculate_marker_preroll(music_track.markers, music_track.start_beat, include_calibration=False)
             if prms is not None:
                 audio_ms = -(prms + 85.0)
-                video_ms = -prms
-                logger.info("Fetch/HTML sync (forced marker parity): audio_offset=%.3f ms (incl. 85ms calib), video_offset=%.3f ms", audio_ms, video_ms)
             else:
-                audio_ms = video_ms
-                logger.info("Fetch/HTML sync (no markers): using video_start_time for both = %.3f ms", video_ms)
+                # Fallback to metadata if no markers
+                audio_ms = music_track.video_start_time * 1000.0
+
+            # V1 Parity: PRESERVE metadata videoStartTime if non-zero.
+            # Many maps have custom offsets for browser sync that should be kept.
+            metadata_ms = music_track.video_start_time * 1000.0
+            if abs(metadata_ms) > 0.1:
+                video_ms = metadata_ms
+                logger.info("Fetch/HTML sync (metadata preserved): audio_offset=%.3f ms (marker+85), video_offset=%.3f ms (metadata)", audio_ms, video_ms)
+            elif prms is not None:
+                video_ms = -prms
+                logger.info("Fetch/HTML sync (synthesized): audio_offset=%.3f ms (marker+85), video_offset=%.3f ms (marker)", audio_ms, video_ms)
+            else:
+                video_ms = metadata_ms
+                logger.info("Fetch/HTML sync (fallback): using metadata for both = %.3f ms", video_ms)
+
         else:
-            # IPK mode (WAV/CKD)
-            audio_ms = 0.0
-            if video_ms == 0.0:
-                # Fallback for missing VST in binary CKDs (V1 Parity: NO 85ms calibration for video)
+            # Binary Mode (IPK / WAV)
+            # V1 Parity: No 85ms calibration for video or WAV audio.
+            if abs(music_track.video_start_time) > 0.0001:
+                # Use existing VST if present
+                video_ms = music_track.video_start_time * 1000.0
+                audio_ms = 0.0 # WAV from IPK already contains pre-roll
+            else:
+                # Fallback for missing VST in binary CKDs (Xbox 360)
                 prms = calculate_marker_preroll(music_track.markers, music_track.start_beat, include_calibration=False)
                 if prms is not None:
                     video_ms = -prms
                     logger.info("IPK sync (synthesized): audio_offset=0, video_offset=%.3f ms", video_ms)
-            else:
-                logger.info("IPK sync (pre-synced): audio_offset=0, video_offset=%.3f ms", video_ms)
+                else:
+                    logger.info("IPK sync (pre-synced): audio_offset=0, video_offset=%.3f ms", video_ms)
     else:
         logger.warning("No music_track provided to normalize_sync, returning default 0 offsets.")
 

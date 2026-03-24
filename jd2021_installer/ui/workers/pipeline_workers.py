@@ -18,6 +18,7 @@ Usage (in controller):
 from __future__ import annotations
 
 import logging
+import re
 import traceback
 from pathlib import Path
 from typing import Optional
@@ -497,16 +498,38 @@ def install_map_to_game(
             dst_name = f"{codename}_{art_suffix}{ext}"
             shutil.copy2(src_path, textures_dir / dst_name)
     
-    # Coaches are a list
-    for i, coach_img in enumerate(media.coach_images, 1):
+    def _extract_coach_index(path: Path) -> int:
+        match = re.search(r"coach_(\d+)", path.name.lower())
+        return int(match.group(1)) if match else 0
+
+    # Coaches are now separated into main and phone lists in normalize_sync.
+    # We use the index from the filename to ensure correct mapping even if some are missing.
+    for coach_img in media.coach_images:
         if coach_img.exists():
+            idx = _extract_coach_index(coach_img)
+            if idx == 0: continue # Skip if no index found
+            
             suffix = coach_img.suffix.lower()
             if coach_img.name.lower().endswith(".tga.ckd"):
                 ext = ".tga.ckd"
             else:
                 ext = suffix
-            dst_name = f"{codename}_coach_{i}{ext}"
+            dst_name = f"{codename}_coach_{idx}{ext}"
             shutil.copy2(coach_img, textures_dir / dst_name)
+            
+    for phone_img in media.coach_phone_images:
+        if phone_img.exists():
+            idx = _extract_coach_index(phone_img)
+            if idx == 0: continue
+            
+            ext = ".png" # Phone assets are usually PNG
+            if phone_img.name.lower().endswith(".tga.ckd"):
+                ext = ".tga.ckd"
+            elif phone_img.suffix.lower() == ".png" or phone_img.suffix.lower() == ".jpg":
+                ext = phone_img.suffix.lower()
+
+            dst_name = f"{codename}_coach_{idx}_phone{ext}"
+            shutil.copy2(phone_img, textures_dir / dst_name)
 
 
     # 4. Physical Converters (Tape, Texture, Ambient)

@@ -518,12 +518,13 @@ includeReference("world/maps/{map_name.lower()}/audio/amb/{intro_name}.ilu")'''
     audio_isc_path = target_dir / "audio" / f"{map_name}_audio.isc"
     if audio_isc_path.exists():
         isc_data = audio_isc_path.read_text(encoding="utf-8")
-        if intro_name not in isc_data:
+        amb_lua_path = f"world/maps/{map_name.lower()}/audio/amb/{intro_name}.tpl"
+        if amb_lua_path not in isc_data:
             amb_actor = (
                 f'\t\t<ACTORS NAME="Actor">\n'
                 f'\t\t\t<Actor RELATIVEZ="0.000002" SCALE="1.000000 1.000000" xFLIPPED="0"'
                 f' USERFRIENDLY="{intro_name}" POS2D="0.000000 0.000000" ANGLE="0.000000"'
-                f' INSTANCEDATAFILE="" LUA="world/maps/{map_name.lower()}/audio/amb/{intro_name}.tpl">\n'
+                f' INSTANCEDATAFILE="" LUA="{amb_lua_path}">\n'
                 f'\t\t\t\t<COMPONENTS NAME="SoundComponent">\n'
                 f'\t\t\t\t\t<SoundComponent />\n'
                 f'\t\t\t\t</COMPONENTS>\n'
@@ -533,7 +534,9 @@ includeReference("world/maps/{map_name.lower()}/audio/amb/{intro_name}.ilu")'''
             # Inject before <sceneConfigs>
             new_isc = isc_data.replace("\t\t<sceneConfigs>", amb_actor + "\t\t<sceneConfigs>")
             audio_isc_path.write_text(new_isc, encoding="utf-8")
-            logger.info("Injected intro AMB actor into audio ISC")
+            logger.info("Injected intro AMB actor into audio ISC: %s", intro_name)
+        else:
+            logger.debug("Intro AMB actor already present in audio ISC: %s", intro_name)
 
     delay_ms = int(audio_delay * 1000)
     if delay_ms > 0:
