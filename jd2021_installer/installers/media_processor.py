@@ -293,105 +293,6 @@ def convert_audio(
             shutil.rmtree(temp_dir)
 
 
-def process_menu_art(
-    target_dir: str | Path,
-    codename: str,
-) -> int:
-    """Validate and synthesize MenuArt TGAs (V1 parity).
-    
-    Ensures cover_generic and cover_online exist, and re-saves all 
-    as uncompressed 32-bit RGBA TGAs to prevent black-box glitches.
-    
-    Also handles Case Correction by renaming files to match expected case.
-    """
-    try:
-        from PIL import Image
-    except ImportError:
-        return 0
-
-    tex_dir = Path(target_dir) / "menuart" / "textures"
-    if not tex_dir.is_dir():
-        return 0
-
-    codename_low = codename.lower()
-    expected_tgas = [
-        f"{codename}_cover_generic.tga",
-        f"{codename}_cover_online.tga",
-        f"{codename}_cover_albumbkg.tga",
-        f"{codename}_cover_albumcoach.tga",
-        f"{codename}_banner_bkg.tga",
-        f"{codename}_map_bkg.tga",
-    ]
-
-    # 1. Case fix and discovery
-    found_tgas = {}
-    for f in tex_dir.iterdir():
-        if f.suffix.lower() == ".tga":
-            f_name_lower = f.name.lower()
-            
-            # V1 Parity Case Correction: if this file matches an expected name case-insensitively,
-            # rename it to the exact expected case.
-            matched_expected = False
-            for expected in expected_tgas:
-                if f_name_lower == expected.lower():
-                    matched_expected = True
-                    if f.name != expected:
-                        target = f.parent / expected
-                        logger.info("Case fix: %s -> %s", f.name, expected)
-                        if target.exists():
-                            target.unlink()
-                        f.rename(target)
-                        found_tgas[expected.lower()] = target
-                    else:
-                        found_tgas[expected.lower()] = f
-                    break
-            
-            if not matched_expected:
-                found_tgas[f_name_lower] = f
-
-    # 2. Synthesis for online/generic parity
-    online_key = f"{codename_low}_cover_online.tga"
-    generic_key = f"{codename_low}_cover_generic.tga"
-    
-    # Map back from lower key to actual Path object
-    online_path = found_tgas.get(online_key)
-    generic_path = found_tgas.get(generic_key)
-
-    if online_key not in found_tgas and generic_key in found_tgas:
-        src = generic_path
-        dst = tex_dir / f"{codename}_cover_online.tga"
-        shutil.copy2(src, dst)
-        found_tgas[online_key] = dst
-        logger.info("Synthesized cover_online from cover_generic")
-
-    elif generic_key not in found_tgas and online_key in found_tgas:
-        src = online_path
-        dst = tex_dir / f"{codename}_cover_generic.tga"
-        shutil.copy2(src, dst)
-        found_tgas[generic_key] = dst
-        logger.info("Synthesized cover_generic from cover_online")
-
-    # 3. Re-save as uncompressed RGBA 32-bit (V1 parity to avoid engine black-boxes)
-    resaved = 0
-    for key, path in found_tgas.items():
-        # Only re-save those that are part of the expected set
-        if not any(key == e.lower() for e in expected_tgas):
-            continue
-            
-        try:
-            img = Image.open(path)
-            if img.mode != 'RGBA':
-                img = img.convert('RGBA')
-            img.save(path, format='TGA')
-            resaved += 1
-        except Exception as e:
-            logger.warning("Failed to resave TGA %s: %s", path.name, e)
-
-    if resaved:
-        logger.info("Validated and resaved %d MenuArt TGA(s) as uncompressed RGBA", resaved)
-    
-    return resaved
-
 
 
 def generate_intro_amb(
@@ -953,7 +854,7 @@ def copy_moves(
     return total_copied
 
 
-def process_menu_art(target_dir: str | Path, codename: str) -> None:
+def process_menu_art(target_dir: str | Path, codename: str) -> int:
     """Validate, heal, and duplicate MenuArt textures for parity.
 
     Ensures both cover_generic and cover_online exist, and re-saves
@@ -962,8 +863,9 @@ def process_menu_art(target_dir: str | Path, codename: str) -> None:
     tex_dir = Path(target_dir) / "menuart" / "textures"
     if not tex_dir.is_dir():
         logger.warning("MenuArt textures directory not found at %s", tex_dir)
-        return
+        return 0
 
+    codename_low = codename.lower()
     expected_suffixes = [
         "cover_generic", "cover_online", "cover_albumbkg",
         "cover_albumcoach", "banner_bkg", "map_bkg"
@@ -972,7 +874,7 @@ def process_menu_art(target_dir: str | Path, codename: str) -> None:
 
     # Build case-insensitive lookup
     actual_files = list(tex_dir.iterdir())
-    actual_lower_map = {f.name.lower(): f for f in actual_files}
+    actual_lower_map = {f.name.lower(): f for f in actual_files if f.is_file()}
 
     found_tgas = {}
     for expected in expected_tgas:
@@ -984,41 +886,46 @@ def process_menu_art(target_dir: str | Path, codename: str) -> None:
                 actual_path.rename(new_path)
                 actual_path = new_path
             found_tgas[expected.lower()] = actual_path
-            logger.debug("Found MenuArt: %s", expected)
         else:
             logger.debug("Missing MenuArt: %s", expected)
 
-    # Online/Generic cross-copy logic from V1
+    # V1 Parity Synthesis Logic
     online_key = f"{codename}_cover_online.tga".lower()
     generic_key = f"{codename}_cover_generic.tga".lower()
-
-    if online_key not in found_tgas and generic_key in found_tgas:
-        dst = tex_dir / f"{codename}_cover_online.tga"
-        shutil.copy2(found_tgas[generic_key], dst)
-        found_tgas[online_key] = dst
-        logger.info("Healed MenuArt: Created cover_online from cover_generic")
-
-    elif generic_key not in found_tgas and online_key in found_tgas:
-        dst = tex_dir / f"{codename}_cover_generic.tga"
-        shutil.copy2(found_tgas[online_key], dst)
-        found_tgas[generic_key] = dst
-        logger.info("Healed MenuArt: Created cover_generic from cover_online")
-
-    # Map/Banner fallback logic
+    banner_key = f"{codename}_banner_bkg.tga".lower()
     map_bkg_key = f"{codename}_map_bkg.tga".lower()
-    banner_bkg_key = f"{codename}_banner_bkg.tga".lower()
+
+    def _synthesize(dst_key: str, src_key: str, desc: str) -> None:
+        if dst_key not in found_tgas and src_key in found_tgas:
+            # Find the expected case for the destination
+            for expected in expected_tgas:
+                if expected.lower() == dst_key:
+                    dst_name = expected
+                    break
+            else:
+                dst_name = dst_key
+            
+            dst_path = tex_dir / dst_name
+            logger.info("Synthesizing missing %s from %s", desc, src_key)
+            try:
+                shutil.copy2(found_tgas[src_key], dst_path)
+                found_tgas[dst_key] = dst_path
+            except Exception as e:
+                logger.error("Failed to synthesize %s: %s", dst_name, e)
+
+    _synthesize(online_key, generic_key, "cover_online")
+    _synthesize(generic_key, online_key, "cover_generic")
+    _synthesize(banner_key, map_bkg_key, "banner_bkg")
     
-    for key, name in [(map_bkg_key, "map_bkg"), (banner_bkg_key, "banner_bkg")]:
-        if key not in found_tgas and generic_key in found_tgas:
-            dst = tex_dir / f"{codename}_{name}.tga"
-            shutil.copy2(found_tgas[generic_key], dst)
-            found_tgas[key] = dst
-            logger.info("Healed MenuArt: Created %s from cover_generic", name)
+    # Fallback: if map_bkg or banner_bkg still missing, try cover_generic (V1 last resort)
+    for key, name in [(map_bkg_key, "map_bkg"), (banner_key, "banner_bkg")]:
+        if key not in found_tgas:
+            _synthesize(key, generic_key, name)
 
     # Re-save as 32-bit RGBA TGA (V1 Parity)
     if Image is None:
         logger.warning("Pillow not installed; skipping TGA re-save/healing")
-        return
+        return 0
 
     resaved = 0
     for path in found_tgas.values():
@@ -1033,6 +940,8 @@ def process_menu_art(target_dir: str | Path, codename: str) -> None:
             logger.warning("Could not re-save MenuArt %s: %s", path.name, e)
 
     if resaved:
-        logger.info("Re-saved %d MenuArt TGA(s) as uncompressed 32-bit RGBA", resaved)
+        logger.info("Validated and re-saved %d MenuArt TGA(s) as uncompressed 32-bit RGBA", resaved)
+    
+    return resaved
 
 

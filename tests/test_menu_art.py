@@ -53,5 +53,47 @@ class TestMenuArt(unittest.TestCase):
         # Verify online cover was created
         self.assertTrue((tex_dir / "TestMap_cover_online.tga").exists())
 
+    def test_banner_synthesis_from_bkg(self):
+        # Setup
+        self._create_dummy_image(self.test_dir / "TestMap_map_bkg.png")
+        
+        # Discover
+        media = _discover_media(self.test_dir, "testmap")
+        
+        # Verify synthesis in discovery
+        self.assertIsNotNone(media.banner_bkg_path)
+        self.assertEqual(media.banner_bkg_path.name, "TestMap_map_bkg.png")
+
+    def test_bundle_scoping_no_leakage(self):
+        # Setup two maps
+        map_a_dir = self.test_dir / "MapA"
+        map_a_dir.mkdir()
+        self._create_dummy_image(map_a_dir / "MapA_banner_bkg.png")
+        
+        map_b_dir = self.test_dir / "MapB"
+        map_b_dir.mkdir()
+        # Map B has NO banner
+        
+        # Discover Map B from the root (simulating bundle scan)
+        media_b = _discover_media(self.test_dir, "mapb")
+        
+        # Verify Map B did NOT "steal" Map A's banner
+        self.assertIsNone(media_b.banner_bkg_path)
+
+    def test_media_processor_banner_synthesis(self):
+        # Setup target directory structure
+        target = self.test_dir / "target_proc"
+        tex_dir = target / "menuart" / "textures"
+        tex_dir.mkdir(parents=True)
+        
+        # Only map_bkg in target
+        self._create_dummy_image(tex_dir / "TestMap_map_bkg.tga")
+        
+        # Heal
+        process_menu_art(target, "TestMap")
+        
+        # Verify banner_bkg was synthesized
+        self.assertTrue((tex_dir / "TestMap_banner_bkg.tga").exists())
+
 if __name__ == "__main__":
     unittest.main()
