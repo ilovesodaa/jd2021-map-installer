@@ -324,7 +324,8 @@ class BatchInstallWorker(QObject):
                             
                         self.status.emit(f"[{sub_map.name}] Parse CKDs & Metadata")
                         from jd2021_installer.parsers.normalizer import normalize
-                        map_data = normalize(sub_map, search_root=map_dir)
+                        # V1 parity: in bundle processing, scope normalization to the current map codename.
+                        map_data = normalize(sub_map, codename=sub_map.name, search_root=map_dir)
                         
                         self.status.emit(f"[{map_data.codename}] Normalize assets")
                         
