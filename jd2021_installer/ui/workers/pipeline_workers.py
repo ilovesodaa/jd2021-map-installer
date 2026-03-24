@@ -28,6 +28,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from jd2021_installer.core.config import AppConfig
 from jd2021_installer.core.models import NormalizedMapData
 from jd2021_installer.extractors.base import BaseExtractor
+from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor
 from jd2021_installer.installers.game_writer import write_game_files
 from jd2021_installer.parsers.normalizer import normalize
 
@@ -74,7 +75,16 @@ class ExtractAndNormalizeWorker(QObject):
             
             self.status.emit("Normalize assets")
             self.progress.emit(50)
-            map_data = normalize(map_output_dir, codename)
+            search_root: Optional[Path] = None
+            if isinstance(self._extractor, ArchiveIPKExtractor):
+                # V1 parity: IPK mode also probes media alongside the selected .ipk file.
+                search_root = self._extractor.get_source_dir()
+
+            map_data = normalize(
+                map_output_dir,
+                codename,
+                search_root=search_root,
+            )
 
             self.progress.emit(100)
             self.status.emit("Normalization complete.")

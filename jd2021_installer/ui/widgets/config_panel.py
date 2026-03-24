@@ -35,6 +35,7 @@ class ConfigWidget(QWidget):
 
     game_dir_changed = pyqtSignal(str)     # absolute path string
     quality_changed = pyqtSignal(str)      # quality tier label
+    clear_cache_requested = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -86,6 +87,17 @@ class ConfigWidget(QWidget):
         self._quality_combo.setCurrentText("ULTRA_HD")
         self._quality_combo.currentTextChanged.connect(self._on_quality_changed)
         root.addWidget(self._quality_combo)
+
+        # -- Cache row ----------------------------------------------------
+        cache_row = QHBoxLayout()
+        cache_row.addWidget(QLabel("Cache:"))
+        cache_row.addStretch()
+
+        self._clear_cache_btn = QPushButton("Clear Path Cache")
+        self._clear_cache_btn.clicked.connect(self.clear_cache_requested.emit)
+        cache_row.addWidget(self._clear_cache_btn)
+
+        root.addLayout(cache_row)
 
     # ------------------------------------------------------------------
     # Slots

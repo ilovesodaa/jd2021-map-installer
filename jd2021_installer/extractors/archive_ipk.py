@@ -314,3 +314,7 @@ class ArchiveIPKExtractor(BaseExtractor):
 
     def get_codename(self) -> Optional[str]:
         return self._codename
+
+    def get_source_dir(self) -> Path:
+        """Return the folder that contains the selected .ipk file."""
+        return self._ipk_path.parent

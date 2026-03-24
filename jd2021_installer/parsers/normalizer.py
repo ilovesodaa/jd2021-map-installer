@@ -381,6 +381,11 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
         if audio_found: break
         
         candidates = list(dir_path.rglob(ext_pattern))
+        if search_root and bg_search_dir != dir_path:
+            candidates.extend(list(bg_search_dir.rglob(ext_pattern)))
+        if candidates:
+            # Keep first-seen order while de-duplicating between both scans.
+            candidates = list(dict.fromkeys(candidates))
         if not candidates: continue
         
         # Prune exclusions: amb, autodance, preview
