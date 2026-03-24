@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from jd2021_installer.core.models import NormalizedMapData
-from jd2021_installer.parsers.normalizer import normalize
+from jd2021_installer.parsers.normalizer import _discover_media, normalize
 
 
 class TestNormalizerParity:
@@ -84,6 +84,24 @@ class TestNormalizerEdgeCases:
         (tmp_path / "dummy.txt").write_text("not a ckd")
         with pytest.raises(NormalizationError, match="musictrack"):
             normalize(tmp_path)
+
+    def test_audio_discovery_uses_search_root_for_ipk_sidecar(self, tmp_path: Path) -> None:
+        """V1 parity: audio beside the IPK source folder must be discoverable."""
+        extracted_dir = tmp_path / "temp_extraction"
+        extracted_dir.mkdir(parents=True)
+
+        ipk_source_dir = tmp_path / "ipk_source"
+        ipk_source_dir.mkdir(parents=True)
+        sidecar_audio = ipk_source_dir / "judas.wav"
+        sidecar_audio.write_bytes(b"RIFFfake")
+
+        media = _discover_media(
+            str(extracted_dir),
+            codename="judas",
+            search_root=str(ipk_source_dir),
+        )
+
+        assert media.audio_path == sidecar_audio
 
 
 class TestNormalizerMusicTrack:

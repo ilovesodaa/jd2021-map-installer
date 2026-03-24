@@ -21,6 +21,7 @@ Layout
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import sys
 import json
@@ -283,6 +284,7 @@ class MainWindow(QMainWindow):
         self._mode_selector.target_selected.connect(self._on_target_selected)
         self._config_panel.game_dir_changed.connect(self._on_game_dir_changed)
         self._config_panel.quality_changed.connect(self._on_quality_changed)
+        self._config_panel.clear_cache_requested.connect(self._on_clear_cache)
 
         # -- Action panel signals -------------------------------------------
         self._action_panel.install_requested.connect(self._on_install_requested)
@@ -356,28 +358,52 @@ class MainWindow(QMainWindow):
 
     def _on_clear_cache(self) -> None:
         cache = self._config.cache_directory
-        if cache.exists():
-            reply = QMessageBox.question(
-                self,
-                "Clear Cache",
-                f"Delete all files in {cache}?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-            # Safety check: don't delete if cache is inside game directory (prevents accidental wipeout)
-            if self._config.game_directory and (
-                self._config.game_directory in cache.parents or 
-                self._config.game_directory == cache
-            ):
-                QMessageBox.critical(self, "Safety Error", "Cache directory cannot be inside or equal to the game directory.")
-                return
 
-            if reply == QMessageBox.StandardButton.Yes:
-                shutil.rmtree(cache, ignore_errors=True)
-                cache.mkdir(parents=True, exist_ok=True)
-                self.append_log("Cache cleared.")
-                self._set_status("Cache cleared.")
-        else:
-            self.append_log("No cache directory to clear.")
+        # Safety check: never clear if paths overlap in either direction.
+        if self._config.game_directory:
+            try:
+                cache_resolved = cache.resolve()
+                game_resolved = self._config.game_directory.resolve()
+                if (
+                    cache_resolved == game_resolved
+                    or game_resolved in cache_resolved.parents
+                    or cache_resolved in game_resolved.parents
+                ):
+                    QMessageBox.critical(
+                        self,
+                        "Safety Error",
+                        "Cache directory overlaps with the game directory. Clearing is blocked to prevent data loss.",
+                    )
+                    return
+            except Exception:
+                pass
+
+        if not cache.exists():
+            QMessageBox.information(self, "Cache Already Empty", f"No cache directory found at:\n{cache}")
+            return
+
+        if cache.is_dir() and not any(cache.iterdir()):
+            QMessageBox.information(self, "Cache Already Empty", f"Cache directory is already empty:\n{cache}")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Clear Path Cache",
+            f"Delete all files in cache directory?\n\n{cache}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            shutil.rmtree(cache, ignore_errors=False)
+            cache.mkdir(parents=True, exist_ok=True)
+            self.append_log("Cache cleared.")
+            self._set_status("Cache cleared.")
+            QMessageBox.information(self, "Cache Cleared", "Path cache was cleared successfully.")
+        except Exception as exc:
+            logger.exception("Failed to clear cache: %s", exc)
+            QMessageBox.warning(self, "Clear Cache Failed", f"Failed to clear cache:\n{exc}")
 
     # -- Actions ------------------------------------------------------------
 
@@ -438,6 +464,31 @@ class MainWindow(QMainWindow):
         if not self._config.game_directory:
             QMessageBox.warning(self, "No Game Dir", "Please set the game directory first.")
             return
+
+        # v1 parity: codename whitespace sanitization prompt before fetch scrape starts.
+        from jd2021_installer.ui.widgets.mode_selector import MODE_FETCH
+        if self._mode_selector.current_mode_index == MODE_FETCH:
+            raw_value = self._mode_selector.inputs["fetch"]["codenames"].text()
+            if re.search(r"\s", raw_value):
+                sanitized = re.sub(r"\s+", "", raw_value)
+                reply = QMessageBox.question(
+                    self,
+                    "Sanitize Codename",
+                    (
+                        "The codename contains whitespace.\n\n"
+                        f"Current: {raw_value}\n"
+                        f"Sanitized: {sanitized}\n\n"
+                        "Use sanitized codename and continue?"
+                    ),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self._mode_selector.inputs["fetch"]["codenames"].setText(sanitized)
+                    self._current_target = sanitized
+                else:
+                    self.append_log("Install aborted: codename sanitization declined.")
+                    self._set_status("Install aborted")
+                    return
 
         # Pre-flight check for FFmpeg/FFplay (required for media + preview)
         import shutil
@@ -993,6 +1044,7 @@ class MainWindow(QMainWindow):
                 
             return ManualExtractor(
                 codename=codename,
+                source_type=self._mode_selector.manual_source_type,
                 root_dir=root_dir,
                 files={
                     "audio": inputs["audio"].text().strip(),

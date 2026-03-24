@@ -5,7 +5,6 @@ installer_settings.json
 logs/
 .browser-profile/
 maps/
-docs/report_march_23/
 .cursor
 .pytest_cache
 mapDownloads/
@@ -13,3 +12,5 @@ temp/
 .gemini/
 gha-creds-*.json
 dummy/
+docs/reports/
+.venv/

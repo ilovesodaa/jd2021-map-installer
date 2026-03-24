@@ -21,9 +21,22 @@ logger = logging.getLogger("jd2021.extractors.manual")
 class ManualExtractor(BaseExtractor):
     """Assembles a map directory from manually specified paths."""
 
+    def _resolve_root_dir(self, root: Path) -> Path:
+        """Apply source-type specific root resolution for manual mode."""
+        if self._source_type != "ipk":
+            return root
+
+        world_maps = root / "world" / "maps"
+        if world_maps.is_dir():
+            candidates = [d for d in world_maps.iterdir() if d.is_dir()]
+            if candidates:
+                return sorted(candidates, key=lambda p: p.name.lower())[0]
+        return root
+
     def __init__(
         self,
         codename: str,
+        source_type: str = "jdu",
         root_dir: Optional[str] = None,
         files: Optional[Dict[str, str]] = None,
         dirs: Optional[Dict[str, str]] = None,
@@ -37,6 +50,7 @@ class ManualExtractor(BaseExtractor):
             dirs:     Dict of logical name → absolute directory path for assets (moves, pictos, etc).
         """
         self._codename = codename.strip() if codename else ""
+        self._source_type = source_type.strip().lower() if source_type else "jdu"
         self._root_dir = Path(root_dir) if root_dir else None
         self._files = files or {}
         self._dirs = dirs or {}
@@ -53,9 +67,15 @@ class ManualExtractor(BaseExtractor):
         """
         # If there are NO explicit files/dirs configured but there IS a root,
         # just yield the root directly as the extraction source for the normalizer.
-        if self._root_dir and self._root_dir.is_dir() and not any(self._files.values()) and not any(self._dirs.values()):
-            logger.info("Manual extraction using root dir directly: %s", self._root_dir)
-            return self._root_dir
+        resolved_root = self._resolve_root_dir(self._root_dir) if self._root_dir and self._root_dir.is_dir() else None
+
+        if resolved_root and not any(self._files.values()) and not any(self._dirs.values()):
+            logger.info(
+                "Manual extraction using root dir directly (%s): %s",
+                self._source_type,
+                resolved_root,
+            )
+            return resolved_root
 
         if not self._codename:
             raise DownloadError("Codename is required for manual mode.")
@@ -63,12 +83,12 @@ class ManualExtractor(BaseExtractor):
         map_output_dir = output_dir / self._codename
         map_output_dir.mkdir(parents=True, exist_ok=True)
         
-        logger.info("Assembling manual files into %s", map_output_dir)
+        logger.info("Assembling manual files into %s (source_type=%s)", map_output_dir, self._source_type)
 
         # Base case: copy everything from root if provided, then overwrite with specific files
-        if self._root_dir and self._root_dir.is_dir():
-            logger.info("Copying contents of root dir %s", self._root_dir)
-            shutil.copytree(self._root_dir, map_output_dir, dirs_exist_ok=True)
+        if resolved_root:
+            logger.info("Copying contents of root dir %s", resolved_root)
+            shutil.copytree(resolved_root, map_output_dir, dirs_exist_ok=True)
 
         # Copy specific files
         for ftype, path_str in self._files.items():

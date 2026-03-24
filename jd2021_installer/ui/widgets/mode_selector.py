@@ -302,6 +302,15 @@ class ModeSelectorWidget(QWidget):
         scroll_lay = QVBoxLayout(scroll_content)
         scroll_lay.setContentsMargins(0, 0, 0, 0)
 
+        # Source flavor selection (v1 parity)
+        source_lay = QHBoxLayout()
+        source_lay.addWidget(QLabel("Source Type:"))
+        self._manual_source_combo = QComboBox()
+        self._manual_source_combo.addItems(["JDU", "IPK"])
+        source_lay.addWidget(self._manual_source_combo)
+        source_lay.addStretch()
+        scroll_lay.addLayout(source_lay)
+
         # Submode Selection
         submode_lay = QHBoxLayout()
         submode_lay.addWidget(QLabel("Manual Submode:"))
@@ -320,6 +329,10 @@ class ModeSelectorWidget(QWidget):
         root_row = FileRowWidget("Root Folder:", is_dir=True)
         root_row.path_changed.connect(self._on_manual_root_changed)
         top_lay.addWidget(root_row, 0, 0, 1, 2)
+
+        self._manual_scan_btn = QPushButton("Scan")
+        self._manual_scan_btn.clicked.connect(self._on_manual_scan_clicked)
+        top_lay.addWidget(self._manual_scan_btn, 0, 2)
 
         lbl_code = QLabel("Codename:")
         lbl_code.setMinimumWidth(120)
@@ -412,41 +425,76 @@ class ModeSelectorWidget(QWidget):
             return
             
         # Scan and auto-fill
-        from pathlib import Path
         root = Path(path)
-        if not root.is_dir(): return
+        if not root.is_dir():
+            return
+
+        source_type = self.manual_source_type
+        scan_root = self._resolve_scan_root(root, source_type)
         
         # 1. Infer codename from directory name
-        self.inputs["manual"]["codename"].setText(root.name)
+        self.inputs["manual"]["codename"].setText(scan_root.name)
         
         # 2. Auto-discover common files
         from jd2021_installer.parsers.normalizer import _find_ckd_files
         
-        mapping = {
-            "mtrack": "*musictrack*.tpl.ckd",
-            "sdesc": "*songdesc*.tpl.ckd",
-            "dtape": "*dtape*.ckd",
-            "ktape": "*ktape*.ckd",
-            "mseq": "*mainsequence*.ckd",
-        }
+        if source_type == "ipk":
+            mapping = {
+                "mtrack": "*musictrack*.ckd",
+                "sdesc": "*songdesc*.ckd",
+                "dtape": "*dtape*.ckd",
+                "ktape": "*ktape*.ckd",
+                "mseq": "*mainsequence*.ckd",
+            }
+        else:
+            mapping = {
+                "mtrack": "*musictrack*.tpl.ckd",
+                "sdesc": "*songdesc*.tpl.ckd",
+                "dtape": "*dtape*.ckd",
+                "ktape": "*ktape*.ckd",
+                "mseq": "*mainsequence*.ckd",
+            }
         
         for key, pattern in mapping.items():
-            found = _find_ckd_files(str(root), pattern)
+            found = _find_ckd_files(str(scan_root), pattern)
             if found:
                 self.inputs["manual"][key].setText(found[0])
                 
         # Audio/Video
-        video = list(root.rglob("*.webm"))
+        video = [v for v in scan_root.rglob("*.webm") if "preview" not in v.name.lower()]
+        if not video:
+            video = list(scan_root.rglob("*.webm"))
         if video: self.inputs["manual"]["video"].setText(str(video[0]))
         
-        audio = list(root.rglob("*.ogg")) or list(root.rglob("*.wav")) or list(root.rglob("*.wav.ckd"))
+        if source_type == "ipk":
+            audio = list(scan_root.rglob("*.wav")) or list(scan_root.rglob("*.wav.ckd")) or list(scan_root.rglob("*.ogg"))
+        else:
+            audio = list(scan_root.rglob("*.ogg")) or list(scan_root.rglob("*.wav")) or list(scan_root.rglob("*.wav.ckd"))
         if audio: self.inputs["manual"]["audio"].setText(str(audio[0]))
         
         # Folders
         for key in ["moves", "pictos", "menuart", "amb"]:
-            folder = next((d for d in root.rglob("*") if d.is_dir() and key in d.name.lower()), None)
+            folder = next((d for d in scan_root.rglob("*") if d.is_dir() and key in d.name.lower()), None)
             if folder:
                 self.inputs["manual"][key].setText(str(folder))
+
+    def _resolve_scan_root(self, root: Path, source_type: str) -> Path:
+        """Prefer codename folder under world/maps for IPK-oriented scans."""
+        if source_type != "ipk":
+            return root
+
+        world_maps = root / "world" / "maps"
+        if world_maps.is_dir():
+            candidates = [d for d in world_maps.iterdir() if d.is_dir()]
+            if candidates:
+                return sorted(candidates, key=lambda p: p.name.lower())[0]
+        return root
+
+    def _on_manual_scan_clicked(self) -> None:
+        """Manual re-scan trigger that reuses the root-change scan routine."""
+        root_path = self.inputs["manual"]["root"].text().strip()
+        if root_path:
+            self._on_manual_root_changed(root_path)
 
     # ------------------------------------------------------------------
     # Public API
@@ -459,3 +507,9 @@ class ModeSelectorWidget(QWidget):
     @property
     def current_mode_index(self) -> int:
         return self._mode_combo.currentIndex()
+
+    @property
+    def manual_source_type(self) -> str:
+        if not hasattr(self, "_manual_source_combo"):
+            return "jdu"
+        return self._manual_source_combo.currentText().strip().lower()
