@@ -62,10 +62,10 @@ def clean_data():
 
     print(f"Cleaning data at: {jd21_dir}")
     print("This will selectively delete custom map folders and restore modified SkuScenes.")
-    confirm = input("Are you sure you want to proceed? (y/n): ")
-    if confirm.lower() != 'y':
-        print("Cleanup aborted.")
-        return
+    # confirm = input("Are you sure you want to proceed? (y/n): ")
+    # if confirm.lower() != 'y':
+    #     print("Cleanup aborted.")
+    #     return
 
     original_maps = get_original_maps(rar_path, seven_zip_path)
     if not original_maps:

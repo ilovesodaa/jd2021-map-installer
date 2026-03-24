@@ -195,6 +195,7 @@ def inspect_ipk(target_file: str | Path) -> list[str]:
             num_files = _unpack(ipk_header["num_files"]["value"])
             root_dirs = set()
             
+            # V1 Parity: Support both standard (world/maps/) and legacy (world/jd20XX/) structures
             for _ in range(num_files):
                 fheader = _get_file_header()
                 for v in fheader:
@@ -205,15 +206,26 @@ def inspect_ipk(target_file: str | Path) -> list[str]:
                         size = _unpack(fheader["name_size"]["value"])
                     fheader[v]["value"] = f.read(size)
                 
-                # Check path name to see if it belongs to a folder
                 path_ori = fheader["path_name"]["value"].decode().lower().replace('\\', '/')
-                # Look for world/maps/<codename>
+                
+                # 1. Standard layout: world/maps/<codename>
                 if "world/maps/" in path_ori:
-                    # Extract the codename
                     after_maps = path_ori.split("world/maps/")[1]
                     parts = after_maps.split("/")
                     if parts and parts[0]:
                         root_dirs.add(parts[0])
+                
+                # 2. Legacy layout: world/jd20XX/<codename>
+                elif "world/jd" in path_ori:
+                    # Look for something like ".../world/jd2015/codename/..."
+                    # Find 'world/' and the next component
+                    parts = path_ori.split("/")
+                    try:
+                        idx = parts.index("world")
+                        if idx + 2 < len(parts) and parts[idx+1].startswith("jd"):
+                            root_dirs.add(parts[idx+2])
+                    except (ValueError, IndexError):
+                        pass
 
             # V1 Parity: Filter out engine-specific internal folders that are not maps
             ignore_list = {"cache", "common", "etc", "enginedata", "audio", "videoscoach", "localization"}
@@ -224,6 +236,35 @@ def inspect_ipk(target_file: str | Path) -> list[str]:
         return []
 
 
+
+
+def _detect_maps_in_dir(directory: Path) -> list[str]:
+    """Scan a directory for map codenames using the UbiArt structure.
+    
+    Supports both standard (world/maps/) and legacy (world/jd20XX/) layouts.
+    """
+    import re
+    codenames = set()
+    
+    # 1. Standard layout: world/maps/<codename>/
+    maps_dirs = list(directory.rglob("world/maps"))
+    for maps_dir in maps_dirs:
+        if maps_dir.is_dir():
+            for entry in maps_dir.iterdir():
+                if entry.is_dir() and not entry.name.startswith('.'):
+                    codenames.add(entry.name)
+                    
+    # 2. Legacy layout: world/jd20XX/<codename>/
+    for world_dir in directory.rglob("world"):
+        if world_dir.is_dir():
+            for jd_dir in world_dir.iterdir():
+                if jd_dir.is_dir() and re.match(r"jd\d+", jd_dir.name, re.I):
+                    for entry in jd_dir.iterdir():
+                        if entry.is_dir() and not entry.name.startswith('.'):
+                            codenames.add(entry.name)
+                                
+    ignore_list = {"cache", "common", "etc", "enginedata", "audio", "videoscoach", "localization"}
+    return sorted({c for c in codenames if c and c.lower() not in ignore_list})
 
 
 class ArchiveIPKExtractor(BaseExtractor):
@@ -237,19 +278,38 @@ class ArchiveIPKExtractor(BaseExtractor):
         import re
         result = extract_ipk(self._ipk_path, output_dir)
         
-        # V1 Parity: Prioritize codename from internal IPK paths over filename
-        maps_found = inspect_ipk(self._ipk_path)
-        if len(maps_found) == 1:
-            self._codename = maps_found[0]
-            logger.info("Inferred codename from IPK internal structure: %s", self._codename)
+        # V1 Parity: Detect maps from filesystem structure after extraction
+        actual_maps = _detect_maps_in_dir(result)
+        
+        # Fast inspect as a secondary source of truth
+        headers_maps = inspect_ipk(self._ipk_path)
+        
+        # Combine and prioritize
+        discovered = sorted(set(actual_maps) | set(headers_maps))
+        
+        if len(discovered) == 1:
+            self._codename = discovered[0]
+            logger.info("Inferred codename: %s", self._codename)
+        elif len(discovered) > 1:
+            logger.info("Multiple maps discovered in IPK: %s", ", ".join(discovered))
+            # Try to match the codename from the IPK filename
+            base = self._ipk_path.stem
+            stem = re.sub(r"_(x360|durango|scarlett|nx|orbis|prospero|pc)$", "", base, flags=re.IGNORECASE)
+            
+            matches = [m for m in discovered if m.lower() == stem.lower()]
+            if matches:
+                self._codename = matches[0]
+                logger.info("Matched bundle codename from filename: %s", self._codename)
+            else:
+                self._codename = discovered[0]
+                logger.info("Auto-selected first candidate for bundle: %s", self._codename)
         else:
-            # Fallback to filename inference (ported from V1: _extract_codename_from_ipk_name)
-            base = self._ipk_path.name
-            stem = self._ipk_path.stem
-            # Strip platform suffixes: _x360, _durango, _scarlett, _nx, _orbis, _prospero, _pc
-            stem = re.sub(r"_(x360|durango|scarlett|nx|orbis|prospero|pc)$", "", stem, flags=re.IGNORECASE)
+            # Fallback to filename inference if no maps found in structure
+            base = self._ipk_path.stem
+            stem = re.sub(r"_(x360|durango|scarlett|nx|orbis|prospero|pc)$", "", base, flags=re.IGNORECASE)
             self._codename = stem
-            logger.info("Inferred codename from IPK filename: %s", self._codename)
+            logger.info("No maps found in structure, using fallback from filename: %s", self._codename)
+            
         return result
 
     def get_codename(self) -> Optional[str]:
