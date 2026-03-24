@@ -153,28 +153,33 @@ def reprocess_audio(
     codename = map_data.codename
     media = map_data.media
     
-    if media.audio_path and media.audio_path.exists():
-        # Generates audio/<codename>.wav and .ogg
-        convert_audio(media.audio_path, codename, target_dir, a_offset, config)
-        
-        # Generates audio/amb/<intro>.wav/tpl/ilu and injects into audio ISC
-        ogg_path = target_dir / "audio" / f"{codename}.ogg"
-        v_override = map_data.effective_video_start_time
-        
-        # Use beat marker data if available for precise pre-roll
-        preroll = None
-        if map_data.music_track and map_data.music_track.markers:
-            from jd2021_installer.parsers.binary_ckd import calculate_marker_preroll
-            preroll = calculate_marker_preroll(
-                map_data.music_track.markers, 
-                map_data.music_track.start_beat
-            )
-            
-        generate_intro_amb(ogg_path, codename, target_dir, a_offset, v_override, preroll, config)
+    if not media.audio_path or not media.audio_path.exists():
+        raise RuntimeError(
+            f"Audio source missing for '{codename}'. "
+            "Bundle/IPK map cannot be finalized without decoded audio."
+        )
 
-        # Ported V1: Extract cinematic AMB clips from the main audio
-        if map_data.cinematic_tape:
-            extract_amb_clips(map_data.cinematic_tape, media.audio_path, target_dir, codename, config)
+    # Generates audio/<codename>.wav and .ogg
+    convert_audio(media.audio_path, codename, target_dir, a_offset, config)
+    
+    # Generates audio/amb/<intro>.wav/tpl/ilu and injects into audio ISC
+    ogg_path = target_dir / "audio" / f"{codename}.ogg"
+    v_override = map_data.effective_video_start_time
+    
+    # Use beat marker data if available for precise pre-roll
+    preroll = None
+    if map_data.music_track and map_data.music_track.markers:
+        from jd2021_installer.parsers.binary_ckd import calculate_marker_preroll
+        preroll = calculate_marker_preroll(
+            map_data.music_track.markers, 
+            map_data.music_track.start_beat
+        )
+        
+    generate_intro_amb(ogg_path, codename, target_dir, a_offset, v_override, preroll, config)
+
+    # Ported V1: Extract cinematic AMB clips from the main audio
+    if map_data.cinematic_tape:
+        extract_amb_clips(map_data.cinematic_tape, media.audio_path, target_dir, codename, config)
 
 
 class ApplyAndFinishWorker(QObject):
@@ -265,7 +270,7 @@ class BatchInstallWorker(QObject):
                 self.finished.emit(False)
                 return
 
-            self.status.emit(f"Found {total} map(s) to process.")
+            self.status.emit(f"Found {total} source item(s) to process.")
             
             # Emit discovered map names to the UI so it can populate the checklist
             map_names = []
@@ -278,6 +283,7 @@ class BatchInstallWorker(QObject):
                     map_names.append(c.name)
             self.discovered_maps.emit(map_names)
             success_count = 0
+            attempted_maps = 0
             installed_maps: list[NormalizedMapData] = []
             
             # Temporary cache for extracted IPKs
@@ -321,6 +327,7 @@ class BatchInstallWorker(QObject):
                             # If it's a map folder and not in selected_maps, skip it.
                             # (If it's just batch processing standalone maps, it'll still work if selected_maps is None)
                             continue
+                        attempted_maps += 1
                             
                         self.status.emit(f"[{sub_map.name}] Parse CKDs & Metadata")
                         from jd2021_installer.parsers.normalizer import normalize
@@ -363,7 +370,8 @@ class BatchInstallWorker(QObject):
             shutil.rmtree(batch_cache, ignore_errors=True)
 
             self.progress.emit(100)
-            self.status.emit(f"Batch install complete. {success_count}/{total} maps installed.")
+            total_maps = attempted_maps if attempted_maps > 0 else total
+            self.status.emit(f"Batch install complete. {success_count}/{total_maps} maps installed.")
             self.finished_with_data.emit(installed_maps)
             self.finished.emit(True)
 

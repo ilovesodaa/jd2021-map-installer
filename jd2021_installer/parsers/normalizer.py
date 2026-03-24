@@ -377,6 +377,14 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
     # 2. Audio files (.ogg, .wav, .wav.ckd)
     # V1 Priority: .ogg > .wav > .wav.ckd
     audio_found = False
+
+    def _audio_base_name(path: Path) -> str:
+        name = path.name.lower()
+        for suffix in (".wav.ckd", ".ogg.ckd", ".wav", ".ogg", ".ckd"):
+            if name.endswith(suffix):
+                return name[: -len(suffix)]
+        return path.stem.lower()
+
     for ext_pattern in ("*.ogg", "*.wav", "*.wav.ckd"):
         if audio_found: break
         
@@ -404,7 +412,11 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
         
         # Codename scoping
         if codename_low:
-            matches = [a for a in filtered if a.name.lower().startswith(codename_low)]
+            exact_name_matches = [a for a in filtered if _audio_base_name(a) == codename_low]
+            if exact_name_matches:
+                matches = exact_name_matches
+            else:
+                matches = [a for a in filtered if a.name.lower().startswith(codename_low)]
             if not matches:
                 # Path-based scoping for deeply nested IPK structures
                 matches = [a for a in filtered if f"/{codename_low}/" in str(a).lower().replace("\\", "/")]
