@@ -147,57 +147,57 @@ def _extract_music_track(
 
     data = load_ckd(ckd_paths[0])
 
-    # Already a typed MusicTrackStructure from binary parser
     if isinstance(data, MusicTrackStructure):
-        return data
+        res = data
+    elif isinstance(data, dict):
+        # JSON dict → build MusicTrackStructure
+        try:
+            from jd2021_installer.core.models import MusicSection, MusicSignature
+            s = data.get("COMPONENTS", [{}])[0].get("trackData", {}).get("structure", {})
 
-    # JSON dict → build MusicTrackStructure
-    try:
-        from jd2021_installer.core.models import MusicSection, MusicSignature
-        if not isinstance(data, dict):
-            return MusicTrackStructure()
-        s = data.get("COMPONENTS", [{}])[0].get("trackData", {}).get("structure", {})
+            vst = s.get("videoStartTime", 0.0)
+            # V1 Parity: Auto-detect units (ticks vs seconds)
+            if abs(vst) > 1000:
+                vst /= 48000.0
+                logger.debug("Detected videoStartTime in ticks; converted to %.6fs", vst)
+                
+            res = MusicTrackStructure(
+                markers=s.get("markers", []),
+                signatures=[
+                    MusicSignature(beats=sig["beats"], marker=sig["marker"])
+                    for sig in s.get("signatures", [])
+                ],
+                sections=[
+                    MusicSection(section_type=sec["sectionType"], marker=sec["marker"])
+                    for sec in s.get("sections", [])
+                ],
+                start_beat=s.get("startBeat", 0),
+                end_beat=s.get("endBeat", 0),
+                video_start_time=vst,
+                preview_entry=float(s.get("previewEntry", 0)),
+                preview_loop_start=float(s.get("previewLoopStart", 0)),
+                preview_loop_end=float(s.get("previewLoopEnd", 0)),
+                volume=float(s.get("volume", 0)),
+                fade_in_duration=float(s.get("fadeInDuration", 0)),
+                fade_in_type=int(s.get("fadeInType", 0)),
+                fade_out_duration=float(s.get("fadeOutDuration", 0)),
+                fade_out_type=int(s.get("fadeOutType", 0)),
+            )
+        except (KeyError, IndexError, TypeError) as exc:
+            raise NormalizationError(f"Invalid musictrack JSON: {exc}") from exc
+    else:
+        return MusicTrackStructure()
 
-        vst = s.get("videoStartTime", 0.0)
-        # V1 Parity: Auto-detect units (ticks vs seconds)
-        if abs(vst) > 1000:
-            vst /= 48000.0
-            logger.debug("Detected videoStartTime in ticks; converted to %.6fs", vst)
-            
-        res = MusicTrackStructure(
-            markers=s.get("markers", []),
-            signatures=[
-                MusicSignature(beats=sig["beats"], marker=sig["marker"])
-                for sig in s.get("signatures", [])
-            ],
-            sections=[
-                MusicSection(section_type=sec["sectionType"], marker=sec["marker"])
-                for sec in s.get("sections", [])
-            ],
-            start_beat=s.get("startBeat", 0),
-            end_beat=s.get("endBeat", 0),
-            video_start_time=vst,
-            preview_entry=float(s.get("previewEntry", 0)),
-            preview_loop_start=float(s.get("previewLoopStart", 0)),
-            preview_loop_end=float(s.get("previewLoopEnd", 0)),
-            volume=float(s.get("volume", 0)),
-            fade_in_duration=float(s.get("fadeInDuration", 0)),
-            fade_in_type=int(s.get("fadeInType", 0)),
-            fade_out_duration=float(s.get("fadeOutDuration", 0)),
-            fade_out_type=int(s.get("fadeOutType", 0)),
-        )
-
-        # V1/V2 unit parity & safety: if videoStartTime is 0 but startBeat is negative, 
-        # it's likely a binary CKD that needs synthesis from markers.
-        if res.video_start_time == 0.0 and res.start_beat < 0:
-            idx = abs(res.start_beat)
-            if 0 <= idx < len(res.markers):
-                vst = -(res.markers[idx] / 48.0 / 1000.0)
-                logger.info("Synthesized video_start_time from markers: %.3f s", vst)
-                res.video_start_time = vst
-        return res
-    except (KeyError, IndexError, TypeError) as exc:
-        raise NormalizationError(f"Invalid musictrack JSON: {exc}") from exc
+    # V1/V2 unit parity & safety: if videoStartTime is 0 but startBeat is negative, 
+    # it's likely a binary CKD that needs synthesis from markers.
+    if res.video_start_time == 0.0 and res.start_beat < 0:
+        idx = abs(res.start_beat)
+        if 0 <= idx < len(res.markers):
+            # V1 Parity: NO marker offset for videoStartTime synthesis
+            vst = -(res.markers[idx] / 48.0 / 1000.0)
+            logger.info("Synthesized video_start_time from markers: %.3f s", vst)
+            res.video_start_time = vst
+    return res
 
 
 def _extract_song_desc(
@@ -305,19 +305,24 @@ def _extract_karaoke_tape(
     return None
 
 
-def _discover_media(directory: str, codename: Optional[str] = None) -> MapMedia:
-    """Scan directory for media assets and populate MapMedia.
+def _discover_media(directory: str, codename: Optional[str] = None, search_root: Optional[str] = None) -> MapMedia:
+    """Scan directory (and optional search_root) for media assets and populate MapMedia.
     
     Ported from V1 source_analysis.py recursive picking logic.
     """
     media = MapMedia()
     dir_path = Path(directory)
+    # If search_root is provided (e.g. root of a bundle IPK), use it for recursive scans
+    bg_search_dir = Path(search_root) if search_root else dir_path
     codename_low = codename.lower() if codename else None
 
     # 1. Video files (.webm)
-    # V1 Parity: prioritize quality suffixes and codename match
+    # V1 Parity: prioritize quality suffixes and codename match. Scan both local and search_root.
     SUPPORTED_QUALITIES = ["ULTRA_HD", "ULTRA", "HIGH_HD", "HIGH", "MID_HD", "MID", "LOW_HD", "LOW"]
     webms = list(dir_path.rglob("*.webm"))
+    if search_root and bg_search_dir != dir_path:
+        webms.extend(list(bg_search_dir.rglob("*.webm")))
+    
     if webms:
         main_videos = []
         for w in webms:
@@ -396,25 +401,49 @@ def _discover_media(directory: str, codename: Optional[str] = None) -> MapMedia:
             media.audio_path = best_audio
             audio_found = True
 
-    # 3. & 4. Images (Cover/Coach)
-    # V1 Parity: Prefer exact codename matches to avoid bundle bleed
+    # 3. & 4. Images (Cover/Coach/Banner/Background)
+    # Collect all potential image/CKD files once to avoid discovery order issues
+    all_media_files = []
     for ext in ("*.jpg", "*.png", "*.tga", "*.ckd"):
-        all_imgs = list(dir_path.rglob(ext))
-        if not media.cover_path:
-            covers = [f for f in all_imgs if "cover" in f.name.lower()]
-            if codename_low:
-                matches = [c for c in covers if codename_low in c.name.lower()]
-                if matches: covers = matches
-            if covers:
-                media.cover_path = covers[0]
+        all_media_files.extend(list(dir_path.rglob(ext)))
+
+    def _get_best_asset(keyword: str, files: List[Path]) -> Optional[Path]:
+        candidates = [f for f in files if keyword in f.name.lower()]
+        if not candidates:
+            return None
         
-        if not media.coach_images:
-            coaches = [f for f in all_imgs if "coach_" in f.name.lower()]
-            if codename_low:
-                matches = [c for c in coaches if codename_low in c.name.lower()]
-                if matches: coaches = matches
-            if coaches:
-                media.coach_images = sorted(coaches)
+        # Priority 1: Exact codename match in filename
+        if codename_low:
+            exact_matches = [c for c in candidates if codename_low in c.name.lower()]
+            if exact_matches:
+                return exact_matches[0]
+            
+            # Priority 2: Codename in parent directory path
+            path_matches = [c for c in candidates if f"/{codename_low}/" in str(c).lower().replace("\\", "/")]
+            if path_matches:
+                return path_matches[0]
+        
+        # Priority 3: First available (fallback)
+        return candidates[0]
+
+    media.cover_path = _get_best_asset("cover", all_media_files)
+    media.banner_bkg_path = _get_best_asset("banner", all_media_files)
+    media.map_bkg_path = _get_best_asset("map_bkg", all_media_files)
+    media.cover_albumbkg_path = _get_best_asset("albumbkg", all_media_files)
+    media.cover_albumcoach_path = _get_best_asset("albumcoach", all_media_files)
+    
+    # Coaches are a list
+    all_coaches = [f for f in all_media_files if "coach_" in f.name.lower()]
+    if codename_low:
+        codename_coaches = [c for c in all_coaches if codename_low in c.name.lower()]
+        if not codename_coaches:
+            codename_coaches = [c for c in all_coaches if f"/{codename_low}/" in str(c).lower().replace("\\", "/")]
+        if codename_coaches:
+            all_coaches = codename_coaches
+            
+    media.coach_images = sorted(list(set(all_coaches)))
+
+
 
     # 5. Pictogram directory
     # V1 Parity: strictly scope to codename if possible
@@ -483,12 +512,13 @@ def normalize_sync(
 
         if is_html_source:
             # Fetch/HTML mode (OGG)
+            # V1 Parity: Always use marker-based synthesis for HTML/Fetch sources,
+            # as the metadata VST is often for the console WAV and doesn't match the OGG.
             prms = calculate_marker_preroll(music_track.markers, music_track.start_beat, include_calibration=False)
             if prms is not None:
                 audio_ms = -(prms + 85.0)
-                if video_ms == 0.0:
-                    video_ms = -prms
-                logger.info("Fetch/HTML sync: audio_offset=%.3f ms (incl. 85ms calib), video_offset=%.3f ms", audio_ms, video_ms)
+                video_ms = -prms
+                logger.info("Fetch/HTML sync (forced marker parity): audio_offset=%.3f ms (incl. 85ms calib), video_offset=%.3f ms", audio_ms, video_ms)
             else:
                 audio_ms = video_ms
                 logger.info("Fetch/HTML sync (no markers): using video_start_time for both = %.3f ms", video_ms)
@@ -496,7 +526,7 @@ def normalize_sync(
             # IPK mode (WAV/CKD)
             audio_ms = 0.0
             if video_ms == 0.0:
-                # Fallback for missing VST in binary CKDs
+                # Fallback for missing VST in binary CKDs (V1 Parity: NO 85ms calibration for video)
                 prms = calculate_marker_preroll(music_track.markers, music_track.start_beat, include_calibration=False)
                 if prms is not None:
                     video_ms = -prms
@@ -516,6 +546,7 @@ def normalize_sync(
 def normalize(
     directory: str | Path,
     codename: Optional[str] = None,
+    search_root: Optional[str | Path] = None
 ) -> NormalizedMapData:
     """Normalize an extracted directory into a canonical NormalizedMapData.
 
@@ -524,8 +555,9 @@ def normalize(
     extractor or the IPK extractor.
 
     Args:
-        directory: Path to the directory containing extracted files.
-        codename:  Optional map codename for filtering in bundle IPKs.
+        directory:   Path to the directory containing extracted files.
+        codename:    Optional map codename for filtering in bundle IPKs.
+        search_root: Optional root directory to scan for media (videos/audio).
 
     Returns:
         A fully-populated ``NormalizedMapData`` instance.
@@ -546,7 +578,8 @@ def normalize(
     song_desc = _extract_song_desc(directory, codename)
     dance_tape = _extract_dance_tape(directory, codename)
     karaoke_tape = _extract_karaoke_tape(directory, codename)
-    media = _discover_media(directory, codename)
+    search_root_str = str(search_root) if search_root else None
+    media = _discover_media(directory, codename, search_root=search_root_str)
 
     # Infer codename from song_desc if not provided
     effective_codename = codename or song_desc.map_name
@@ -600,6 +633,8 @@ def normalize(
     )
 
     # Validation
+    if not result.music_track:
+        raise NormalizationError(f"Critical data (musictrack) for '{effective_codename}' is missing")
     if not result.music_track.markers:
         raise ValidationError(
             f"MusicTrack for '{effective_codename}' has no beat markers"

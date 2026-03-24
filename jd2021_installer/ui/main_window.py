@@ -835,8 +835,8 @@ class MainWindow(QMainWindow):
             return
 
         # 1. Update videoStartTime override (in seconds)
-        original_v = self._current_map.music_track.video_start_time
-        self._current_map.video_start_time_override = original_v + (video_ms / 1000.0)
+        # V1 Parity: use the absolute offset from the spinbox directly
+        self._current_map.video_start_time_override = (video_ms / 1000.0)
 
         # 2. Launch worker to rewrite configs and reprocess audio
         from jd2021_installer.ui.workers.pipeline_workers import ApplyAndFinishWorker

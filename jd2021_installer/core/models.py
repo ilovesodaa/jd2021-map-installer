@@ -353,11 +353,16 @@ class MapMedia:
     video_path: Optional[Path] = None
     audio_path: Optional[Path] = None
     cover_path: Optional[Path] = None
-    banner_path: Optional[Path] = None
+    banner_path: Optional[Path] = None  # Legacy/Generic banner
+    banner_bkg_path: Optional[Path] = None
+    map_bkg_path: Optional[Path] = None
+    cover_albumbkg_path: Optional[Path] = None
+    cover_albumcoach_path: Optional[Path] = None
     coach_images: List[Path] = field(default_factory=list)
     pictogram_dir: Optional[Path] = None
     moves_dir: Optional[Path] = None
     map_preview_video: Optional[Path] = None
+
 
 
 @dataclass
@@ -395,5 +400,7 @@ class NormalizedMapData:
     def effective_video_start_time(self) -> float:
         """Return the override if set, otherwise the CKD value."""
         if self.video_start_time_override is not None:
-            return self.video_start_time_override
-        return self.music_track.video_start_time
+            return float(self.video_start_time_override)
+        if hasattr(self, "music_track") and self.music_track:
+            return float(self.music_track.video_start_time)
+        return 0.0

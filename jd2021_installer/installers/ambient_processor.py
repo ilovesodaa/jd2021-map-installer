@@ -181,10 +181,14 @@ def inject_ambient_actors(target_dir: Path, codename: str) -> bool:
     try:
         content = audio_isc.read_text(encoding="utf-8", errors="replace")
         
-        # Build actor blocks
+        # Build actor blocks, skipping any that already exist in the ISC
         amb_actors = ""
         for i, tpl in enumerate(sorted(amb_tpls)):
             amb_name = tpl.stem
+            # V1 Parity: skip inject if actor already exists (e.g. intro AMB injected by media_processor)
+            if f'USERFRIENDLY="{amb_name}"' in content:
+                continue
+                
             z = f"0.{i + 2:06d}"
             amb_actors += (
                 f'\t\t<ACTORS NAME="Actor">\n'
@@ -198,6 +202,9 @@ def inject_ambient_actors(target_dir: Path, codename: str) -> bool:
                 f'\t\t\t</Actor>\n'
                 f'\t\t</ACTORS>\n'
             )
+
+        if not amb_actors:
+            return False
 
         # Inject before <sceneConfigs>
         import re
