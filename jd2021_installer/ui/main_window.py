@@ -801,15 +801,19 @@ class MainWindow(QMainWindow):
     def _on_preview_toggle(self, start: bool) -> None:
         """Start or stop the embedded FFmpeg preview."""
         if start:
-            if self._current_map and self._current_map.media.video_path:
+            if self._current_map and self._current_map.media.video_path and self._current_map.media.video_path.exists():
                 video = str(self._current_map.media.video_path)
-                audio = str(self._current_map.media.audio_path) if self._current_map.media.audio_path else None
+                audio = (
+                    str(self._current_map.media.audio_path)
+                    if self._current_map.media.audio_path and self._current_map.media.audio_path.exists()
+                    else None
+                )
                 if not audio:
                     self.append_log("No audio available for preview.")
                     self._sync_refinement.set_preview_state(False)
                     return
 
-                v_override = self._current_map.effective_video_start_time
+                v_override = self._sync_refinement._video_spin.value() / 1000.0
                 a_offset = self._sync_refinement._audio_spin.value() / 1000.0
                 
                 logger.debug("Preview launch: v_override=%.3f, a_offset=%.3f", v_override, a_offset)
@@ -840,8 +844,8 @@ class MainWindow(QMainWindow):
         self._preview_debounce_timer.start(500) # 0.5s delay
 
     def _restart_preview_now(self) -> None:
-        if self._current_map and self._current_map.media.video_path:
-            v_override = self._current_map.effective_video_start_time
+        if self._current_map and self._current_map.media.video_path and self._current_map.media.video_path.exists():
+            v_override = self._sync_refinement._video_spin.value() / 1000.0
             a_offset = self._sync_refinement._audio_spin.value() / 1000.0
             
             logger.debug("Debounced preview restart...")
@@ -1164,6 +1168,10 @@ class MainWindow(QMainWindow):
 
     def append_log(self, text: str) -> None:
         """Append text to the GUI log console."""
+        # Worker status messages are already logged via _on_status_updated.
+        is_worker_status = text in PIPELINE_STEPS or (text.startswith("[") and "]" in text)
+        if not is_worker_status:
+            logger.info(text)
         self._log_console.append_log(text)
 
     def set_progress(self, value: int) -> None:

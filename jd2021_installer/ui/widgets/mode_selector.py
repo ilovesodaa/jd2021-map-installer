@@ -199,47 +199,23 @@ class ModeSelectorWidget(QWidget):
         self.inputs["html"]["asset"] = asset_row.line_edit
         self.inputs["html"]["nohud"] = nohud_row.line_edit
 
-        # Auto-detect counterparts
+        # Auto-detect counterparts (V1 parity)
         def auto_detect(source_path: str, is_asset: bool):
-            if not source_path: return
+            if not source_path:
+                return
             src = Path(source_path)
-            target_obj = self.inputs["html"]["nohud"] if is_asset else self.inputs["html"]["asset"]
-            if target_obj.text() and Path(target_obj.text()).exists(): return
-            
-            # Simple heuristic guessing: "assets" <-> "nohud" or "asset" <-> "nohud"
-            stem = src.stem.lower()
-            name_lower = src.name.lower()
-            candidate = None
-            if is_asset and ("asset" in name_lower or "hud" not in name_lower):
-                # Try replacing asset with nohud, or just append _nohud
-                for test in ["_nohud.html", "_no_hud.html", "nohud.html"]:
-                    c = src.parent / (stem.replace("assets", "nohud").replace("asset", "nohud") + test if "asset" not in stem else stem.replace("assets", "nohud").replace("asset", "nohud") + ".html")
-                    if not c.exists():
-                        c = src.parent / (stem + test)
-                    if c.exists():
-                        candidate = c
-                        break
-            elif not is_asset and "nohud" in name_lower:
-                for test in ["_assets.html", "_asset.html", "assets.html", "asset.html"]:
-                    c = src.parent / (stem.replace("nohud", "assets") + ".html")
-                    if not c.exists():
-                        c = src.parent / stem.replace("nohud", "").strip("_") / ".html"
-                    if c.exists():
-                        candidate = c
-                        break
-                        
-            # More aggressive counterpart heuristic: if there are only 2 HTML files in the dir
-            if not candidate and src.parent.exists():
-                htmls = list(src.parent.glob("*.html"))
-                if len(htmls) == 2:
-                    candidate = next(h for h in htmls if h != src)
+            asset_guess, nohud_guess = self._find_html_pair(src.parent)
 
-            if candidate and candidate.exists():
-                logger.info("Auto-detected HTML counterpart: %s", candidate)
-                target_obj.setText(str(candidate))
-                
-            if is_asset:
-                self.target_selected.emit(source_path)
+            if is_asset and not self.inputs["html"]["nohud"].text().strip() and nohud_guess:
+                self.inputs["html"]["nohud"].setText(str(nohud_guess))
+                logger.info("Auto-detected NOHUD HTML: %s", nohud_guess)
+            elif not is_asset and not self.inputs["html"]["asset"].text().strip() and asset_guess:
+                self.inputs["html"]["asset"].setText(str(asset_guess))
+                logger.info("Auto-detected Asset HTML: %s", asset_guess)
+
+            # Keep a valid target selected no matter which HTML field was browsed.
+            target = self.inputs["html"]["asset"].text().strip() or source_path
+            self.target_selected.emit(target)
 
         asset_row.path_changed.connect(lambda p: auto_detect(p, True))
         nohud_row.path_changed.connect(lambda p: auto_detect(p, False))
@@ -495,6 +471,31 @@ class ModeSelectorWidget(QWidget):
         root_path = self.inputs["manual"]["root"].text().strip()
         if root_path:
             self._on_manual_root_changed(root_path)
+
+    def _find_html_pair(self, folder: Path) -> tuple[Optional[Path], Optional[Path]]:
+        """Find Asset and NOHUD HTML files in a folder (ported from V1 behavior)."""
+        if not folder.exists() or not folder.is_dir():
+            return None, None
+
+        asset: Optional[Path] = None
+        nohud: Optional[Path] = None
+        html_files = sorted(folder.glob("*.html"), key=lambda p: p.name.lower())
+
+        for html in html_files:
+            lower = html.name.lower()
+            if "nohud" in lower and nohud is None:
+                nohud = html
+            elif "asset" in lower and asset is None:
+                asset = html
+
+        # Fallback: if names are unconventional but exactly two html files exist.
+        if len(html_files) == 2:
+            if asset is None:
+                asset = next((h for h in html_files if h != nohud), html_files[0])
+            if nohud is None:
+                nohud = next((h for h in html_files if h != asset), html_files[-1])
+
+        return asset, nohud
 
     # ------------------------------------------------------------------
     # Public API
