@@ -352,7 +352,8 @@ class MapMedia:
     """Paths to all media assets for a map."""
     video_path: Optional[Path] = None
     audio_path: Optional[Path] = None
-    cover_path: Optional[Path] = None
+    cover_generic_path: Optional[Path] = None
+    cover_online_path: Optional[Path] = None
     banner_path: Optional[Path] = None  # Legacy/Generic banner
     banner_bkg_path: Optional[Path] = None
     map_bkg_path: Optional[Path] = None

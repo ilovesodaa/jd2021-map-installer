@@ -426,7 +426,16 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
         # Priority 3: First available (fallback)
         return candidates[0]
 
-    media.cover_path = _get_best_asset("cover", all_media_files)
+    media.cover_generic_path = _get_best_asset("cover_generic", all_media_files)
+    media.cover_online_path = _get_best_asset("cover_online", all_media_files)
+    
+    # Fallback if specific covers missing
+    if not media.cover_generic_path or not media.cover_online_path:
+        general_cover = _get_best_asset("cover", all_media_files)
+        if general_cover:
+            if not media.cover_generic_path: media.cover_generic_path = general_cover
+            if not media.cover_online_path: media.cover_online_path = general_cover
+
     media.banner_bkg_path = _get_best_asset("banner", all_media_files)
     media.map_bkg_path = _get_best_asset("map_bkg", all_media_files)
     media.cover_albumbkg_path = _get_best_asset("albumbkg", all_media_files)

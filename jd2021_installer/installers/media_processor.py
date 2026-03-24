@@ -18,6 +18,11 @@ import wave
 from pathlib import Path
 from typing import Callable, Optional
 
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+
 from jd2021_installer.core.config import AppConfig
 from jd2021_installer.core.exceptions import MediaProcessingError
 from jd2021_installer.core.models import (
@@ -913,5 +918,88 @@ def copy_moves(
         logger.info("Merged %d gesture/msm file(s) from %s into PC/", total_copied, src_root)
 
     return total_copied
+
+
+def process_menu_art(target_dir: str | Path, codename: str) -> None:
+    """Validate, heal, and duplicate MenuArt textures for parity.
+
+    Ensures both cover_generic and cover_online exist, and re-saves
+    all covers as 32-bit RGBA TGAs to ensure game engine compatibility.
+    """
+    tex_dir = Path(target_dir) / "menuart" / "textures"
+    if not tex_dir.is_dir():
+        logger.warning("MenuArt textures directory not found at %s", tex_dir)
+        return
+
+    expected_suffixes = [
+        "cover_generic", "cover_online", "cover_albumbkg",
+        "cover_albumcoach", "banner_bkg", "map_bkg"
+    ]
+    expected_tgas = [f"{codename}_{s}.tga" for s in expected_suffixes]
+
+    # Build case-insensitive lookup
+    actual_files = list(tex_dir.iterdir())
+    actual_lower_map = {f.name.lower(): f for f in actual_files}
+
+    found_tgas = {}
+    for expected in expected_tgas:
+        actual_path = actual_lower_map.get(expected.lower())
+        if actual_path:
+            # Fix case mismatch
+            if actual_path.name != expected:
+                new_path = tex_dir / expected
+                actual_path.rename(new_path)
+                actual_path = new_path
+            found_tgas[expected.lower()] = actual_path
+            logger.debug("Found MenuArt: %s", expected)
+        else:
+            logger.debug("Missing MenuArt: %s", expected)
+
+    # Online/Generic cross-copy logic from V1
+    online_key = f"{codename}_cover_online.tga".lower()
+    generic_key = f"{codename}_cover_generic.tga".lower()
+
+    if online_key not in found_tgas and generic_key in found_tgas:
+        dst = tex_dir / f"{codename}_cover_online.tga"
+        shutil.copy2(found_tgas[generic_key], dst)
+        found_tgas[online_key] = dst
+        logger.info("Healed MenuArt: Created cover_online from cover_generic")
+
+    elif generic_key not in found_tgas and online_key in found_tgas:
+        dst = tex_dir / f"{codename}_cover_generic.tga"
+        shutil.copy2(found_tgas[online_key], dst)
+        found_tgas[generic_key] = dst
+        logger.info("Healed MenuArt: Created cover_generic from cover_online")
+
+    # Map/Banner fallback logic
+    map_bkg_key = f"{codename}_map_bkg.tga".lower()
+    banner_bkg_key = f"{codename}_banner_bkg.tga".lower()
+    
+    for key, name in [(map_bkg_key, "map_bkg"), (banner_bkg_key, "banner_bkg")]:
+        if key not in found_tgas and generic_key in found_tgas:
+            dst = tex_dir / f"{codename}_{name}.tga"
+            shutil.copy2(found_tgas[generic_key], dst)
+            found_tgas[key] = dst
+            logger.info("Healed MenuArt: Created %s from cover_generic", name)
+
+    # Re-save as 32-bit RGBA TGA (V1 Parity)
+    if Image is None:
+        logger.warning("Pillow not installed; skipping TGA re-save/healing")
+        return
+
+    resaved = 0
+    for path in found_tgas.values():
+        try:
+            with Image.open(path) as img:
+                if img.mode != 'RGBA':
+                    img = img.convert('RGBA')
+                # Save as uncompressed TGA
+                img.save(path, format='TGA')
+                resaved += 1
+        except Exception as e:
+            logger.warning("Could not re-save MenuArt %s: %s", path.name, e)
+
+    if resaved:
+        logger.info("Re-saved %d MenuArt TGA(s) as uncompressed 32-bit RGBA", resaved)
 
 
