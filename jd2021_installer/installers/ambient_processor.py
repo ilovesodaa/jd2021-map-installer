@@ -10,12 +10,24 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import wave
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from jd2021_installer.installers.tape_converter import _convert_value, _load_ckd_json
 
 logger = logging.getLogger("jd2021.installers.ambient_processor")
+
+
+def _path_has_codename_component(path: Path, codename: str) -> bool:
+    parts = [p.lower() for p in path.as_posix().split("/") if p]
+    return codename.lower() in parts
+
+
+def _filename_matches_codename(path: Path, codename: str) -> bool:
+    cn = codename.lower()
+    return bool(re.match(rf"^{re.escape(cn)}(?:[^a-z0-9]|$)", path.name.lower()))
 
 
 def process_ambient_tpl(
@@ -230,6 +242,8 @@ def process_ambient_directory(source_dir: Path, target_dir: Path, codename: str)
     # 1. Process existing .tpl.ckd templates
     tpl_bases = set()
     for ckd in source_dir.rglob("amb_*.tpl.ckd"):
+        if not (_path_has_codename_component(ckd, codename) or _filename_matches_codename(ckd, codename)):
+            continue
         try:
             data = _load_ckd_json(ckd)
             ilu_c, tpl_c, audio_files = process_ambient_tpl(data, codename, ckd.name)
@@ -243,6 +257,37 @@ def process_ambient_directory(source_dir: Path, target_dir: Path, codename: str)
 
                 ilu_path.write_text(ilu_c, encoding="utf-8")
                 tpl_path.write_text(tpl_c, encoding="utf-8")
+
+                # V1 parity: resolve referenced AMB audio paths from soundList.
+                from jd2021_installer.installers.media_processor import extract_ckd_audio_v1
+                for ref in audio_files:
+                    ref_name = Path(str(ref).replace("\\", "/")).name
+                    if not ref_name.lower().endswith(".wav"):
+                        continue
+                    target_wav = amb_out_dir / ref_name
+                    if target_wav.exists():
+                        continue
+
+                    ckd_candidate = ckd.parent / f"{ref_name}.ckd"
+                    decoded = None
+                    if ckd_candidate.exists():
+                        decoded = extract_ckd_audio_v1(ckd_candidate, amb_out_dir)
+
+                    if decoded and Path(decoded).exists():
+                        decoded_path = Path(decoded)
+                        if decoded_path != target_wav:
+                            if target_wav.exists():
+                                target_wav.unlink()
+                            decoded_path.rename(target_wav)
+                        logger.info("Decoded AMB referenced audio: %s", target_wav.name)
+                    else:
+                        # Keep parity with V1: create a tiny silent fallback when referenced audio is missing.
+                        with wave.open(str(target_wav), "w") as wf:
+                            wf.setnchannels(1)
+                            wf.setsampwidth(2)
+                            wf.setframerate(48000)
+                            wf.writeframes(b"\x00\x00" * 4800)
+                        logger.info("Created silent AMB placeholder: %s", target_wav.name)
                 
                 logger.debug("Processed AMB template: %s", ckd.name)
                 count += 1
@@ -252,6 +297,8 @@ def process_ambient_directory(source_dir: Path, target_dir: Path, codename: str)
     # 2. Process "orphan" .wav.ckd files (no corresponding .tpl.ckd)
     for wav_ckd in source_dir.rglob("*.wav.ckd"):
         if "/amb/" not in str(wav_ckd).lower().replace("\\", "/"):
+            continue
+        if not (_path_has_codename_component(wav_ckd, codename) or _filename_matches_codename(wav_ckd, codename)):
             continue
             
         base = wav_ckd.name.replace(".wav.ckd", "")

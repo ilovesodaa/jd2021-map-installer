@@ -11,6 +11,7 @@ import glob
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -31,6 +32,8 @@ from jd2021_installer.core.models import (
     MusicTrackStructure,
     NormalizedMapData,
     SongDescription,
+    SoundSetClip,
+    TapeReferenceClip,
 )
 from jd2021_installer.parsers.binary_ckd import parse_binary_ckd
 
@@ -79,19 +82,69 @@ def _prefer_non_legacy(paths: List[str]) -> List[str]:
 def _filter_by_codename(
     paths: List[str], codename: Optional[str], base_dir: Optional[str] = None
 ) -> List[str]:
-    """Filter paths to those containing codename as a directory component or in filename."""
+    """Filter paths to codename-scoped matches (exact path component or safe filename prefix)."""
     if not codename:
         return paths
     cn_lower = codename.lower()
+
+    def _path_has_codename_component(path_str: str) -> bool:
+        rel = (os.path.relpath(path_str, base_dir) if base_dir else path_str).replace("\\", "/").lower()
+        parts = [p for p in rel.split("/") if p]
+        return cn_lower in parts
+
+    def _filename_matches_codename(path_str: str) -> bool:
+        name = os.path.basename(path_str).lower()
+        # Prevent collisions like "apt" matching "aptalt".
+        return bool(re.match(rf"^{re.escape(cn_lower)}(?:[^a-z0-9]|$)", name))
+
     filtered = []
     for p in paths:
-        # Normalize relative path for easier matching
-        rel = (os.path.relpath(p, base_dir) if base_dir else p).replace("\\", "/").lower()
-        parts = rel.split("/")
-        # Match if codename is ANY component of the path OR appears in the filename
-        if any(cn_lower in part for part in parts) or cn_lower in os.path.basename(p).lower():
+        if _path_has_codename_component(p) or _filename_matches_codename(p):
             filtered.append(p)
     return filtered
+
+
+def _resolve_map_source_dir(directory: Path, codename: Optional[str]) -> Path:
+    """Resolve the most likely map-local directory for a codename within extracted sources."""
+    if not codename:
+        return directory
+
+    cn_lower = codename.lower()
+    parts = [p.lower() for p in directory.parts]
+    if cn_lower in parts:
+        return directory
+
+    candidates: List[Path] = []
+
+    for p in directory.rglob("*"):
+        if not p.is_dir():
+            continue
+        p_parts = [x.lower() for x in p.parts]
+        if cn_lower not in p_parts:
+            continue
+
+        try:
+            idx = p_parts.index("world")
+            if idx + 2 < len(p_parts) and p_parts[idx + 1] == "maps" and p_parts[idx + 2] == cn_lower:
+                candidates.append(p)
+                continue
+            if idx + 2 < len(p_parts) and p_parts[idx + 1].startswith("jd") and p_parts[idx + 2] == cn_lower:
+                candidates.append(p)
+                continue
+        except ValueError:
+            pass
+
+        if p.name.lower() == cn_lower:
+            candidates.append(p)
+
+    if not candidates:
+        return directory
+
+    # Prefer shallowest candidate relative to extraction root.
+    candidates.sort(key=lambda c: len(c.relative_to(directory).parts))
+    resolved = candidates[0]
+    logger.debug("Resolved map source dir for '%s': %s", codename, resolved)
+    return resolved
 
 
 def _find_ckd_files(
@@ -315,6 +368,74 @@ def _extract_karaoke_tape(
     return None
 
 
+def _extract_cinematic_tape(
+    directory: str, codename: Optional[str] = None
+) -> Optional[CinematicTape]:
+    """Find and parse a mainsequence/cinematic tape CKD -> CinematicTape (or None)."""
+    ckd_paths = _find_ckd_files(directory, "*mainsequence*tape.ckd", codename)
+    if not ckd_paths:
+        ckd_paths = _find_ckd_files(directory, "*mainsequence*.tape.ckd", codename)
+    if not ckd_paths:
+        ckd_paths = _find_ckd_files(directory, "*mainsequence*.ckd", codename)
+    if not ckd_paths:
+        return None
+
+    data = load_ckd(ckd_paths[0])
+    if isinstance(data, CinematicTape):
+        return data
+
+    if not isinstance(data, dict):
+        return None
+
+    clips = []
+    tape_dict = data
+    if "Clips" not in tape_dict and "COMPONENTS" in tape_dict:
+        # Some JSON CKD payloads store tape data under component wrappers.
+        for comp in tape_dict.get("COMPONENTS", []):
+            if "JD_TapeComponent_Template" in comp:
+                tape_dict = comp["JD_TapeComponent_Template"].get("tape", tape_dict)
+                break
+
+    for raw_clip in tape_dict.get("Clips", []):
+        if not isinstance(raw_clip, dict):
+            continue
+
+        clip_class = str(raw_clip.get("__class", "")).lower()
+        if clip_class == "soundsetclip":
+            clips.append(
+                SoundSetClip(
+                    id=int(raw_clip.get("Id", 0)),
+                    track_id=int(raw_clip.get("TrackId", 0)),
+                    is_active=int(raw_clip.get("IsActive", 1)),
+                    start_time=int(raw_clip.get("StartTime", 0)),
+                    duration=int(raw_clip.get("Duration", 0)),
+                    sound_set_path=str(raw_clip.get("SoundSetPath", "")),
+                    sound_channel=int(raw_clip.get("SoundChannel", 0)),
+                    start_offset=int(raw_clip.get("StartOffset", 0)),
+                    stops_on_end=int(raw_clip.get("StopsOnEnd", 0)),
+                    accounted_for_duration=int(raw_clip.get("AccountedForDuration", 0)),
+                )
+            )
+        elif clip_class == "tapereferenceclip":
+            clips.append(
+                TapeReferenceClip(
+                    id=int(raw_clip.get("Id", 0)),
+                    track_id=int(raw_clip.get("TrackId", 0)),
+                    is_active=int(raw_clip.get("IsActive", 1)),
+                    start_time=int(raw_clip.get("StartTime", 0)),
+                    duration=int(raw_clip.get("Duration", 0)),
+                    path=str(raw_clip.get("Path", "")),
+                    loop=int(raw_clip.get("Loop", 0)),
+                )
+            )
+
+    return CinematicTape(
+        clips=clips,
+        map_name=str(tape_dict.get("MapName", codename or "Unknown")),
+        soundwich_event=str(tape_dict.get("SoundwichEvent", "")),
+    )
+
+
 def _discover_media(directory: str, codename: Optional[str] = None, search_root: Optional[str] = None) -> MapMedia:
     """Scan directory (and optional search_root) for media assets and populate MapMedia.
     
@@ -325,6 +446,17 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
     # If search_root is provided (e.g. root of a bundle IPK), use it for recursive scans
     bg_search_dir = Path(search_root) if search_root else dir_path
     codename_low = codename.lower() if codename else None
+
+    def _path_has_codename_component(path: Path) -> bool:
+        if not codename_low:
+            return True
+        parts = [p.lower() for p in path.as_posix().split("/") if p]
+        return codename_low in parts
+
+    def _filename_matches_codename(path: Path) -> bool:
+        if not codename_low:
+            return True
+        return bool(re.match(rf"^{re.escape(codename_low)}(?:[^a-z0-9]|$)", path.name.lower()))
 
     # 1. Video files (.webm)
     # V1 Parity: prioritize quality suffixes and codename match. Scan both local and search_root.
@@ -346,10 +478,10 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
         if main_videos:
             # Filter by codename first if in bundle
             if codename_low:
-                matches = [v for v in main_videos if v.name.lower().startswith(codename_low)]
+                matches = [v for v in main_videos if _filename_matches_codename(v)]
                 if not matches:
                     # V1 Parity: Path-based scoping for bundle IPKs (e.g. world/maps/MapName/videos/MapName.webm)
-                    matches = [v for v in main_videos if f"/{codename_low}/" in str(v).lower().replace("\\", "/")]
+                    matches = [v for v in main_videos if _path_has_codename_component(v)]
                 
                 if matches:
                     main_videos = matches
@@ -416,10 +548,10 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
             if exact_name_matches:
                 matches = exact_name_matches
             else:
-                matches = [a for a in filtered if a.name.lower().startswith(codename_low)]
+                matches = [a for a in filtered if _filename_matches_codename(a)]
             if not matches:
                 # Path-based scoping for deeply nested IPK structures
-                matches = [a for a in filtered if f"/{codename_low}/" in str(a).lower().replace("\\", "/")]
+                matches = [a for a in filtered if _path_has_codename_component(a)]
             if matches:
                 filtered = matches
             else:
@@ -451,12 +583,12 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
         
         # Priority 1: Exact codename match in filename
         if codename_low:
-            exact_matches = [c for c in candidates if codename_low in c.name.lower()]
+            exact_matches = [c for c in candidates if _filename_matches_codename(c)]
             if exact_matches:
                 return exact_matches[0]
             
             # Priority 2: Codename in parent directory path
-            path_matches = [c for c in candidates if f"/{codename_low}/" in str(c).lower().replace("\\", "/")]
+            path_matches = [c for c in candidates if _path_has_codename_component(c)]
             if path_matches:
                 return path_matches[0]
         
@@ -481,9 +613,9 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
     # Coaches are a list
     all_coaches = [f for f in all_media_files if "coach_" in f.name.lower()]
     if codename_low:
-        codename_coaches = [c for c in all_coaches if codename_low in c.name.lower()]
+        codename_coaches = [c for c in all_coaches if _filename_matches_codename(c)]
         if not codename_coaches:
-            codename_coaches = [c for c in all_coaches if f"/{codename_low}/" in str(c).lower().replace("\\", "/")]
+            codename_coaches = [c for c in all_coaches if _path_has_codename_component(c)]
         if codename_coaches:
             all_coaches = codename_coaches
 
@@ -501,7 +633,7 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
     media.pictogram_dir = None
     picto_candidates = [d for d in dir_path.rglob("*") if d.is_dir() and "picto" in d.name.lower()]
     if codename_low:
-        picto_candidates = [d for d in picto_candidates if codename_low in str(d).lower().replace("\\", "/")]
+        picto_candidates = [d for d in picto_candidates if _path_has_codename_component(d)]
     
     if picto_candidates:
         media.pictogram_dir = picto_candidates[0]
@@ -509,7 +641,7 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
         # Fallback: finding parent of any picto CKD
         picto_files = list(dir_path.rglob("*picto*.ckd"))
         if codename_low:
-            picto_files = [f for f in picto_files if codename_low in str(f).lower().replace("\\", "/")]
+            picto_files = [f for f in picto_files if _path_has_codename_component(f)]
         if picto_files:
             media.pictogram_dir = picto_files[0].parent
 
@@ -517,7 +649,7 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
     media.moves_dir = None
     move_candidates = [d for d in dir_path.rglob("*") if d.is_dir() and "moves" in d.name.lower()]
     if codename_low:
-        move_candidates = [d for d in move_candidates if codename_low in str(d).lower().replace("\\", "/")]
+        move_candidates = [d for d in move_candidates if _path_has_codename_component(d)]
     if move_candidates:
         media.moves_dir = move_candidates[0]
 
@@ -561,26 +693,35 @@ def normalize_sync(
     if music_track:
         if is_html_source:
             # Fetch/HTML mode (OGG)
-            # V1 Parity: use markers for audio trim calibration (OGG codec delay)
-            prms = calculate_marker_preroll(music_track.markers, music_track.start_beat, include_calibration=False)
-            if prms is not None:
-                audio_ms = -prms
-            else:
-                # Fallback to metadata if no markers
-                audio_ms = music_track.video_start_time * 1000.0
+            # V1 parity: marker-based sync for HTML mode.
+            # Audio uses calibration (OGG delay), video does not.
+            prms_video = calculate_marker_preroll(
+                music_track.markers,
+                music_track.start_beat,
+                include_calibration=False,
+            )
+            prms_audio = calculate_marker_preroll(
+                music_track.markers,
+                music_track.start_beat,
+                include_calibration=True,
+            )
 
-            # V1 Parity: PRESERVE metadata videoStartTime if non-zero.
-            # Many maps have custom offsets for browser sync that should be kept.
             metadata_ms = music_track.video_start_time * 1000.0
-            if abs(metadata_ms) > 0.1:
-                video_ms = metadata_ms
-                logger.info("Fetch/HTML sync (metadata preserved): audio_offset=%.3f ms (marker), video_offset=%.3f ms (metadata)", audio_ms, video_ms)
-            elif prms is not None:
-                video_ms = -prms
-                logger.info("Fetch/HTML sync (synthesized): audio_offset=%.3f ms (marker), video_offset=%.3f ms (marker)", audio_ms, video_ms)
+            if prms_audio is not None:
+                audio_ms = -prms_audio
+            else:
+                audio_ms = metadata_ms
+
+            if prms_video is not None:
+                video_ms = -prms_video
+                logger.info(
+                    "Fetch/HTML sync (marker-driven): audio_offset=%.3f ms (marker+cal), video_offset=%.3f ms (marker)",
+                    audio_ms,
+                    video_ms,
+                )
             else:
                 video_ms = metadata_ms
-                logger.info("Fetch/HTML sync (fallback): using metadata for both = %.3f ms", video_ms)
+                logger.info("Fetch/HTML sync (fallback): using metadata offsets = %.3f ms", video_ms)
 
         else:
             # Binary Mode (IPK / WAV)
@@ -631,19 +772,34 @@ def normalize(
         ValidationError:    If the normalized data fails validation.
     """
     directory = str(directory)
-    source_dir = Path(directory)
+    source_root = Path(directory)
+    source_root_str = str(source_root)
+
+    # V1 parity: in extracted bundle roots, resolve to this map's subtree to avoid cross-map bleed.
+    map_source_dir = _resolve_map_source_dir(source_root, codename)
+    source_dir = map_source_dir
+    source_dir_str = str(source_dir)
 
     # 1. & 2. Extract basic metadata
     try:
-        music_track = _extract_music_track(directory, codename)
+        music_track = _extract_music_track(source_root_str, codename)
     except NormalizationError:
         music_track = None
 
-    song_desc = _extract_song_desc(directory, codename)
-    dance_tape = _extract_dance_tape(directory, codename)
-    karaoke_tape = _extract_karaoke_tape(directory, codename)
-    search_root_str = str(search_root) if search_root else None
-    media = _discover_media(directory, codename, search_root=search_root_str)
+    song_desc = _extract_song_desc(source_root_str, codename)
+    dance_tape = _extract_dance_tape(source_root_str, codename)
+    karaoke_tape = _extract_karaoke_tape(source_root_str, codename)
+    cinematic_tape = _extract_cinematic_tape(source_root_str, codename)
+
+    # Media discovery uses the resolved map subtree first, with full extraction root
+    # as search_root fallback for assets that live outside world/maps/<codename>.
+    if search_root:
+        search_root_str = str(search_root)
+    elif source_dir != source_root:
+        search_root_str = source_root_str
+    else:
+        search_root_str = None
+    media = _discover_media(source_dir_str, codename, search_root=search_root_str)
 
     # Infer codename from song_desc if not provided
     effective_codename = codename or song_desc.map_name
@@ -662,7 +818,7 @@ def normalize(
     # V1 Parity: Detect whether the source contains real autodance data.
     # Many sources ship minimal stub CKDs that should be ignored.
     has_autodance = False
-    ad_tpls = _find_ckd_files(directory, "*autodance*.tpl.ckd", codename)
+    ad_tpls = _find_ckd_files(source_root_str, "*autodance*.tpl.ckd", codename)
     if ad_tpls:
         try:
             ad_data = load_ckd(ad_tpls[0])
@@ -676,7 +832,7 @@ def normalize(
     if not has_autodance:
         # Check for separate autodance data files as fallback
         for ext in ("adtape", "advideo", "adrecording"):
-            if _find_ckd_files(directory, f"*.{ext}.ckd", codename):
+            if _find_ckd_files(source_root_str, f"*.{ext}.ckd", codename):
                 has_autodance = True
                 break
 
@@ -689,10 +845,11 @@ def normalize(
         music_track=music_track,
         dance_tape=dance_tape,
         karaoke_tape=karaoke_tape,
+        cinematic_tape=cinematic_tape,
         media=media,
         sync=sync_data,
         video_start_time_override=sync_data.video_ms / 1000.0,
-        source_dir=Path(directory),
+        source_dir=source_root,
         has_autodance=has_autodance,
     )
 
