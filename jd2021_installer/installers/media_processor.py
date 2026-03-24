@@ -673,8 +673,46 @@ def generate_cover_tga(
 # vgmstream — Xbox 360 XMA2 audio decoding
 # ---------------------------------------------------------------------------
 
-# Default path relative to project root; can be overridden via AppConfig
-VGMSTREAM_DEFAULT_PATH = Path("tools/vgmstream/vgmstream-cli.exe")
+# Default paths relative to project root (V1 parity)
+VGMSTREAM_DEFAULT_PATHS = (
+    Path("tools/vgmstream/vgmstream-cli.exe"),
+    Path("tools/vgmstream/vgmstream.exe"),
+)
+
+
+def _resolve_vgmstream_binary(vgmstream_path: Optional[str | Path] = None) -> Path:
+    """Locate a usable vgmstream binary.
+
+    V1 parity:
+    - Prefer local tools/vgmstream binaries.
+    - Fall back to sibling V1 repo tool path if present.
+    """
+    if vgmstream_path:
+        candidate = Path(vgmstream_path).expanduser().resolve()
+        if candidate.exists():
+            return candidate
+
+    repo_root = Path(__file__).resolve().parents[2]
+    candidates = [repo_root / rel for rel in VGMSTREAM_DEFAULT_PATHS]
+
+    # Common local fallback: sibling V1 repository with bundled vgmstream.exe
+    candidates.append(repo_root.parent / "jd2021-map-installerV1" / "tools" / "vgmstream" / "vgmstream.exe")
+
+    # Legacy local setup path from V1
+    candidates.append(
+        repo_root / "3rdPartyTools" / "jd2021pc tools" / "JDTools - 1.9.0" / "bin" / "vgmstream.exe"
+    )
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    checked = "\n  - ".join(str(p) for p in candidates)
+    raise MediaProcessingError(
+        "vgmstream binary not found. Checked:\n"
+        f"  - {checked}\n"
+        "Install vgmstream in tools/vgmstream/ or keep the V1 tools folder available."
+    )
 
 
 # Ported from V1: _extract_ckd_audio
@@ -809,12 +847,7 @@ def decode_xma2_audio(
     output_wav = Path(output_wav)
     output_wav.parent.mkdir(parents=True, exist_ok=True)
 
-    vgm_bin = Path(vgmstream_path).resolve() if vgmstream_path else VGMSTREAM_DEFAULT_PATH.resolve()
-    if not vgm_bin.exists():
-        raise MediaProcessingError(
-            f"vgmstream-cli binary not found at {vgm_bin}. "
-            "Place vgmstream-cli.exe in tools/vgmstream/."
-        )
+    vgm_bin = _resolve_vgmstream_binary(vgmstream_path)
 
     cmd = [str(vgm_bin), "-o", str(output_wav), str(input_ckd)]
     logger.info("Decoding X360 audio: %s", input_ckd.name)

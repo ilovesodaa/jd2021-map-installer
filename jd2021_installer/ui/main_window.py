@@ -713,7 +713,8 @@ class MainWindow(QMainWindow):
 
     def _on_install_finished(self, success: bool) -> None:
         if success:
-            self._feedback_panel.update_checklist_step("Finalizing Offsets", StepStatus.DONE)
+            if "Finalizing Offsets" in self._feedback_panel._step_items:
+                self._feedback_panel.update_checklist_step("Finalizing Offsets", StepStatus.DONE)
             self._set_status("Installation complete!")
             self.append_log("✅  Map installed successfully!")
 
@@ -927,7 +928,8 @@ class MainWindow(QMainWindow):
         self._lock_ui(False)
         if success:
             logger.info("✅  Offsets applied and audio reprocessed.")
-            self._feedback_panel.update_checklist_step("Finalizing Offsets", StepStatus.DONE)
+            if "Finalizing Offsets" in self._feedback_panel._step_items:
+                self._feedback_panel.update_checklist_step("Finalizing Offsets", StepStatus.DONE)
             # V1 Parity: Don't auto-restart preview anymore after apply
             self._prompt_cleanup()
 
