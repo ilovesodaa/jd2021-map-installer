@@ -1003,6 +1003,10 @@ class MainWindow(QMainWindow):
         self._lock_ui(False)
         if success:
             logger.info("✅  Offsets applied and audio reprocessed.")
+            if len(self._nav_maps) > 1:
+                for map_data in self._nav_maps:
+                    if map_data.codename in self._feedback_panel._step_items:
+                        self._feedback_panel.update_checklist_step(map_data.codename, StepStatus.DONE)
             if "Finalizing Offsets" in self._feedback_panel._step_items:
                 self._feedback_panel.update_checklist_step("Finalizing Offsets", StepStatus.DONE)
             # V1 Parity: Don't auto-restart preview anymore after apply
