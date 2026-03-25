@@ -2,10 +2,19 @@ import unittest
 import os
 import shutil
 import tempfile
+from unittest.mock import patch
 from pathlib import Path
 from jd2021_installer.extractors.archive_ipk import _detect_maps_in_dir
 from jd2021_installer.parsers.normalizer import _discover_media, _find_ckd_files
-from jd2021_installer.core.models import MapMedia
+from jd2021_installer.core.models import (
+    MapMedia,
+    MapSync,
+    MusicTrackStructure,
+    NormalizedMapData,
+    SongDescription,
+)
+from jd2021_installer.core.config import AppConfig
+from jd2021_installer.ui.workers.pipeline_workers import install_map_to_game
 
 class TestBundleParity(unittest.TestCase):
     def setUp(self):
@@ -98,6 +107,40 @@ class TestBundleParity(unittest.TestCase):
         self.assertIn(coach, media.coach_images)
         self.assertEqual(media.pictogram_dir, pictos)
         self.assertEqual(media.moves_dir, moves)
+
+    def test_menuart_candidates_inside_pictos_are_copied_to_menuart_textures(self):
+        source_dir = self.test_dir / "source"
+        pictos_dir = source_dir / "timeline" / "pictos"
+        pictos_dir.mkdir(parents=True)
+        art_file = pictos_dir / "MapA_cover_generic.png"
+        art_file.write_bytes(b"png")
+
+        game_root = self.test_dir / "game"
+        game_root.mkdir(parents=True)
+
+        map_data = NormalizedMapData(
+            codename="MapA",
+            song_desc=SongDescription(map_name="MapA", title="MapA", artist="Artist"),
+            music_track=MusicTrackStructure(markers=[0, 2400, 4800], start_beat=0, end_beat=2),
+            media=MapMedia(pictogram_dir=pictos_dir),
+            sync=MapSync(audio_ms=0.0, video_ms=0.0),
+            source_dir=source_dir,
+        )
+        config = AppConfig(game_directory=game_root, cache_directory=self.test_dir / "cache")
+
+        with patch("jd2021_installer.ui.workers.pipeline_workers.pre_install_cleanup"), \
+             patch("jd2021_installer.ui.workers.pipeline_workers.reprocess_audio"), \
+             patch("jd2021_installer.installers.tape_converter.auto_convert_tapes"), \
+             patch("jd2021_installer.installers.ambient_processor.process_ambient_directory"), \
+             patch("jd2021_installer.installers.texture_decoder.decode_menuart_textures"), \
+             patch("jd2021_installer.installers.texture_decoder.decode_pictograms"), \
+             patch("jd2021_installer.installers.media_processor.process_menu_art"), \
+             patch("jd2021_installer.installers.sku_scene.register_map"), \
+             patch("jd2021_installer.installers.autodance_processor.process_stape_file"):
+            install_map_to_game(map_data, game_root, config)
+
+        copied = game_root / "data" / "world" / "maps" / "MapA" / "menuart" / "textures" / "MapA_cover_generic.png"
+        self.assertTrue(copied.exists())
 
 if __name__ == "__main__":
     unittest.main()

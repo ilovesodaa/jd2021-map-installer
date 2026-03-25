@@ -103,6 +103,38 @@ class TestNormalizerEdgeCases:
 
         assert media.audio_path == sidecar_audio
 
+    def test_autodance_stub_files_do_not_enable_autodance(self, tmp_path: Path) -> None:
+        import json
+
+        mt_data = {
+            "COMPONENTS": [{
+                "trackData": {
+                    "structure": {
+                        "markers": [0, 2400, 4800],
+                        "signatures": [{"beats": 4, "marker": 0}],
+                        "sections": [{"sectionType": 0, "marker": 0}],
+                        "startBeat": 0,
+                        "endBeat": 2,
+                        "videoStartTime": 0.0,
+                    }
+                }
+            }]
+        }
+        sd_data = {
+            "COMPONENTS": [{
+                "MapName": "NoAdMap",
+                "Title": "No AD",
+                "Artist": "Artist",
+                "NumCoach": 1,
+            }]
+        }
+        (tmp_path / "NoAdMap_musictrack.tpl.ckd").write_text(json.dumps(mt_data), encoding="utf-8")
+        (tmp_path / "NoAdMap_songdesc.tpl.ckd").write_text(json.dumps(sd_data), encoding="utf-8")
+        (tmp_path / "NoAdMap.adtape.ckd").write_bytes(b"{}")
+
+        result = normalize(tmp_path, codename="NoAdMap")
+        assert result.has_autodance is False
+
 
 class TestNormalizerMusicTrack:
     """Detailed music track parsing tests."""

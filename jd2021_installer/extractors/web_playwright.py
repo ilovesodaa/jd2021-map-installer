@@ -638,12 +638,15 @@ class WebPlaywrightExtractor(BaseExtractor):
         return self._codename
 
     @staticmethod
-    def _extract_scene_zips(src_dir: Path, dst_dir: Path) -> None:
+    def _extract_scene_zips(src_dir: Path, dst_dir: Optional[Path] = None) -> None:
         """Extract MAIN_SCENE_*.zip files from src_dir into dst_dir.
 
         Mirrors V1 ``step_03_extract_scenes``.  After downloading, the
         normalizer expects loose ``.ckd`` files — not a ZIP.
         """
+        if dst_dir is None:
+            dst_dir = src_dir
+
         scene_zips: list[str] = []
         for f in os.listdir(src_dir):
             if "SCENE" in f.upper() and f.endswith(".zip"):

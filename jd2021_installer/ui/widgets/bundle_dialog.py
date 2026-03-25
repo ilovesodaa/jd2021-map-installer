@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QLabel,
     QDialogButtonBox,
+    QCheckBox,
 )
 from PyQt6.QtCore import Qt
 
@@ -30,7 +31,18 @@ class BundleSelectDialog(QDialog):
         lbl = QLabel(f"The archive <b>{ipk_name}</b> contains multiple maps.<br>Please select the maps you want to install.")
         layout.addWidget(lbl)
 
+        controls = QHBoxLayout()
+        self._select_all = QCheckBox("Select All")
+        self._select_all.setChecked(True)
+        self._select_all.toggled.connect(self._on_select_all_toggled)
+        controls.addWidget(self._select_all)
+        self._count_label = QLabel()
+        controls.addStretch(1)
+        controls.addWidget(self._count_label)
+        layout.addLayout(controls)
+
         self.list_widget = QListWidget()
+        self.list_widget.itemChanged.connect(self._on_item_changed)
         for m in maps_found:
             item = QListWidgetItem(m)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -43,6 +55,29 @@ class BundleSelectDialog(QDialog):
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
+        self._refresh_selection_state()
+
+    def _on_select_all_toggled(self, checked: bool) -> None:
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            item.setCheckState(state)
+        self._refresh_selection_state()
+
+    def _on_item_changed(self, _: QListWidgetItem) -> None:
+        self._refresh_selection_state()
+
+    def _refresh_selection_state(self) -> None:
+        total = self.list_widget.count()
+        selected = 0
+        for i in range(total):
+            if self.list_widget.item(i).checkState() == Qt.CheckState.Checked:
+                selected += 1
+        self._count_label.setText(f"{selected} of {total} selected")
+        all_selected = total > 0 and selected == total
+        self._select_all.blockSignals(True)
+        self._select_all.setChecked(all_selected)
+        self._select_all.blockSignals(False)
 
     def get_selected_maps(self) -> List[str]:
         selected = []

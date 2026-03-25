@@ -360,6 +360,7 @@ class BatchInstallWorker(QObject):
                     self.status.emit(f"[{i+1}/{total}] Processing {candidate.name}...")
                     
                     map_dir = candidate
+                    map_names_for_candidate: list[str] = []
                     if candidate.is_file() and candidate.suffix.lower() == ".ipk":
                         # Extract IPK to temp dir
                         from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor
@@ -373,29 +374,27 @@ class BatchInstallWorker(QObject):
                         import shutil
                         shutil.rmtree(batch_cache, ignore_errors=True)
                         map_dir = extractor.extract(batch_cache)
+                        extracted_maps = sorted(set(maps_in_ipk) | set(getattr(extractor, "bundle_maps", []) or []))
+                        map_names_for_candidate = extracted_maps
                     
-                    # V1 Parity: Recursively discover all map folders (folders with songdesc)
-                    # This handles both standalone exports and deeply nested bundle IPKs.
-                    songdescs = list(map_dir.rglob("*songdesc*.tpl.ckd"))
-                    if songdescs:
-                        # Map folders are the parents of discovered songdescs
-                        sub_maps = sorted({p.parent for p in songdescs})
-                        logger.info("Discovered %d map(s) in %s", len(sub_maps), candidate.name)
-                    else:
-                        sub_maps = [map_dir] # Fallback
+                    if not map_names_for_candidate:
+                        songdescs = list(map_dir.rglob("*songdesc*.tpl.ckd"))
+                        if songdescs:
+                            map_names_for_candidate = sorted({p.parent.name for p in songdescs})
+                        else:
+                            map_names_for_candidate = [map_dir.name]
 
-                    for sub_map in sub_maps:
-                        if selected_lookup and sub_map.name.lower() not in selected_lookup:
+                    logger.info("Discovered %d map(s) in %s", len(map_names_for_candidate), candidate.name)
+
+                    for map_name in map_names_for_candidate:
+                        if selected_lookup and map_name.lower() not in selected_lookup:
                             continue
                         attempted_maps += 1
                         emit_map_stage(0)
                             
-                        self.status.emit(f"[{sub_map.name}] Parse CKDs & Metadata")
+                        self.status.emit(f"[{map_name}] Parse CKDs & Metadata")
                         from jd2021_installer.parsers.normalizer import normalize
-                        # V1 parity: normalize from full extracted root, scoped by codename.
-                        # This keeps map-local lookups scoped while still allowing shared bundle assets
-                        # (menuart/moves/pictos/tapes) to be discovered outside world/maps/<codename>.
-                        map_data = normalize(map_dir, codename=sub_map.name, search_root=map_dir)
+                        map_data = normalize(map_dir, codename=map_name, search_root=map_dir)
                         
                         emit_map_stage(1)
                         self.status.emit(f"[{map_data.codename}] Normalize assets")
@@ -620,6 +619,26 @@ def install_map_to_game(
 
     # 4. Physical Converters (Tape, Texture, Ambient)
     if map_data.source_dir and map_data.source_dir.exists():
+        picto_src = map_data.media.pictogram_dir
+        if not picto_src or not picto_src.exists():
+            picto_src = map_data.source_dir / "pictos"
+
+        if picto_src and picto_src.exists():
+            menuart_tokens = ("cover_", "banner", "map_bkg", "coach_")
+            for asset in picto_src.rglob("*"):
+                if not asset.is_file():
+                    continue
+                name_low = asset.name.lower()
+                if not any(token in name_low for token in menuart_tokens):
+                    continue
+                ext = asset.suffix.lower()
+                if ext not in (".ckd", ".tga", ".png", ".jpg", ".jpeg"):
+                    continue
+                target_name = asset.name
+                if not target_name.lower().startswith(f"{codename.lower()}_"):
+                    target_name = f"{codename}_{target_name}"
+                shutil.copy2(asset, textures_dir / target_name)
+
         if status_callback: status_callback("Convert Dance Tapes")
         if progress_callback: progress_callback(60)
         from jd2021_installer.installers.tape_converter import auto_convert_tapes
@@ -653,11 +672,6 @@ def install_map_to_game(
         process_menu_art(map_target, codename)
             
         if status_callback: status_callback("Decode Pictograms")
-        picto_src = map_data.media.pictogram_dir
-        if not picto_src or not picto_src.exists():
-            # Fallback for manual/web extraction if normalizer didn't pick it up
-            picto_src = map_data.source_dir / "pictos"
-            
         if picto_src and picto_src.exists():
             decode_pictograms(picto_src, map_target / "timeline" / "pictos")
 

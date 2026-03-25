@@ -206,26 +206,34 @@ def inspect_ipk(target_file: str | Path) -> list[str]:
                         size = _unpack(fheader["name_size"]["value"])
                     fheader[v]["value"] = f.read(size)
                 
-                path_ori = fheader["path_name"]["value"].decode().lower().replace('\\', '/')
-                
-                # 1. Standard layout: world/maps/<codename>
-                if "world/maps/" in path_ori:
-                    after_maps = path_ori.split("world/maps/")[1]
-                    parts = after_maps.split("/")
-                    if parts and parts[0]:
-                        root_dirs.add(parts[0])
-                
-                # 2. Legacy layout: world/jd20XX/<codename>
-                elif "world/jd" in path_ori:
-                    # Look for something like ".../world/jd2015/codename/..."
-                    # Find 'world/' and the next component
-                    parts = path_ori.split("/")
-                    try:
-                        idx = parts.index("world")
-                        if idx + 2 < len(parts) and parts[idx+1].startswith("jd"):
-                            root_dirs.add(parts[idx+2])
-                    except (ValueError, IndexError):
-                        pass
+                raw_path = fheader["path_name"]["value"].decode(errors="ignore").replace('\\', '/')
+                raw_file = fheader["file_name"]["value"].decode(errors="ignore").replace('\\', '/')
+
+                candidates = []
+                if "/" in raw_path:
+                    candidates.append(raw_path)
+                if "/" in raw_file:
+                    candidates.append(raw_file)
+                if not candidates:
+                    candidates = [raw_path, raw_file]
+
+                for candidate in candidates:
+                    path_ori = candidate.lower()
+                    if "world/maps/" in path_ori:
+                        after_maps = path_ori.split("world/maps/")[1]
+                        parts = [p for p in after_maps.split("/") if p]
+                        if parts:
+                            root_dirs.add(parts[0])
+                        continue
+
+                    if "world/jd" in path_ori:
+                        parts = [p for p in path_ori.split("/") if p]
+                        try:
+                            idx = parts.index("world")
+                            if idx + 2 < len(parts) and parts[idx + 1].startswith("jd"):
+                                root_dirs.add(parts[idx + 2])
+                        except (ValueError, IndexError):
+                            pass
 
             # V1 Parity: Filter out engine-specific internal folders that are not maps
             ignore_list = {"cache", "common", "etc", "enginedata", "audio", "videoscoach", "localization"}
@@ -273,6 +281,7 @@ class ArchiveIPKExtractor(BaseExtractor):
     def __init__(self, ipk_path: str | Path) -> None:
         self._ipk_path = Path(ipk_path)
         self._codename: Optional[str] = None
+        self.bundle_maps: list[str] = []
 
     def extract(self, output_dir: Path) -> Path:
         import re
@@ -286,6 +295,7 @@ class ArchiveIPKExtractor(BaseExtractor):
         
         # Combine and prioritize
         discovered = sorted(set(actual_maps) | set(headers_maps))
+        self.bundle_maps = discovered
         
         if len(discovered) == 1:
             self._codename = discovered[0]
