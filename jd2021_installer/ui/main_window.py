@@ -275,6 +275,7 @@ class MainWindow(QMainWindow):
                 self._config_panel.set_game_directory(str(cand))
                 
         self._config_panel.set_video_quality(self._config.video_quality)
+        self._set_preview_controls_ready(False)
 
     # ==================================================================
     # SIGNAL / SLOT WIRING  (Phase 4)
@@ -321,6 +322,7 @@ class MainWindow(QMainWindow):
     def _on_target_selected(self, target: str) -> None:
         self._current_target = target
         logger.debug("Target selected: %s", target)
+        self._set_preview_controls_ready(False)
 
     def _on_game_dir_changed(self, path: str) -> None:
         self._config.game_directory = Path(path)
@@ -439,6 +441,7 @@ class MainWindow(QMainWindow):
                 
                 is_ipk = bool(map_data.media.audio_path and map_data.media.audio_path.suffix.lower() == ".wav")
                 self._sync_refinement.set_ipk_mode(is_ipk=is_ipk)
+                self._set_preview_controls_ready(True)
                 
                 self.append_log(f"Loaded {map_data.codename} for offset readjustment.")
                 self._set_status(f"Readjusting offset for {map_data.codename}")
@@ -454,6 +457,8 @@ class MainWindow(QMainWindow):
         self._nav_index = 0
         self._pending_offsets.clear()
         self._sync_refinement.reset()
+        self._preview_widget.reset()
+        self._set_preview_controls_ready(False)
         self._feedback_panel.reset()
         self._set_status("State reset.")
 
@@ -713,6 +718,7 @@ class MainWindow(QMainWindow):
 
     def _on_install_error(self, msg: str) -> None:
         self.append_log(f"ERROR: {msg}")
+        self._set_preview_controls_ready(False)
         self._lock_ui(False)
         self._stop_file_logging()
 
@@ -747,6 +753,7 @@ class MainWindow(QMainWindow):
 
             # Start preview for the current map
             if self._current_map:
+                self._set_preview_controls_ready(True)
                 self._on_preview_toggle(True)
         self._lock_ui(False)
         self._stop_file_logging()
@@ -781,6 +788,7 @@ class MainWindow(QMainWindow):
             first_audio_ms,
             first_video_ms,
         )
+        self._set_preview_controls_ready(True)
         self._on_preview_toggle(True)
 
     def _on_nav_requested(self, direction: int) -> None:
@@ -1204,6 +1212,12 @@ class MainWindow(QMainWindow):
         self._mode_selector.setEnabled(not locked)
         self._config_panel.setEnabled(not locked)
         self._action_panel.set_all_enabled(not locked)
+        if locked:
+            self._set_preview_controls_ready(False)
+
+    def _set_preview_controls_ready(self, ready: bool) -> None:
+        self._preview_widget.setEnabled(ready)
+        self._sync_refinement.setEnabled(ready)
 
     def _cleanup_thread(self, thread: QThread, label: str) -> None:
         logger.debug("Thread cleaned up: %s", label)

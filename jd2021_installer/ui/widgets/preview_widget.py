@@ -236,6 +236,7 @@ class PreviewWidget(QWidget):
         self._audio_path: Optional[str] = None
         self._v_override: float = 0.0
         self._a_offset: float = 0.0
+        self._resume_after_seek: bool = False
 
         self._build_ui()
 
@@ -275,6 +276,7 @@ class PreviewWidget(QWidget):
         self._seek_slider.setRange(0, 1000)
         self._seek_slider.setValue(0)
         self._seek_slider.setTracking(True)
+        self._seek_slider.sliderPressed.connect(self._on_seek_pressed)
         self._seek_slider.sliderReleased.connect(self._on_seek_released)
         seek_row.addWidget(self._seek_slider)
 
@@ -496,7 +498,7 @@ class PreviewWidget(QWidget):
     def _on_position(self, pos: float) -> None:
         self._position = pos
         self._lbl_time.setText(self._fmt(pos))
-        if self._duration > 0:
+        if self._duration > 0 and not self._seek_slider.isSliderDown():
             pct = int((pos / self._duration) * 1000)
             self._seek_slider.blockSignals(True)
             self._seek_slider.setValue(min(pct, 1000))
@@ -533,8 +535,12 @@ class PreviewWidget(QWidget):
         pct = self._seek_slider.value() / 1000.0
         self._position = pct * self._duration
         self._lbl_time.setText(self._fmt(self._position))
-        if self._playing:
+        if self._resume_after_seek:
             self._relaunch(self._position)
+        self._resume_after_seek = False
+
+    def _on_seek_pressed(self) -> None:
+        self._resume_after_seek = self._playing
 
     def _relaunch(self, start_time: float = 0.0) -> None:
         if self._video_path and self._audio_path:

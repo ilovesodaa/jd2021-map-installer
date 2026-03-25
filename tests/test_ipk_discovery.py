@@ -1,59 +1,79 @@
-import sys
-import os
-from pathlib import Path
+from __future__ import annotations
 
-# Add project root to path
-sys.path.append(str(Path(__file__).parent.parent))
+import struct
+from pathlib import Path
 
 from jd2021_installer.extractors.archive_ipk import inspect_ipk
 
-def test_inspect_ipk_logic():
-    print("Testing inspect_ipk logic (mocked)...")
-    
-    # We can't easily mock the file reading without a lot of boilerplate,
-    # but we can test the path parsing logic if we refactor it or just
-    # rely on the fact that I've reviewed the regex/split logic.
-    
-    # Since I can't easily run a full IPK test, I'll create a small
-    # script that specifically tests the directory discovery part 
-    # of ArchiveIPKExtractor.extract if I were to mock the extract_ipk call.
-    pass
 
-if __name__ == "__main__":
-    # Test directory discovery logic
-    from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor
-    
-    class MockExtractor(ArchiveIPKExtractor):
-        def extract(self, output_dir: Path) -> Path:
-            # Simulate extraction of files
-            (output_dir / "MapA").mkdir(parents=True)
-            (output_dir / "MapA" / "MapA_songdesc.tpl.ckd").touch()
-            
-            # Call the real extract discovery logic (minus the actual IPK extraction)
-            import re
-            
-            # Post-extraction discovery
-            songdescs = list(output_dir.rglob("*songdesc*.tpl.ckd"))
-            actual_maps = sorted({s.parent.name for s in songdescs})
-            
-            if len(actual_maps) == 1:
-                self._codename = actual_maps[0]
-                print(f"DEBUG: Inferred codename: {self._codename}")
-            
-            return output_dir
+def _pack_u32(value: int) -> bytes:
+    return struct.pack(">I", value)
 
-    import shutil
-    temp_test_dir = Path("temp/test_discovery")
-    if temp_test_dir.exists():
-        shutil.rmtree(temp_test_dir)
-    temp_test_dir.mkdir(parents=True)
-    
-    extractor = MockExtractor("dummy.ipk")
-    extractor.extract(temp_test_dir)
-    
-    if extractor.get_codename() == "MapA":
-        print("SUCCESS: Codename 'MapA' discovered from extracted songdesc.")
-    else:
-        print(f"FAILED: Expected 'MapA', got '{extractor.get_codename()}'")
-    
-    shutil.rmtree(temp_test_dir)
+
+def _pack_u64(value: int) -> bytes:
+    return struct.pack(">Q", value)
+
+
+def _build_fake_ipk(path: Path, entries: list[tuple[str, str]]) -> None:
+    header = b"".join(
+        [
+            b"\x50\xEC\x12\xBA",
+            _pack_u32(1),
+            _pack_u32(0),
+            _pack_u32(0),
+            _pack_u32(len(entries)),
+            _pack_u32(0),
+            _pack_u32(0),
+            _pack_u32(0),
+            _pack_u32(0),
+            _pack_u32(0),
+            _pack_u32(0),
+            _pack_u32(len(entries)),
+        ]
+    )
+
+    body = bytearray()
+    for file_name, path_name in entries:
+        file_bytes = file_name.encode("utf-8")
+        path_bytes = path_name.encode("utf-8")
+        body += _pack_u32(0)
+        body += _pack_u32(0)
+        body += _pack_u32(0)
+        body += _pack_u64(0)
+        body += _pack_u64(0)
+        body += _pack_u32(len(file_bytes))
+        body += file_bytes
+        body += _pack_u32(len(path_bytes))
+        body += path_bytes
+        body += _pack_u32(0)
+        body += _pack_u32(0)
+
+    path.write_bytes(header + bytes(body))
+
+
+def test_inspect_ipk_detects_maps_from_swapped_path_fields(tmp_path: Path) -> None:
+    ipk_path = tmp_path / "bundle_swapped.ipk"
+    _build_fake_ipk(
+        ipk_path,
+        [
+            ("world/maps/mapa/audio", "mapa_musictrack.tpl.ckd"),
+            ("world/maps/mapb/audio", "mapb_musictrack.tpl.ckd"),
+        ],
+    )
+
+    discovered = inspect_ipk(ipk_path)
+    assert discovered == ["mapa", "mapb"]
+
+
+def test_inspect_ipk_detects_legacy_world_jd_layout(tmp_path: Path) -> None:
+    ipk_path = tmp_path / "legacy_bundle.ipk"
+    _build_fake_ipk(
+        ipk_path,
+        [
+            ("world/jd2015/songx/audio", "songx_musictrack.tpl.ckd"),
+            ("world/jd2015/songy/audio", "songy_musictrack.tpl.ckd"),
+        ],
+    )
+
+    discovered = inspect_ipk(ipk_path)
+    assert discovered == ["songx", "songy"]

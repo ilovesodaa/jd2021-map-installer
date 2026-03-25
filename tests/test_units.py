@@ -6,7 +6,10 @@ from PyQt6.QtWidgets import QApplication
 from jd2021_installer.core.models import NormalizedMapData, SongDescription, MusicTrackStructure, MapMedia
 from jd2021_installer.core.config import AppConfig
 from jd2021_installer.ui.widgets.preview_widget import PreviewWidget
+from jd2021_installer.ui.widgets.bundle_dialog import BundleSelectDialog
 from jd2021_installer.ui.workers.pipeline_workers import BatchInstallWorker
+
+_RUN_QT_WIDGET_TESTS = os.environ.get("JD2021_RUN_QT_WIDGET_TESTS") == "1"
 
 
 def _build_map(codename: str) -> NormalizedMapData:
@@ -71,6 +74,7 @@ def test_main_window_unit_conversion_logic():
     assert vo_ms == 500.0
 
 
+@pytest.mark.skipif(not _RUN_QT_WIDGET_TESTS, reason="Set JD2021_RUN_QT_WIDGET_TESTS=1 to run Qt widget behavior tests.")
 def test_preview_pause_does_not_clear_canvas():
     _get_qapp()
     widget = PreviewWidget()
@@ -81,6 +85,31 @@ def test_preview_pause_does_not_clear_canvas():
     widget._toggle_playback()
     assert widget._canvas.text() == ""
     assert widget.is_playing is False
+
+
+@pytest.mark.skipif(not _RUN_QT_WIDGET_TESTS, reason="Set JD2021_RUN_QT_WIDGET_TESTS=1 to run Qt widget behavior tests.")
+def test_preview_seek_does_not_jump_while_dragging(monkeypatch):
+    _get_qapp()
+    widget = PreviewWidget()
+    widget._duration = 100.0
+    widget._seek_slider.setValue(700)
+
+    monkeypatch.setattr(widget._seek_slider, "isSliderDown", lambda: True)
+    widget._on_position(20.0)
+
+    assert widget._seek_slider.value() == 700
+
+
+@pytest.mark.skipif(not _RUN_QT_WIDGET_TESTS, reason="Set JD2021_RUN_QT_WIDGET_TESTS=1 to run Qt widget behavior tests.")
+def test_bundle_dialog_select_all_toggle():
+    _get_qapp()
+    dlg = BundleSelectDialog("bundle.ipk", ["MapA", "MapB", "MapC"])
+
+    dlg._select_all.setChecked(False)
+    assert dlg.get_selected_maps() == []
+
+    dlg._select_all.setChecked(True)
+    assert dlg.get_selected_maps() == ["MapA", "MapB", "MapC"]
 
 
 def test_batch_worker_discovered_maps_respect_selection(tmp_path: Path, monkeypatch):

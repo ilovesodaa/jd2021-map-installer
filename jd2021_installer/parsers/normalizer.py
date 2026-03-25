@@ -866,9 +866,16 @@ def normalize(
             pass
     
     if not has_autodance:
-        # Check for separate autodance data files as fallback
         for ext in ("adtape", "advideo", "adrecording"):
-            if _find_ckd_files(source_root_str, f"*.{ext}.ckd", codename):
+            candidates = _find_ckd_files(source_root_str, f"*.{ext}.ckd", codename)
+            valid_candidates = []
+            for candidate in candidates:
+                try:
+                    if Path(candidate).stat().st_size > 256:
+                        valid_candidates.append(candidate)
+                except OSError:
+                    continue
+            if valid_candidates:
                 has_autodance = True
                 break
 
