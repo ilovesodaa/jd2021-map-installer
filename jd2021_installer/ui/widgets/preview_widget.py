@@ -344,7 +344,10 @@ class PreviewWidget(QWidget):
         self._a_offset = a_offset
 
         # Kill previous, but keep position if we are just restarting/seeking
-        self.stop(reset_position=(start_time == 0.0))
+        self.stop(
+            reset_position=(start_time == 0.0),
+            clear_canvas=(start_time == 0.0),
+        )
 
         # Probe duration (best effort)
         if start_time == 0.0:
@@ -427,11 +430,12 @@ class PreviewWidget(QWidget):
         thread.start()
         self.preview_started.emit()
 
-    def stop(self, reset_position: bool = True) -> None:
+    def stop(self, reset_position: bool = True, clear_canvas: bool = True) -> None:
         """Stop any running preview subprocess safely.
         
         Args:
             reset_position: If True, sets _position back to 0.0 and clears labels.
+            clear_canvas: If True, clears the preview canvas to "No Preview".
         """
         if self._worker is not None:
             self._worker.request_stop()
@@ -452,13 +456,13 @@ class PreviewWidget(QWidget):
             self._lbl_time.setText("0:00")
             self._seek_slider.setValue(0)
         
-        # Reset canvas to black ("No Preview" state)
-        self._canvas.clear()
-        self._canvas.setText("No Preview")
-        self._canvas.setStyleSheet(
-            "background-color: #111; color: #666; "
-            "font-size: 13px; border-radius: 6px;"
-        )
+        if clear_canvas:
+            self._canvas.clear()
+            self._canvas.setText("No Preview")
+            self._canvas.setStyleSheet(
+                "background-color: #111; color: #666; "
+                "font-size: 13px; border-radius: 6px;"
+            )
 
         if self._playing:
             self._playing = False
@@ -510,7 +514,7 @@ class PreviewWidget(QWidget):
 
     def _toggle_playback(self) -> None:
         if self._playing:
-            self.stop()
+            self.stop(reset_position=False, clear_canvas=False)
         else:
             self._relaunch(self._position)
 

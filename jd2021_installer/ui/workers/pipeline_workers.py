@@ -291,6 +291,14 @@ class BatchInstallWorker(QObject):
     def run(self) -> None:
         try:
             self.status.emit("Scanning for maps in batch directory...")
+            progress_value = 0
+
+            def emit_progress(value: int) -> None:
+                nonlocal progress_value
+                clamped = max(0, min(100, value))
+                if clamped > progress_value:
+                    progress_value = clamped
+                    self.progress.emit(clamped)
             
             candidates: list[Path] = []
             if self._source_dir:
@@ -311,6 +319,7 @@ class BatchInstallWorker(QObject):
                 self.finished.emit(False)
                 return
 
+            emit_progress(1)
             self.status.emit(f"Found {total} source item(s) to process.")
             
             # Emit discovered map names to the UI so it can populate the checklist
@@ -322,7 +331,22 @@ class BatchInstallWorker(QObject):
                     map_names.extend(maps_in_ipk or [c.stem])
                 else:
                     map_names.append(c.name)
-            self.discovered_maps.emit(map_names)
+
+            selected_lookup = {m.lower() for m in self._selected_maps} if self._selected_maps else None
+            display_map_names = map_names
+            if selected_lookup is not None:
+                display_map_names = [name for name in map_names if name.lower() in selected_lookup]
+            self.discovered_maps.emit(display_map_names)
+            emit_progress(3)
+
+            planned_maps = len(display_map_names) if display_map_names else len(map_names)
+            total_units = max(planned_maps * 3, 1)
+            completed_units = 0
+
+            def emit_map_stage(stage_offset: int) -> None:
+                units = min(total_units, completed_units + stage_offset)
+                emit_progress(min(99, 5 + int((units / total_units) * 90)))
+
             success_count = 0
             attempted_maps = 0
             installed_maps: list[NormalizedMapData] = []
@@ -332,9 +356,6 @@ class BatchInstallWorker(QObject):
             batch_cache.mkdir(parents=True, exist_ok=True)
 
             for i, candidate in enumerate(candidates):
-                progress_pct = int((i / total) * 100)
-                self.progress.emit(progress_pct)
-                
                 try:
                     self.status.emit(f"[{i+1}/{total}] Processing {candidate.name}...")
                     
@@ -364,11 +385,10 @@ class BatchInstallWorker(QObject):
                         sub_maps = [map_dir] # Fallback
 
                     for sub_map in sub_maps:
-                        if self._selected_maps and sub_map.name not in self._selected_maps:
-                            # If it's a map folder and not in selected_maps, skip it.
-                            # (If it's just batch processing standalone maps, it'll still work if selected_maps is None)
+                        if selected_lookup and sub_map.name.lower() not in selected_lookup:
                             continue
                         attempted_maps += 1
+                        emit_map_stage(0)
                             
                         self.status.emit(f"[{sub_map.name}] Parse CKDs & Metadata")
                         from jd2021_installer.parsers.normalizer import normalize
@@ -377,6 +397,7 @@ class BatchInstallWorker(QObject):
                         # (menuart/moves/pictos/tapes) to be discovered outside world/maps/<codename>.
                         map_data = normalize(map_dir, codename=sub_map.name, search_root=map_dir)
                         
+                        emit_map_stage(1)
                         self.status.emit(f"[{map_data.codename}] Normalize assets")
                         
                         # V1 Parity: Persist preview assets in map cache so they remain available after batch extraction is cleared
@@ -401,6 +422,8 @@ class BatchInstallWorker(QObject):
                         
                         self.status.emit(f"[{map_data.codename}] Installing map...")
                         self._install_map_synchronously(map_data)
+                        emit_map_stage(2)
+                        completed_units += 3
                         success_count += 1
                         installed_maps.append(map_data)
                         logger.info("Batch installed map: %s", map_data.codename)
@@ -412,7 +435,7 @@ class BatchInstallWorker(QObject):
             import shutil
             shutil.rmtree(batch_cache, ignore_errors=True)
 
-            self.progress.emit(100)
+            emit_progress(100)
             total_maps = attempted_maps if attempted_maps > 0 else total
             self.status.emit(f"Batch install complete. {success_count}/{total_maps} maps installed.")
             self.finished_with_data.emit(installed_maps)
