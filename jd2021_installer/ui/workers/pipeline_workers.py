@@ -142,7 +142,7 @@ class ExtractAndNormalizeWorker(QObject):
 
     progress = pyqtSignal(int)          # 0-100
     status = pyqtSignal(str)            # human-readable status message
-    error = pyqtSignal(str)             # error message
+    error = pyqtSignal(str, str)        # stage name, error message
     finished = pyqtSignal(object)       # NormalizedMapData or None
 
     def __init__(
@@ -158,6 +158,7 @@ class ExtractAndNormalizeWorker(QObject):
         self._codename = codename
 
     def run(self) -> None:
+        failed_stage = "Extract map data"
         try:
             # Clear output_dir (temp extraction dir) before starting
             import shutil
@@ -199,9 +200,11 @@ class ExtractAndNormalizeWorker(QObject):
                     logger.error("IPK media validation failed: %s", error)
                 raise RuntimeError(" ".join(media_errors))
 
+            failed_stage = "Parse CKDs & Metadata"
             self.status.emit("Parse CKDs & Metadata")
             self.progress.emit(40)
             
+            failed_stage = "Normalize assets"
             self.status.emit("Normalize assets")
             self.progress.emit(50)
 
@@ -217,7 +220,7 @@ class ExtractAndNormalizeWorker(QObject):
 
         except Exception as e:
             logger.error("ExtractAndNormalize failed: %s\n%s", e, traceback.format_exc())
-            self.error.emit(str(e))
+            self.error.emit(failed_stage, str(e))
             self.finished.emit(None)
 
 

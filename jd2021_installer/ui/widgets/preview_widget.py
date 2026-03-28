@@ -83,6 +83,7 @@ class _FrameReaderWorker(QObject):
     frame_ready = pyqtSignal(QPixmap)
     position_updated = pyqtSignal(float)
     playback_ended = pyqtSignal()
+    ffplay_missing = pyqtSignal()
 
     def __init__(
         self,
@@ -145,6 +146,7 @@ class _FrameReaderWorker(QObject):
                         )
                     except FileNotFoundError:
                         logger.warning("ffplay not found — audio preview disabled.")
+                        self.ffplay_missing.emit()
                     except Exception as exc:
                         logger.error("Could not launch ffplay: %s", exc)
                     wall_start = time.time() + 0.1
@@ -218,6 +220,7 @@ class PreviewWidget(QWidget):
 
     preview_started = pyqtSignal()
     preview_stopped = pyqtSignal()
+    audio_unavailable = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -237,6 +240,10 @@ class PreviewWidget(QWidget):
         self._v_override: float = 0.0
         self._a_offset: float = 0.0
         self._resume_after_seek: bool = False
+        self._loop_start: float = 0.0
+        self._loop_end: float = 0.0
+        self._stop_requested: bool = False
+        self._ffplay_warned: bool = False
 
         self._build_ui()
 
@@ -326,6 +333,8 @@ class PreviewWidget(QWidget):
         v_override: float = 0.0,
         a_offset: float = 0.0,
         start_time: float = 0.0,
+        loop_start: float = 0.0,
+        loop_end: float = 0.0,
     ) -> None:
         """Start (or restart) embedded preview playback.
 
@@ -335,6 +344,8 @@ class PreviewWidget(QWidget):
             v_override:  Video start-time override (seconds, negative = intro).
             a_offset:    Audio offset in seconds.
             start_time:  Seek position in seconds to start from.
+            loop_start:  Loop start in seconds (0 disables looping).
+            loop_end:    Loop end in seconds.
         """
         if not video_path or not audio_path:
             return
@@ -344,6 +355,9 @@ class PreviewWidget(QWidget):
         self._audio_path = audio_path
         self._v_override = v_override
         self._a_offset = a_offset
+        self._loop_start = max(0.0, loop_start)
+        self._loop_end = max(0.0, loop_end)
+        self._stop_requested = False
 
         # Kill previous, but keep position if we are just restarting/seeking
         self.stop(
@@ -421,6 +435,7 @@ class PreviewWidget(QWidget):
         worker.frame_ready.connect(self._on_frame)
         worker.position_updated.connect(self._on_position)
         worker.playback_ended.connect(self._on_playback_ended)
+        worker.ffplay_missing.connect(self._on_ffplay_missing)
 
         # Clean-up chain
         worker.playback_ended.connect(thread.quit)
@@ -439,6 +454,7 @@ class PreviewWidget(QWidget):
             reset_position: If True, sets _position back to 0.0 and clears labels.
             clear_canvas: If True, clears the preview canvas to "No Preview".
         """
+        self._stop_requested = True
         if self._worker is not None:
             self._worker.request_stop()
         
@@ -476,6 +492,8 @@ class PreviewWidget(QWidget):
         self.stop()
         self._position = 0.0
         self._duration = 120.0
+        self._loop_start = 0.0
+        self._loop_end = 0.0
         self._canvas.setPixmap(QPixmap())
         self._canvas.setText("No Preview")
         self._seek_slider.setValue(0)
@@ -506,9 +524,34 @@ class PreviewWidget(QWidget):
 
     @pyqtSlot()
     def _on_playback_ended(self) -> None:
+        if (
+            not self._stop_requested
+            and self._loop_start > 0.0
+            and self._loop_end > self._loop_start
+            and self._video_path
+            and self._audio_path
+        ):
+            self.launch(
+                self._video_path,
+                self._audio_path,
+                self._v_override,
+                self._a_offset,
+                start_time=self._loop_start,
+                loop_start=self._loop_start,
+                loop_end=self._loop_end,
+            )
+            return
+
         self._playing = False
         self._btn_play.setText("▶")
         self.preview_stopped.emit()
+
+    @pyqtSlot()
+    def _on_ffplay_missing(self) -> None:
+        if self._ffplay_warned:
+            return
+        self._ffplay_warned = True
+        self.audio_unavailable.emit()
 
     # ==================================================================
     # UI CALLBACKS
@@ -548,6 +591,8 @@ class PreviewWidget(QWidget):
                 self._video_path, self._audio_path,
                 self._v_override, self._a_offset,
                 start_time=start_time,
+                loop_start=self._loop_start,
+                loop_end=self._loop_end,
             )
 
     # ==================================================================

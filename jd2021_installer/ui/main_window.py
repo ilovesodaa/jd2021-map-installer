@@ -101,6 +101,7 @@ class MainWindow(QMainWindow):
         self._active_threads: set[QThread] = set()
         self._active_worker: Optional[object] = None
         self._file_logger_handler: Optional[logging.Handler] = None
+        self._preview_audio_warning_shown = False
 
         # Phase 4: Multi-map navigation
         self._nav_maps: list[NormalizedMapData] = []
@@ -308,6 +309,7 @@ class MainWindow(QMainWindow):
         self._preview_widget.preview_stopped.connect(
             lambda: self._sync_refinement.set_preview_state(False)
         )
+        self._preview_widget.audio_unavailable.connect(self._on_preview_audio_unavailable)
 
     # ==================================================================
     # SLOT IMPLEMENTATIONS
@@ -726,13 +728,14 @@ class MainWindow(QMainWindow):
         self._active_worker = worker
         thread.start()
 
-    def _on_extract_error(self, msg: str) -> None:
-        self._feedback_panel.update_checklist_step("Extract map data", StepStatus.ERROR)
+    def _on_extract_error(self, stage: str, msg: str) -> None:
+        failed_stage = stage if stage in PIPELINE_STEPS else "Extract map data"
+        self._feedback_panel.update_checklist_step(failed_stage, StepStatus.ERROR)
         self.append_log(f"ERROR: {msg}")
         QMessageBox.critical(
             self,
             "Pipeline Error",
-            f"Step 1 (Extract map data) failed:\n{msg}",
+            f"{failed_stage} failed:\n{msg}",
         )
         self._lock_ui(False)
         self._stop_file_logging()
@@ -997,6 +1000,7 @@ class MainWindow(QMainWindow):
 
                 v_override = self._sync_refinement._video_spin.value() / 1000.0
                 a_offset = self._sync_refinement._audio_spin.value() / 1000.0
+                loop_start, loop_end = self._get_preview_loop_seconds(self._current_map)
                 
                 logger.debug("Preview launch: v_override=%.3f, a_offset=%.3f", v_override, a_offset)
 
@@ -1004,6 +1008,8 @@ class MainWindow(QMainWindow):
                     video, audio,
                     v_override=v_override,
                     a_offset=a_offset,
+                    loop_start=loop_start,
+                    loop_end=loop_end,
                 )
             else:
                 self.append_log("No video available for preview.")
@@ -1032,17 +1038,33 @@ class MainWindow(QMainWindow):
         self._preview_debounce_timer.start(500) # 0.5s delay
 
     def _restart_preview_now(self) -> None:
+        if not self._current_map:
+            return
+
+        if not self._current_map.media.video_path or not self._current_map.media.video_path.exists():
+            self.append_log("No video available for preview.")
+            self._sync_refinement.set_preview_state(False)
+            return
+
+        if not self._current_map.media.audio_path or not self._current_map.media.audio_path.exists():
+            self.append_log("No audio available for preview.")
+            self._sync_refinement.set_preview_state(False)
+            return
+
         if self._current_map and self._current_map.media.video_path and self._current_map.media.video_path.exists():
             v_override = self._sync_refinement._video_spin.value() / 1000.0
             a_offset = self._sync_refinement._audio_spin.value() / 1000.0
+            loop_start, loop_end = self._get_preview_loop_seconds(self._current_map)
             
             logger.debug("Debounced preview restart...")
             self._preview_widget.launch(
                 str(self._current_map.media.video_path),
-                str(self._current_map.media.audio_path) if self._current_map.media.audio_path else None,
+                str(self._current_map.media.audio_path),
                 v_override=v_override,
                 a_offset=a_offset,
                 start_time=self._preview_widget._position,
+                loop_start=loop_start,
+                loop_end=loop_end,
             )
 
     def _on_pad_audio(self) -> None:
@@ -1163,8 +1185,46 @@ class MainWindow(QMainWindow):
                         self._feedback_panel.update_checklist_step(map_data.codename, StepStatus.DONE)
             if "Finalizing Offsets" in self._feedback_panel._step_items:
                 self._feedback_panel.update_checklist_step("Finalizing Offsets", StepStatus.DONE)
+            self._preview_widget.reset()
+            self._sync_refinement.set_preview_state(False)
+            self._sync_refinement.set_nav_visible(False)
+            self._set_preview_controls_ready(False)
             # V1 Parity: Don't auto-restart preview anymore after apply
             self._prompt_cleanup()
+
+    def _on_preview_audio_unavailable(self) -> None:
+        if self._preview_audio_warning_shown:
+            return
+        self._preview_audio_warning_shown = True
+        QMessageBox.information(
+            self,
+            "ffplay Not Found",
+            "ffplay was not found. Video will play without audio.\n\n"
+            "Install FFmpeg to enable audio preview.",
+        )
+
+    def _get_preview_loop_seconds(self, map_data: NormalizedMapData) -> tuple[float, float]:
+        mt = map_data.music_track
+        markers = mt.markers if mt and mt.markers else []
+        if not markers:
+            return 0.0, 0.0
+
+        try:
+            loop_start_idx = int(mt.preview_loop_start)
+            loop_end_idx = int(mt.preview_loop_end)
+        except (TypeError, ValueError):
+            return 0.0, 0.0
+
+        if loop_start_idx < 0 or loop_end_idx < 0:
+            return 0.0, 0.0
+        if loop_start_idx >= len(markers) or loop_end_idx >= len(markers):
+            return 0.0, 0.0
+        if loop_end_idx <= loop_start_idx:
+            return 0.0, 0.0
+
+        loop_start = markers[loop_start_idx] / 48.0 / 1000.0
+        loop_end = markers[loop_end_idx] / 48.0 / 1000.0
+        return max(0.0, loop_start), max(0.0, loop_end)
 
     def _prompt_cleanup(self) -> None:
         """Ask user or auto-delete source files based on cleanup_behavior."""
