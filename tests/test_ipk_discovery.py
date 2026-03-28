@@ -3,7 +3,10 @@ from __future__ import annotations
 import struct
 from pathlib import Path
 
-from jd2021_installer.extractors.archive_ipk import inspect_ipk
+import pytest
+
+from jd2021_installer.core.exceptions import IPKExtractionError
+from jd2021_installer.extractors.archive_ipk import inspect_ipk, validate_ipk_magic
 
 
 def _pack_u32(value: int) -> bytes:
@@ -77,3 +80,18 @@ def test_inspect_ipk_detects_legacy_world_jd_layout(tmp_path: Path) -> None:
 
     discovered = inspect_ipk(ipk_path)
     assert discovered == ["songx", "songy"]
+
+
+def test_validate_ipk_magic_rejects_invalid_archive(tmp_path: Path) -> None:
+    invalid_ipk = tmp_path / "invalid.ipk"
+    invalid_ipk.write_bytes(b"BAD!" + b"\x00" * 16)
+
+    with pytest.raises(IPKExtractionError, match="bad magic bytes"):
+        validate_ipk_magic(invalid_ipk)
+
+
+def test_validate_ipk_magic_accepts_valid_archive_header(tmp_path: Path) -> None:
+    valid_ipk = tmp_path / "valid.ipk"
+    valid_ipk.write_bytes(b"\x50\xEC\x12\xBA" + b"\x00" * 16)
+
+    validate_ipk_magic(valid_ipk)

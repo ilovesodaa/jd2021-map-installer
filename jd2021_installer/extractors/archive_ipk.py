@@ -29,6 +29,22 @@ _STRUCT_SIGNS = {1: "c", 2: "H", 4: "I", 8: "Q"}
 _IPK_MAGIC = b"\x50\xEC\x12\xBA"
 
 
+def validate_ipk_magic(target_file: str | Path) -> None:
+    """Validate IPK magic bytes before expensive extraction work.
+
+    Raises:
+        IPKExtractionError: If the file is missing or does not start with IPK magic.
+    """
+    target_path = Path(target_file)
+    if not target_path.exists():
+        raise IPKExtractionError(f"IPK file not found: {target_path}")
+
+    with open(target_path, "rb") as f:
+        magic = f.read(4)
+    if magic != _IPK_MAGIC:
+        raise IPKExtractionError("Not a valid IPK file (bad magic bytes)")
+
+
 def _unpack(data: bytes) -> int:
     """Unpack a big-endian integer of 1/2/4/8 bytes."""
     return struct.unpack(_ENDIAN + _STRUCT_SIGNS[len(data)], data)[0]
@@ -90,8 +106,7 @@ def extract_ipk(target_file: str | Path, output_dir: str | Path) -> Path:
     target_file = Path(target_file)
     output_path = Path(output_dir)
 
-    if not target_file.exists():
-        raise IPKExtractionError(f"IPK file not found: {target_file}")
+    validate_ipk_magic(target_file)
 
     try:
         output_path.mkdir(parents=True, exist_ok=True)
