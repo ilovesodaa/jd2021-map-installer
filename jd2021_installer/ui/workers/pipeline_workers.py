@@ -109,24 +109,28 @@ def _validate_ipk_media_presence(
     map_output_dir: Path,
     codename: Optional[str],
     search_root: Optional[Path],
-) -> None:
+) -> list[str]:
     search_dirs = [map_output_dir]
     if search_root and search_root not in search_dirs:
         search_dirs.append(search_root)
 
+    warnings: list[str] = []
+
     audio = _pick_ipk_audio(search_dirs, codename)
     if not audio:
-        raise RuntimeError(
+        warnings.append(
             "No audio file found after IPK extraction. "
             "Ensure the IPK contains .ogg, .wav, or .wav.ckd audio."
         )
 
     video = _pick_ipk_video(search_dirs, codename)
     if not video:
-        raise RuntimeError(
+        warnings.append(
             "No gameplay video (.webm) found after IPK extraction. "
             "Ensure a .webm file is in the source directory."
         )
+
+    return warnings
 
 
 class ExtractAndNormalizeWorker(QObject):
@@ -164,18 +168,19 @@ class ExtractAndNormalizeWorker(QObject):
 
             codename = self._codename or self._extractor.get_codename()
             search_root: Optional[Path] = None
+            media_warnings: list[str] = []
 
             if isinstance(self._extractor, ArchiveIPKExtractor):
                 # V1 parity: IPK mode also probes media alongside the selected .ipk file.
                 search_root = self._extractor.get_source_dir()
-                _validate_ipk_media_presence(map_output_dir, codename, search_root)
+                media_warnings.extend(_validate_ipk_media_presence(map_output_dir, codename, search_root))
             elif hasattr(self._extractor, "is_ipk_source"):
-                try:
-                    if bool(self._extractor.is_ipk_source()):  # type: ignore[attr-defined]
-                        _validate_ipk_media_presence(map_output_dir, codename, None)
-                except Exception:
-                    # Do not mask extractor failures behind the parity probe.
-                    raise
+                if bool(self._extractor.is_ipk_source()):  # type: ignore[attr-defined]
+                    media_warnings.extend(_validate_ipk_media_presence(map_output_dir, codename, None))
+
+            for warning in media_warnings:
+                logger.warning("IPK media probe: %s", warning)
+                self.status.emit(f"Warning: {warning}")
 
             self.status.emit("Parse CKDs & Metadata")
             self.progress.emit(40)

@@ -33,29 +33,38 @@ class ManualExtractor(BaseExtractor):
         """Validate codename/root consistency for manual IPK roots."""
         if not self.is_ipk_source():
             return
-        if not self._codename:
-            return
 
         world_maps = root / "world" / "maps"
         if not world_maps.is_dir():
             return
 
-        candidates = [d.name for d in world_maps.iterdir() if d.is_dir()]
+        candidates = sorted(d.name for d in world_maps.iterdir() if d.is_dir())
         if not candidates:
+            return
+
+        self.bundle_maps = candidates
+
+        if not self._codename:
+            self._codename = candidates[0]
+            if len(candidates) > 1:
+                logger.warning(
+                    "Manual IPK source contains multiple maps; auto-selected first candidate '%s'.",
+                    self._codename,
+                )
+            else:
+                logger.info("Inferred manual IPK codename from root: %s", self._codename)
             return
 
         lower_candidates = {c.lower() for c in candidates}
         if self._codename.lower() not in lower_candidates:
-            if len(candidates) > 1:
-                raise DownloadError(
-                    "Manual IPK root contains multiple maps and codename does not match any of them. "
-                    f"Codename='{self._codename}', maps={', '.join(sorted(candidates))}"
-                )
+            fallback = candidates[0]
             logger.warning(
-                "Manual IPK codename '%s' does not match discovered map '%s'.",
+                "Manual IPK codename '%s' does not match discovered maps (%s); using '%s'.",
                 self._codename,
-                candidates[0],
+                ", ".join(candidates),
+                fallback,
             )
+            self._codename = fallback
 
     def __init__(
         self,
@@ -78,9 +87,10 @@ class ManualExtractor(BaseExtractor):
         self._root_dir = Path(root_dir) if root_dir else None
         self._files = files or {}
         self._dirs = dirs or {}
+        self.bundle_maps: list[str] = []
 
     def get_codename(self) -> Optional[str]:
-        return self._codename or "UnknownMap"
+        return self._codename or None
 
     def extract(self, output_dir: Path) -> Path:
         """Copy manual files to the extraction output_dir.

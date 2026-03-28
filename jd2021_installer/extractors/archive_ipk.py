@@ -90,12 +90,13 @@ def _get_file_header() -> dict:
     }
 
 
-def extract_ipk(target_file: str | Path, output_dir: str | Path) -> Path:
+def extract_ipk(target_file: str | Path, output_dir: str | Path | None = None) -> Path:
     """Extract an IPK archive to the given output directory.
 
     Args:
         target_file: Path to the .ipk file.
-        output_dir:  Directory to extract into.
+        output_dir:  Directory to extract into. If omitted, defaults to
+                 ``target_file.stem`` (V1-compatible behavior).
 
     Returns:
         Path to the output directory.
@@ -104,7 +105,7 @@ def extract_ipk(target_file: str | Path, output_dir: str | Path) -> Path:
         IPKExtractionError: If extraction fails.
     """
     target_file = Path(target_file)
-    output_path = Path(output_dir)
+    output_path = Path(output_dir) if output_dir is not None else Path(target_file.stem)
 
     validate_ipk_magic(target_file)
 
@@ -138,61 +139,52 @@ def extract_ipk(target_file: str | Path, output_dir: str | Path) -> Path:
             extracted_files = 0
 
             for k, chunk in enumerate(file_chunks):
-                try:
-                    path_ori = chunk["path_name"]["value"].decode().lower().replace('\\', '/')
-                    if "world/maps/" in path_ori:
-                        after_maps = path_ori.split("world/maps/")[1]
-                        parts = after_maps.split("/")
-                        if parts and parts[0]:
-                            codenames_found.add(parts[0])
+                path_ori = chunk["path_name"]["value"].decode().lower().replace('\\', '/')
+                if "world/maps/" in path_ori:
+                    after_maps = path_ori.split("world/maps/")[1]
+                    parts = after_maps.split("/")
+                    if parts and parts[0]:
+                        codenames_found.add(parts[0])
 
-                    if k % 100 == 0:
-                        status = f"file {k + 1}/{num_files}"
-                        if codenames_found:
-                            status += f" (maps: {', '.join(sorted(codenames_found))})"
-                        logger.info("IPK: Extracting %s...", status)
+                if k % 100 == 0:
+                    status = f"file {k + 1}/{num_files}"
+                    if codenames_found:
+                        status += f" (maps: {', '.join(sorted(codenames_found))})"
+                    logger.info("IPK: Extracting %s...", status)
 
-                    offset = _unpack(chunk["offset"]["value"])
-                    data_size = _unpack(chunk["size"]["value"])
+                offset = _unpack(chunk["offset"]["value"])
+                data_size = _unpack(chunk["size"]["value"])
 
-                    path_ori_raw = chunk["path_name"]["value"].decode()
-                    if os.path.basename(path_ori_raw) == path_ori_raw:
-                        file_path = output_path / chunk["file_name"]["value"].decode()
-                        file_name = chunk["path_name"]["value"].decode()
-                    else:
-                        file_path = output_path / chunk["path_name"]["value"].decode()
-                        file_name = chunk["file_name"]["value"].decode()
+                path_ori_raw = chunk["path_name"]["value"].decode()
+                if os.path.basename(path_ori_raw) == path_ori_raw:
+                    file_path = output_path / chunk["file_name"]["value"].decode()
+                    file_name = chunk["path_name"]["value"].decode()
+                else:
+                    file_path = output_path / chunk["path_name"]["value"].decode()
+                    file_name = chunk["file_name"]["value"].decode()
 
-                    # Path traversal protection
-                    resolved = os.path.normpath(os.path.join(str(file_path), file_name))
-                    if not resolved.startswith(str(output_path)):
-                        logger.warning("Skipping path-traversal entry: %s", resolved)
-                        continue
-
-                    f.seek(offset + base_offset)
-                    if file_path not in created_dirs:
-                        file_path.mkdir(parents=True, exist_ok=True)
-                        created_dirs.add(file_path)
-
-                    with open(file_path / file_name, "wb") as ff:
-                        raw_data = f.read(data_size)
-                        try:
-                            decompressed = zlib.decompress(raw_data)
-                        except zlib.error:
-                            try:
-                                decompressed = lzma.decompress(raw_data)
-                            except lzma.LZMAError:
-                                decompressed = raw_data
-                        ff.write(decompressed)
-                    extracted_files += 1
-                except (OSError, UnicodeDecodeError, ValueError, struct.error) as exc:
-                    logger.warning(
-                        "IPK: Skipping entry %d/%d due to recoverable extraction issue: %s",
-                        k + 1,
-                        num_files,
-                        exc,
-                    )
+                # Path traversal protection
+                resolved = os.path.normpath(os.path.join(str(file_path), file_name))
+                if not resolved.startswith(str(output_path)):
+                    logger.warning("Skipping path-traversal entry: %s", resolved)
                     continue
+
+                f.seek(offset + base_offset)
+                if file_path not in created_dirs:
+                    file_path.mkdir(parents=True, exist_ok=True)
+                    created_dirs.add(file_path)
+
+                with open(file_path / file_name, "wb") as ff:
+                    raw_data = f.read(data_size)
+                    try:
+                        decompressed = zlib.decompress(raw_data)
+                    except zlib.error:
+                        try:
+                            decompressed = lzma.decompress(raw_data)
+                        except lzma.LZMAError:
+                            decompressed = raw_data
+                    ff.write(decompressed)
+                extracted_files += 1
 
         logger.info("IPK: Extracted %d/%d files to %s", extracted_files, num_files, output_path)
         return output_path
