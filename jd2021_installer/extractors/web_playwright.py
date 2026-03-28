@@ -213,6 +213,8 @@ def download_files(
     
     downloaded: Dict[str, str] = {}
     total = len(unique_urls)
+    selected_video_url = classified.get("video")
+    selected_video_fname = get_filename_from_url(selected_video_url) if selected_video_url else None
 
     session = requests.Session()
     session.headers.update({"User-Agent": config.user_agent})
@@ -230,6 +232,27 @@ def download_files(
         
         if target.exists():
             target.unlink()
+
+        # V1 parity: if requested-quality video is unavailable, reuse another local gameplay webm.
+        if selected_video_fname and fname == selected_video_fname:
+            existing_webms = [
+                p for p in download_path.glob("*.webm")
+                if p.name != fname
+                and "mappreview" not in p.name.lower()
+                and "videopreview" not in p.name.lower()
+                and p.is_file()
+                and p.stat().st_size > 1024
+            ]
+            if existing_webms:
+                existing_webms.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                chosen = existing_webms[0]
+                logger.info(
+                    "Reusing existing video %s instead of downloading %s",
+                    chosen.name,
+                    fname,
+                )
+                downloaded[fname] = str(chosen)
+                continue
 
         # Check if already installed
         codename = download_path.name
@@ -645,6 +668,24 @@ class WebPlaywrightExtractor(BaseExtractor):
                 all_urls = list(set(all_urls + scraped_fresh))
                 refreshed = download_files(all_urls, download_dir, self._quality, self._config)
                 downloaded.update(refreshed)
+
+        # V1 parity: fail fast when critical assets remain unavailable.
+        classified = _classify_urls(all_urls, self._quality)
+        still_missing: list[str] = []
+        for key in ("video", "audio", "mainscene"):
+            url = classified.get(key)
+            if not url:
+                continue
+            fname = get_filename_from_url(url)
+            if fname not in downloaded:
+                still_missing.append(f"{key}:{fname}")
+
+        if still_missing:
+            raise WebExtractionError(
+                "Critical download(s) missing after retry: "
+                + ", ".join(still_missing)
+                + ". Links may have expired; fetch fresh assets/nohud HTML and retry."
+            )
 
         # 2. Extract/Assemble into temporary output_dir
         extract_dir = output_dir / codename

@@ -4,6 +4,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from jd2021_installer.core.config import AppConfig
+from jd2021_installer.core.exceptions import WebExtractionError
 from jd2021_installer.extractors.web_playwright import (
     WebPlaywrightExtractor,
     _classify_urls,
@@ -63,7 +64,7 @@ def test_extract_scene_zips_no_ipk(tmp_path):
         mock_extract_ipk.assert_not_called()
 
 
-def test_classify_urls_prefers_x360_scene_zip():
+def test_classify_urls_prefers_durango_scene_zip():
     urls = [
         "https://jd-s3.cdn.ubi.com/public/map/TestMap/TestMap_MAIN_SCENE_DURANGO.zip",
         "https://jd-s3.cdn.ubi.com/public/map/TestMap/TestMap_MAIN_SCENE_X360.zip",
@@ -72,7 +73,7 @@ def test_classify_urls_prefers_x360_scene_zip():
 
     classified = _classify_urls(urls, "ULTRA_HD")
     assert classified["mainscene"] is not None
-    assert "MAIN_SCENE_X360" in classified["mainscene"]
+    assert "MAIN_SCENE_DURANGO" in classified["mainscene"]
 
 
 def test_extract_scene_zips_prefers_x360(tmp_path):
@@ -85,7 +86,81 @@ def test_extract_scene_zips_prefers_x360(tmp_path):
         WebPlaywrightExtractor._extract_scene_zips(output_dir)
 
     called_path = mock_zip.call_args[0][0]
-    assert Path(called_path).name == "Test_MAIN_SCENE_X360.zip"
+    assert Path(called_path).name == "Test_MAIN_SCENE_DURANGO.zip"
+
+
+def test_download_files_reuses_existing_alternate_video(tmp_path, monkeypatch):
+    class FakeResponse:
+        def __init__(self, status_code, headers=None, chunks=None):
+            self.status_code = status_code
+            self.headers = headers or {}
+            self._chunks = chunks or []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+        def iter_content(self, chunk_size=1024 * 1024):
+            return iter(self._chunks)
+
+    class FakeSession:
+        def __init__(self):
+            self.headers = {}
+            self.get_calls = []
+
+        def get(self, url, *args, **kwargs):
+            self.get_calls.append(url)
+            if url.endswith(".ogg"):
+                return FakeResponse(200, headers={"content-length": "2048"}, chunks=[b"a" * 2048])
+            if "MAIN_SCENE" in url:
+                return FakeResponse(200, headers={"content-length": "2048"}, chunks=[b"z" * 2048])
+            # Requested video URL would fail, but we should never call this when reuse works.
+            return FakeResponse(404)
+
+    fake_session = FakeSession()
+    monkeypatch.setattr("requests.Session", lambda: fake_session)
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+
+    existing = tmp_path / "TestMap_LOW.webm"
+    existing.write_bytes(b"v" * 2048)
+
+    cfg = AppConfig(max_retries=1, inter_request_delay_s=0.0)
+    urls = [
+        "https://jd-s3.cdn.ubi.com/public/map/TestMap/TestMap_ULTRA.hd.webm",
+        "https://jd-s3.cdn.ubi.com/public/map/TestMap/TestMap.ogg",
+        "https://jd-s3.cdn.ubi.com/public/map/TestMap/TestMap_MAIN_SCENE_DURANGO.zip",
+    ]
+
+    downloaded = download_files(urls, tmp_path, "ULTRA_HD", cfg)
+
+    assert "TestMap_ULTRA.hd.webm" in downloaded
+    assert downloaded["TestMap_ULTRA.hd.webm"] == str(existing)
+    assert not any(u.endswith("TestMap_ULTRA.hd.webm") for u in fake_session.get_calls)
+
+
+def test_web_extractor_raises_when_critical_assets_still_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "jd2021_installer.extractors.web_playwright.download_files",
+        lambda *args, **kwargs: {},
+    )
+
+    extractor = WebPlaywrightExtractor(
+        urls=[
+            "https://jd-s3.cdn.ubi.com/public/map/TestMap/TestMap_ULTRA.hd.webm",
+            "https://jd-s3.cdn.ubi.com/public/map/TestMap/TestMap.ogg",
+            "https://jd-s3.cdn.ubi.com/public/map/TestMap/TestMap_MAIN_SCENE_DURANGO.zip",
+        ],
+        config=AppConfig(download_root=tmp_path),
+    )
+
+    with pytest.raises(WebExtractionError, match=r"Critical download\(s\) missing"):
+        extractor.extract(tmp_path / "out")
 
 
 def test_download_files_respects_retry_after_header(tmp_path, monkeypatch):
