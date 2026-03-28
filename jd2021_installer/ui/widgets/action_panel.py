@@ -3,7 +3,7 @@
 Groups all the primary action buttons into a single reusable widget:
 - **Install Map** — kick off the full Extract → Normalize → Install pipeline.
 - **Pre-flight Check** — validate paths and configuration before install.
-- **Clear Path Cache** — wipe cached extraction directories.
+- **Clear Path Cache** — clear saved game-path discovery cache.
 - **Re-adjust Offset** — launch the sync-refinement workflow.
 - **Settings** — open a configuration dialog (stub for now).
 - **Reset State** — clear all in-memory state back to defaults.
