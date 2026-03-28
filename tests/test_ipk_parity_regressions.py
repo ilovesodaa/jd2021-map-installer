@@ -4,8 +4,13 @@ from pathlib import Path
 
 import pytest
 
+from jd2021_installer.core.exceptions import DownloadError
+from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor
 from jd2021_installer.extractors.manual_extractor import ManualExtractor
-from jd2021_installer.ui.workers.pipeline_workers import _validate_ipk_media_presence
+from jd2021_installer.ui.workers.pipeline_workers import (
+    ExtractAndNormalizeWorker,
+    _validate_ipk_media_presence,
+)
 
 
 def test_manual_ipk_root_keeps_user_root(tmp_path: Path) -> None:
@@ -14,6 +19,7 @@ def test_manual_ipk_root_keeps_user_root(tmp_path: Path) -> None:
     (root / "world" / "maps" / "MapB").mkdir(parents=True)
     (root / "MapB.ogg").write_bytes(b"a" * 1024)
     (root / "MapB_LOW.webm").write_bytes(b"v" * 1024)
+    (root / "MapB_musictrack.tpl.ckd").write_bytes(b"m")
 
     extractor = ManualExtractor(codename="MapB", source_type="ipk", root_dir=str(root))
     extracted = extractor.extract(tmp_path / "output")
@@ -27,6 +33,7 @@ def test_manual_ipk_root_supports_legacy_world_jd_layout(tmp_path: Path) -> None
     (root / "world" / "jd2015" / "SongY").mkdir(parents=True)
     (root / "SongY.ogg").write_bytes(b"a" * 1024)
     (root / "SongY_LOW.webm").write_bytes(b"v" * 1024)
+    (root / "SongY_musictrack.tpl.ckd").write_bytes(b"m")
 
     extractor = ManualExtractor(codename="SongY", source_type="ipk", root_dir=str(root))
     extracted = extractor.extract(tmp_path / "output")
@@ -41,12 +48,46 @@ def test_manual_ipk_root_multimap_codename_mismatch_falls_back(tmp_path: Path) -
     (root / "world" / "maps" / "MapB").mkdir(parents=True)
     (root / "MapA.ogg").write_bytes(b"a" * 1024)
     (root / "MapA_LOW.webm").write_bytes(b"v" * 1024)
+    (root / "MapA_musictrack.tpl.ckd").write_bytes(b"m")
 
     extractor = ManualExtractor(codename="WrongMap", source_type="ipk", root_dir=str(root))
     extracted = extractor.extract(tmp_path / "output")
 
     assert extracted == root
     assert extractor.get_codename() == "MapA"
+
+
+def test_manual_ipk_root_missing_required_media_is_fatal(tmp_path: Path) -> None:
+    root = tmp_path / "manual_ipk_root"
+    (root / "world" / "maps" / "MapA").mkdir(parents=True)
+
+    extractor = ManualExtractor(codename="MapA", source_type="ipk", root_dir=str(root))
+
+    with pytest.raises(DownloadError, match="Musictrack CKD is required"):
+        extractor.extract(tmp_path / "output")
+
+
+def test_archive_worker_does_not_swallow_unexpected_extraction_errors(tmp_path: Path) -> None:
+    ipk_file = tmp_path / "mapa.ipk"
+    ipk_file.write_bytes(b"\x50\xEC\x12\xBA" + b"\x00" * 64)
+
+    extractor = ArchiveIPKExtractor(ipk_file)
+
+    def _explode(_output_dir: Path) -> Path:
+        raise RuntimeError("boom")
+
+    extractor.extract = _explode  # type: ignore[method-assign]
+
+    worker = ExtractAndNormalizeWorker(extractor=extractor, output_dir=tmp_path / "work")
+    errors: list[str] = []
+    finished_payloads: list[object] = []
+
+    worker.error.connect(errors.append)
+    worker.finished.connect(finished_payloads.append)
+    worker.run()
+
+    assert errors and "boom" in errors[0]
+    assert finished_payloads and finished_payloads[0] is None
 
 
 def test_ipk_media_validation_requires_audio(tmp_path: Path) -> None:
