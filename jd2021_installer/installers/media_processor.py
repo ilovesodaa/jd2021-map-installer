@@ -892,8 +892,6 @@ def process_menu_art(target_dir: str | Path, codename: str) -> int:
     # V1 Parity Synthesis Logic
     online_key = f"{codename}_cover_online.tga".lower()
     generic_key = f"{codename}_cover_generic.tga".lower()
-    banner_key = f"{codename}_banner_bkg.tga".lower()
-    map_bkg_key = f"{codename}_map_bkg.tga".lower()
 
     def _synthesize(dst_key: str, src_key: str, desc: str) -> None:
         if dst_key not in found_tgas and src_key in found_tgas:
@@ -915,12 +913,6 @@ def process_menu_art(target_dir: str | Path, codename: str) -> int:
 
     _synthesize(online_key, generic_key, "cover_online")
     _synthesize(generic_key, online_key, "cover_generic")
-    _synthesize(banner_key, map_bkg_key, "banner_bkg")
-    
-    # Fallback: if map_bkg or banner_bkg still missing, try cover_generic (V1 last resort)
-    for key, name in [(map_bkg_key, "map_bkg"), (banner_key, "banner_bkg")]:
-        if key not in found_tgas:
-            _synthesize(key, generic_key, name)
 
     # Re-save as 32-bit RGBA TGA (V1 Parity)
     if Image is None:

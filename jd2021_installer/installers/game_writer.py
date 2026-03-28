@@ -546,11 +546,16 @@ def _write_videoscoach_files(target: Path, name: str) -> None:
 </root>''', encoding="utf-8")
 
 
-def _write_menuart_files(target: Path, name: str, num_coach: int) -> None:
+def _write_menuart_files(
+    target: Path,
+    name: str,
+    num_coach: int,
+    optional_arts: Optional[List[str]] = None,
+) -> None:
     """Write MenuArt actor ACTs and the menuart.isc scene file."""
+    optional_arts = optional_arts or []
     coach_arts = [f"coach_{i}" for i in range(1, num_coach + 1)] if num_coach > 0 else []
-    arts = ['banner_bkg', 'cover_albumbkg', 'cover_albumcoach',
-            'cover_generic', 'cover_online', 'map_bkg'] + coach_arts
+    arts = ['cover_generic', 'cover_online'] + optional_arts + coach_arts
 
     for art in arts:
         (target / f"MenuArt/Actors/{name}_{art}.act").write_text(
@@ -595,7 +600,7 @@ def _write_menuart_files(target: Path, name: str, num_coach: int) -> None:
 \t<Scene ENGINE_VERSION="140999" GRIDUNIT="0.500000" DEPTH_SEPARATOR="0" NEAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000" FAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000" viewFamily="1">
 \t\t<ACTORS NAME="Actor">
 \t\t\t<Actor RELATIVEZ="0.000000" SCALE="0.300000 0.300000" xFLIPPED="0" USERFRIENDLY="{name}_cover_generic" POS2D="266.087555 197.629959" ANGLE="0.000000" INSTANCEDATAFILE="World/MAPS/{name}/menuart/actors/{name}_{art}.act" LUA="enginedata/actortemplates/tpl_materialgraphiccomponent2d.tpl">
-\t\t\t\t<COMPONENTS NAME="MaterialGraphicComponent">
+            <Actor RELATIVEZ="0.000000" SCALE="0.300000 0.300000" xFLIPPED="0" USERFRIENDLY="{name}_cover_generic" POS2D="266.087555 197.629959" ANGLE="0.000000" INSTANCEDATAFILE="World/MAPS/{name}/menuart/actors/{name}_cover_generic.act" LUA="enginedata/actortemplates/tpl_materialgraphiccomponent2d.tpl">
 \t\t\t\t\t<MaterialGraphicComponent colorComputerTagId="0" renderInTarget="0" disableLight="0" disableShadow="-1" AtlasIndex="0" customAnchor="0.000000 0.000000" SinusAmplitude="0.000000 0.000000 0.000000" SinusSpeed="1.000000" AngleX="0.000000" AngleY="0.000000">
 \t\t\t\t\t\t<PrimitiveParameters>
 \t\t\t\t\t\t\t<GFXPrimitiveParam colorFactor="1.000000 1.000000 1.000000 1.000000" />
@@ -949,6 +954,17 @@ def write_game_files(
             else:
                 num_coach = 1
 
+        media = map_data.media
+        optional_arts: List[str] = []
+        if media.cover_albumbkg_path:
+            optional_arts.append("cover_albumbkg")
+        if media.cover_albumcoach_path:
+            optional_arts.append("cover_albumcoach")
+        if media.banner_bkg_path:
+            optional_arts.append("banner_bkg")
+        if media.map_bkg_path:
+            optional_arts.append("map_bkg")
+
         # Audio files (already existed in V2)
         _write_musictrack_trk(target, name, mt, vst)
         _write_songdesc(target, name, sd, num_coach, vst, config)
@@ -961,7 +977,7 @@ def write_game_files(
         _write_videoscoach_files(target, name)
 
         # MenuArt (texture actor ACTs + menuart.isc)
-        _write_menuart_files(target, name, num_coach)
+        _write_menuart_files(target, name, num_coach, optional_arts)
 
         # Root scene ISC (ties all subsystems together)
         _write_main_scene_isc(target, name, map_data.has_autodance)

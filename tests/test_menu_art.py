@@ -60,9 +60,10 @@ class TestMenuArt(unittest.TestCase):
         # Discover
         media = _discover_media(self.test_dir, "testmap")
         
-        # Verify synthesis in discovery
-        self.assertIsNotNone(media.banner_bkg_path)
-        self.assertEqual(media.banner_bkg_path.name, "TestMap_map_bkg.png")
+        # Verify map_bkg is discovered but banner_bkg stays optional/missing
+        self.assertIsNone(media.banner_bkg_path)
+        self.assertIsNotNone(media.map_bkg_path)
+        self.assertEqual(media.map_bkg_path.name, "TestMap_map_bkg.png")
 
     def test_bundle_scoping_no_leakage(self):
         # Setup two maps
@@ -80,7 +81,7 @@ class TestMenuArt(unittest.TestCase):
         # Verify Map B did NOT "steal" Map A's banner
         self.assertIsNone(media_b.banner_bkg_path)
 
-    def test_media_processor_banner_synthesis(self):
+    def test_media_processor_does_not_synthesize_banner(self):
         # Setup target directory structure
         target = self.test_dir / "target_proc"
         tex_dir = target / "menuart" / "textures"
@@ -92,8 +93,8 @@ class TestMenuArt(unittest.TestCase):
         # Heal
         process_menu_art(target, "TestMap")
         
-        # Verify banner_bkg was synthesized
-        self.assertTrue((tex_dir / "TestMap_banner_bkg.tga").exists())
+        # Verify banner_bkg remains optional
+        self.assertFalse((tex_dir / "TestMap_banner_bkg.tga").exists())
 
 if __name__ == "__main__":
     unittest.main()
