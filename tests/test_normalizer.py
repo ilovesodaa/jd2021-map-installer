@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from jd2021_installer.core.models import NormalizedMapData
-from jd2021_installer.parsers.normalizer import _discover_media, normalize
+from jd2021_installer.parsers.normalizer import _discover_media, load_ckd, normalize
 
 
 class TestNormalizerParity:
@@ -134,6 +134,21 @@ class TestNormalizerEdgeCases:
 
         result = normalize(tmp_path, codename="NoAdMap")
         assert result.has_autodance is False
+
+    def test_load_ckd_trailing_junk_falls_back_to_binary(self, tmp_path: Path) -> None:
+        ckd_path = tmp_path / "legacy_musictrack.ckd"
+        ckd_path.write_bytes(b'{"COMPONENTS": []}TRAILING_BINARY')
+
+        from unittest.mock import patch
+
+        with patch(
+            "jd2021_installer.parsers.normalizer.parse_binary_ckd",
+            return_value={"parsed": "binary"},
+        ) as mock_binary:
+            result = load_ckd(ckd_path)
+
+        assert result == {"parsed": "binary"}
+        mock_binary.assert_called_once()
 
 
 class TestNormalizerMusicTrack:

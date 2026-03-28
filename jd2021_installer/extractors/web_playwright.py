@@ -104,6 +104,16 @@ def extract_codename_from_urls(urls: List[str]) -> Optional[str]:
     return None
 
 
+def _parse_retry_after_seconds(header_value: Optional[str], fallback: int) -> int:
+    """Parse Retry-After header as seconds, returning a safe fallback on failure."""
+    if not header_value:
+        return max(1, int(fallback))
+    try:
+        return max(1, int(header_value.strip()))
+    except (TypeError, ValueError):
+        return max(1, int(fallback))
+
+
 # ---------------------------------------------------------------------------
 # File downloader
 # ---------------------------------------------------------------------------
@@ -125,7 +135,7 @@ def _classify_urls(
         if ".ogg" in u and "AudioPreview" not in u:
             audio_url = u
         elif "MAIN_SCENE" in u and ".zip" in u:
-            for plat in ["DURANGO", "NX", "SCARLETT", "ORBIS", "PROSPERO", "PC", "GGP", "WIIU"]:
+            for plat in ["X360", "DURANGO", "SCARLETT", "NX", "ORBIS", "PROSPERO", "PC", "GGP", "WIIU"]:
                 if f"MAIN_SCENE_{plat}" in u:
                     scene_zips[plat] = u
                     break
@@ -252,13 +262,31 @@ def download_files(
         for attempt in range(1, config.max_retries + 1):
             try:
                 with session.get(url, stream=True, timeout=config.download_timeout_s) as r:
-                    if r.status_code == 403:
-                        logger.warning("HTTP 403 for %s (Attempt %d/%d)", fname, attempt, config.max_retries)
+                    if r.status_code == 429:
+                        retry_after = _parse_retry_after_seconds(
+                            r.headers.get("Retry-After"),
+                            config.retry_base_delay_s * attempt,
+                        )
+                        logger.warning(
+                            "Rate limited (429) for %s. Waiting %ds before retry %d/%d...",
+                            fname,
+                            retry_after,
+                            attempt,
+                            config.max_retries,
+                        )
                         if attempt < config.max_retries:
-                            time.sleep(config.retry_base_delay_s * attempt)
+                            time.sleep(retry_after)
                             continue
                         else:
                             break
+
+                    if r.status_code in (403, 404):
+                        logger.warning(
+                            "HTTP %d for %s (links may have expired).",
+                            r.status_code,
+                            fname,
+                        )
+                        break
                             
                     r.raise_for_status()
                     total_size = int(r.headers.get('content-length', 0))
@@ -615,7 +643,8 @@ class WebPlaywrightExtractor(BaseExtractor):
                 except: pass
             if scraped_fresh:
                 all_urls = list(set(all_urls + scraped_fresh))
-                download_files(all_urls, download_dir, self._quality, self._config)
+                refreshed = download_files(all_urls, download_dir, self._quality, self._config)
+                downloaded.update(refreshed)
 
         # 2. Extract/Assemble into temporary output_dir
         extract_dir = output_dir / codename
@@ -661,7 +690,6 @@ class WebPlaywrightExtractor(BaseExtractor):
         for plat in SCENE_PLATFORM_PREFERENCE:
             matches = [z for z in scene_zips if f"MAIN_SCENE_{plat}" in z.upper()]
             if matches:
-                selected = matches[14] if len(matches) > 14 else matches[0] # Safety
                 selected = matches[0]
                 break
 
