@@ -570,9 +570,10 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
             audio_found = True
 
     # 3. & 4. Images (Cover/Coach/Banner/Background)
-    # Collect all potential image/CKD files once to avoid discovery order issues
+    # Collect only texture-like files. Do NOT include generic *.ckd,
+    # otherwise actor files like "*_cover_generic.act.ckd" can be selected.
     all_media_files: List[Path] = []
-    for ext in ("*.jpg", "*.png", "*.tga", "*.ckd"):
+    for ext in ("*.jpg", "*.jpeg", "*.png", "*.tga", "*.jpg.ckd", "*.jpeg.ckd", "*.png.ckd", "*.tga.ckd"):
         all_media_files.extend(list(dir_path.rglob(ext)))
         if search_root and bg_search_dir != dir_path:
             all_media_files.extend(list(bg_search_dir.rglob(ext)))
