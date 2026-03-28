@@ -56,12 +56,11 @@ def load_ckd(file_path: str | Path) -> dict | object:
 
     raw = path.read_bytes()
 
-    # Try JSON first (strip null padding/garbage)
+    # Try JSON first (strip null padding) using strict UTF-8 decoding.
     try:
-        content = raw.decode("utf-8", errors="ignore").strip().replace("\x00", "")
-        # Handle cases where there is extra data after the JSON object
-        return json.JSONDecoder().raw_decode(content)[0]
-    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        content = raw.replace(b"\x00", b"").strip().decode("utf-8")
+        return json.loads(content)
+    except (json.JSONDecodeError, UnicodeDecodeError):
         pass
 
     # Fall back to binary parser

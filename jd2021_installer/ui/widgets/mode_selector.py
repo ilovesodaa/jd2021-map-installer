@@ -479,7 +479,14 @@ class ModeSelectorWidget(QWidget):
 
         asset: Optional[Path] = None
         nohud: Optional[Path] = None
-        html_files = sorted(folder.glob("*.html"), key=lambda p: p.name.lower())
+        html_files = sorted(
+            [
+                p
+                for p in folder.iterdir()
+                if p.is_file() and p.suffix.lower() in {".html", ".htm"}
+            ],
+            key=lambda p: p.name.lower(),
+        )
 
         for html in html_files:
             lower = html.name.lower()
@@ -488,8 +495,8 @@ class ModeSelectorWidget(QWidget):
             elif "asset" in lower and asset is None:
                 asset = html
 
-        # Fallback: if names are unconventional but exactly two html files exist.
-        if len(html_files) == 2:
+        # Fallback: if names are unconventional but two or more html files exist.
+        if len(html_files) >= 2:
             if asset is None:
                 asset = next((h for h in html_files if h != nohud), html_files[0])
             if nohud is None:
