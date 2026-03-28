@@ -442,11 +442,30 @@ class MainWindow(QMainWindow):
             return issues
 
         if idx == MODE_MANUAL:
-            codename = self._mode_selector.inputs["manual"]["codename"].text().strip()
-            root_dir = self._mode_selector.inputs["manual"]["root"].text().strip()
+            manual_inputs = self._mode_selector.inputs["manual"]
+            codename = manual_inputs["codename"].text().strip()
+            root_dir = manual_inputs["root"].text().strip()
             if not codename and not root_dir:
                 issues.append("Manual mode requires a codename or a root directory.")
-            else:
+                return issues
+
+            if root_dir and not Path(root_dir).is_dir():
+                issues.append(f"Manual root directory was not found: {root_dir}")
+
+            required_files = [
+                ("audio", "Audio file is required."),
+                ("video", "Video file (.webm) is required."),
+                ("mtrack", "Musictrack CKD is required (fatal for config generation)."),
+            ]
+            for key, missing_msg in required_files:
+                value = manual_inputs[key].text().strip()
+                if not value:
+                    issues.append(missing_msg)
+                    continue
+                if not Path(value).is_file():
+                    issues.append(f"Manual {key} file was not found: {value}")
+
+            if not issues:
                 self._current_target = root_dir or codename
             return issues
 
