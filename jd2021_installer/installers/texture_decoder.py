@@ -224,7 +224,11 @@ def decode_ckd_texture(ckd_path: Path, output_path: Optional[Path] = None) -> bo
 
     # NX/Switch XTX format
     try:
-        from xtx_extractor import xtx_extract
+        try:
+            from jd2021_installer.extractors.xtx_extractor import xtx_extract
+        except ImportError:
+            # Backward-compatible fallback for legacy external layout.
+            from xtx_extractor import xtx_extract
         nv = xtx_extract.readNv(raw_data)
         if nv.numImages == 0:
             raise ValueError("No images in XTX data")
