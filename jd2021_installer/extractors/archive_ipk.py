@@ -110,7 +110,7 @@ def extract_ipk(target_file: str | Path, output_dir: str | Path | None = None) -
     validate_ipk_magic(target_file)
 
     try:
-        output_path.mkdir(parents=True, exist_ok=True)
+        output_path.mkdir(exist_ok=True)
 
         with open(target_file, "rb") as f:
             ipk_header = _read_header_fields(f, _IPK_HEADER_TEMPLATE)
@@ -139,66 +139,65 @@ def extract_ipk(target_file: str | Path, output_dir: str | Path | None = None) -
             extracted_files = 0
 
             for k, chunk in enumerate(file_chunks):
-                try:
-                    path_ori = chunk["path_name"]["value"].decode().lower().replace('\\', '/')
-                    if "world/maps/" in path_ori:
-                        after_maps = path_ori.split("world/maps/")[1]
-                        parts = after_maps.split("/")
-                        if parts and parts[0]:
-                            codenames_found.add(parts[0])
+                path_ori = chunk["path_name"]["value"].decode().lower().replace('\\', '/')
+                if "world/maps/" in path_ori:
+                    after_maps = path_ori.split("world/maps/")[1]
+                    parts = after_maps.split("/")
+                    if parts and parts[0]:
+                        codenames_found.add(parts[0])
 
-                    if k % 100 == 0:
-                        status = f"file {k + 1}/{num_files}"
-                        if codenames_found:
-                            status += f" (maps: {', '.join(sorted(codenames_found))})"
-                        logger.info("IPK: Extracting %s...", status)
+                if k % 100 == 0:
+                    status = f"file {k + 1}/{num_files}"
+                    if codenames_found:
+                        status += f" (maps: {', '.join(sorted(codenames_found))})"
+                    logger.info("IPK: Extracting %s...", status)
 
-                    offset = _unpack(chunk["offset"]["value"])
-                    data_size = _unpack(chunk["size"]["value"])
+                offset = _unpack(chunk["offset"]["value"])
+                data_size = _unpack(chunk["size"]["value"])
 
-                    path_ori_raw = chunk["path_name"]["value"].decode()
-                    if os.path.basename(path_ori_raw) == path_ori_raw:
-                        file_path = output_path / chunk["file_name"]["value"].decode()
-                        file_name = chunk["path_name"]["value"].decode()
-                    else:
-                        file_path = output_path / chunk["path_name"]["value"].decode()
-                        file_name = chunk["file_name"]["value"].decode()
+                path_ori_raw = chunk["path_name"]["value"].decode()
+                if os.path.basename(path_ori_raw) == path_ori_raw:
+                    file_path = output_path / chunk["file_name"]["value"].decode()
+                    file_name = chunk["path_name"]["value"].decode()
+                else:
+                    file_path = output_path / chunk["path_name"]["value"].decode()
+                    file_name = chunk["file_name"]["value"].decode()
 
-                    # Path traversal protection
-                    resolved = os.path.normpath(os.path.join(str(file_path), file_name))
-                    if not resolved.startswith(str(output_path)):
-                        logger.warning("Skipping path-traversal entry: %s", resolved)
-                        continue
-
-                    f.seek(offset + base_offset)
-                    if file_path not in created_dirs:
-                        file_path.mkdir(parents=True, exist_ok=True)
-                        created_dirs.add(file_path)
-
-                    with open(file_path / file_name, "wb") as ff:
-                        raw_data = f.read(data_size)
-                        try:
-                            decompressed = zlib.decompress(raw_data)
-                        except zlib.error:
-                            try:
-                                decompressed = lzma.decompress(raw_data)
-                            except lzma.LZMAError:
-                                decompressed = raw_data
-                        ff.write(decompressed)
-                    extracted_files += 1
-                except (OSError, struct.error, ValueError, UnicodeDecodeError) as exc:
-                    logger.warning("IPK: Skipping unreadable entry %d/%d (%s)", k + 1, num_files, exc)
+                # Path traversal protection
+                resolved = os.path.normpath(os.path.join(str(file_path), file_name))
+                if not resolved.startswith(str(output_path)):
+                    logger.warning("Skipping path-traversal entry: %s", resolved)
                     continue
+
+                f.seek(offset + base_offset)
+                if file_path not in created_dirs:
+                    file_path.mkdir(parents=True, exist_ok=True)
+                    created_dirs.add(file_path)
+
+                with open(file_path / file_name, "wb") as ff:
+                    raw_data = f.read(data_size)
+                    try:
+                        decompressed = zlib.decompress(raw_data)
+                    except zlib.error:
+                        try:
+                            decompressed = lzma.decompress(raw_data)
+                        except lzma.LZMAError:
+                            decompressed = raw_data
+                    ff.write(decompressed)
+                extracted_files += 1
 
         logger.info("IPK: Extracted %d/%d files to %s", extracted_files, num_files, output_path)
         if extracted_files == 0 and num_files > 0:
-            logger.warning("IPK: No files were materialized from %s", target_file)
+            logger.warning(
+                "IPK extraction produced no materialized files for %s; continuing for V1 parity.",
+                target_file,
+            )
         return output_path
 
     except IPKExtractionError:
         raise
     except Exception as exc:
-        raise IPKExtractionError(f"Failed to extract IPK: {exc}") from exc
+        raise IPKExtractionError(f"Failed to extract IPK ({type(exc).__name__}): {exc}") from exc
 
 
 def inspect_ipk(target_file: str | Path) -> list[str]:
@@ -302,9 +301,10 @@ def _detect_maps_in_dir(directory: Path) -> list[str]:
 class ArchiveIPKExtractor(BaseExtractor):
     """Extractor for IPK archive files."""
 
-    def __init__(self, ipk_path: str | Path) -> None:
+    def __init__(self, ipk_path: str | Path, desired_codename: str | None = None) -> None:
         self._ipk_path = Path(ipk_path)
         self._codename: Optional[str] = None
+        self._desired_codename = desired_codename.strip() if desired_codename else None
         self.bundle_maps: list[str] = []
 
     def extract(self, output_dir: Path) -> Path:
@@ -326,6 +326,13 @@ class ArchiveIPKExtractor(BaseExtractor):
             logger.info("Inferred codename: %s", self._codename)
         elif len(discovered) > 1:
             logger.info("Multiple maps discovered in IPK: %s", ", ".join(discovered))
+            if self._desired_codename:
+                target_matches = [m for m in discovered if m.lower() == self._desired_codename.lower()]
+                if target_matches:
+                    self._codename = target_matches[0]
+                    logger.info("Matched bundle codename from requested target: %s", self._codename)
+                    return result
+
             # Try to match the codename from the IPK filename
             base = self._ipk_path.stem
             stem = re.sub(r"_(x360|durango|scarlett|nx|orbis|prospero|pc)$", "", base, flags=re.IGNORECASE)

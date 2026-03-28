@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
+import struct
 import traceback
 from pathlib import Path
 from typing import Optional
@@ -26,6 +27,7 @@ from typing import Optional
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from jd2021_installer.core.config import AppConfig
+from jd2021_installer.core.exceptions import IPKExtractionError
 from jd2021_installer.core.models import NormalizedMapData
 from jd2021_installer.extractors.base import BaseExtractor
 from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor
@@ -33,6 +35,8 @@ from jd2021_installer.installers.game_writer import write_game_files
 from jd2021_installer.parsers.normalizer import normalize
 
 logger = logging.getLogger("jd2021.ui.workers")
+
+_V1_RECOVERABLE_IPK_ERRORS = (IPKExtractionError, AssertionError, OSError, struct.error)
 
 
 def _path_has_codename_component(path: Path, codename: str) -> bool:
@@ -164,7 +168,16 @@ class ExtractAndNormalizeWorker(QObject):
 
             self.status.emit("Extract map data")
             self.progress.emit(10)
-            map_output_dir = self._extractor.extract(self._output_dir)
+            try:
+                map_output_dir = self._extractor.extract(self._output_dir)
+            except Exception as exc:
+                if isinstance(self._extractor, ArchiveIPKExtractor) and isinstance(exc, _V1_RECOVERABLE_IPK_ERRORS):
+                    logger.warning("IPK extraction issue (continuing for parity): %s", exc)
+                    self.status.emit(f"Warning: IPK extraction issue: {exc}")
+                    # V1 parity: continue with any partial extraction state.
+                    map_output_dir = self._output_dir
+                else:
+                    raise
 
             for warning in self._extractor.get_warnings():
                 self.status.emit(f"Warning: {warning}")
@@ -482,7 +495,14 @@ class BatchInstallWorker(QObject):
                         ipk_name_hint = maps_in_ipk[0] if maps_in_ipk else candidate.name
                         
                         self.status.emit(f"[{ipk_name_hint}] Extract map data")
-                        extractor = ArchiveIPKExtractor(candidate)
+                        desired_codename = None
+                        if selected_lookup and maps_in_ipk:
+                            for discovered_name in maps_in_ipk:
+                                if discovered_name.lower() in selected_lookup:
+                                    desired_codename = discovered_name
+                                    break
+
+                        extractor = ArchiveIPKExtractor(candidate, desired_codename=desired_codename)
                         import shutil
                         shutil.rmtree(batch_cache, ignore_errors=True)
                         map_dir = extractor.extract(batch_cache)

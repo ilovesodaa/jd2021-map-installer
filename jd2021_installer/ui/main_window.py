@@ -668,6 +668,13 @@ class MainWindow(QMainWindow):
         # Bundle IPK support
         from jd2021_installer.ui.widgets.mode_selector import MODE_IPK
         if self._mode_selector.current_mode_index == MODE_IPK and Path(self._current_target).is_file():
+            from jd2021_installer.extractors.archive_ipk import validate_ipk_magic
+            try:
+                validate_ipk_magic(self._current_target)
+            except Exception as exc:
+                QMessageBox.critical(self, "Invalid IPK", f"Could not open IPK archive:\n{exc}")
+                return
+
             from jd2021_installer.extractors.archive_ipk import inspect_ipk
             maps_found = inspect_ipk(self._current_target)
             if len(maps_found) > 1:
@@ -1236,7 +1243,15 @@ class MainWindow(QMainWindow):
             if not ipk_path.is_file():
                 QMessageBox.warning(self, "Invalid Path", f"IPK not found: {ipk_path}")
                 return None
-            return ArchiveIPKExtractor(ipk_path)
+
+            # Provide a codename hint for bundle selection parity when available.
+            desired_codename = re.sub(
+                r"_(x360|durango|scarlett|nx|orbis|prospero|pc)$",
+                "",
+                ipk_path.stem,
+                flags=re.IGNORECASE,
+            )
+            return ArchiveIPKExtractor(ipk_path, desired_codename=desired_codename)
 
         if idx == MODE_FETCH:
             from jd2021_installer.extractors.web_playwright import WebPlaywrightExtractor
