@@ -1230,18 +1230,11 @@ class MainWindow(QMainWindow):
         idx = self._mode_selector.current_mode_index
 
         if idx == MODE_IPK:
-            from jd2021_installer.core.exceptions import IPKExtractionError
-            from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor, validate_ipk_magic
+            from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor
 
             ipk_path = Path(self._current_target)  # type: ignore[arg-type]
             if not ipk_path.is_file():
                 QMessageBox.warning(self, "Invalid Path", f"IPK not found: {ipk_path}")
-                return None
-
-            try:
-                validate_ipk_magic(ipk_path)
-            except IPKExtractionError as exc:
-                QMessageBox.critical(self, "Prepare Failed", f"Could not unpack IPK:\n{exc}")
                 return None
             return ArchiveIPKExtractor(ipk_path)
 
