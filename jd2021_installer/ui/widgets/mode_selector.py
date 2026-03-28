@@ -283,7 +283,10 @@ class ModeSelectorWidget(QWidget):
         source_lay.addWidget(QLabel("Source Type:"))
         self._manual_source_combo = QComboBox()
         self._manual_source_combo.addItems(["JDU", "IPK"])
+        self._manual_source_combo.currentTextChanged.connect(self._on_manual_source_type_changed)
         source_lay.addWidget(self._manual_source_combo)
+        self._manual_source_hint = QLabel("Downloaded assets + nohud HTML")
+        source_lay.addWidget(self._manual_source_hint)
         source_lay.addStretch()
         scroll_lay.addLayout(source_lay)
 
@@ -407,52 +410,170 @@ class ModeSelectorWidget(QWidget):
 
         source_type = self.manual_source_type
         scan_root = self._resolve_scan_root(root, source_type)
+        codename = self.inputs["manual"]["codename"].text().strip()
         
         # 1. Infer codename from directory name
-        self.inputs["manual"]["codename"].setText(scan_root.name)
+        if not codename:
+            self.inputs["manual"]["codename"].setText(scan_root.name)
+            codename = scan_root.name
         
         # 2. Auto-discover common files
         from jd2021_installer.parsers.normalizer import _find_ckd_files
         
-        if source_type == "ipk":
-            mapping = {
-                "mtrack": "*musictrack*.ckd",
-                "sdesc": "*songdesc*.ckd",
-                "dtape": "*dtape*.ckd",
-                "ktape": "*ktape*.ckd",
-                "mseq": "*mainsequence*.ckd",
-            }
-        else:
-            mapping = {
-                "mtrack": "*musictrack*.tpl.ckd",
-                "sdesc": "*songdesc*.tpl.ckd",
-                "dtape": "*dtape*.ckd",
-                "ktape": "*ktape*.ckd",
-                "mseq": "*mainsequence*.ckd",
-            }
+        mapping = {
+            "mtrack": "*musictrack*.tpl.ckd",
+            "sdesc": "*songdesc*.tpl.ckd",
+            "dtape": "*_tml_dance.?tape.ckd",
+            "ktape": "*_tml_karaoke.?tape.ckd",
+            "mseq": "*mainsequence*.tape.ckd",
+        }
         
         for key, pattern in mapping.items():
-            found = _find_ckd_files(str(scan_root), pattern)
-            if found:
+            found = _find_ckd_files(str(scan_root), pattern, codename=codename or None)
+            if found and not self.inputs["manual"][key].text().strip():
                 self.inputs["manual"][key].setText(found[0])
                 
         # Audio/Video
-        video = [v for v in scan_root.rglob("*.webm") if "preview" not in v.name.lower()]
-        if not video:
-            video = list(scan_root.rglob("*.webm"))
-        if video: self.inputs["manual"]["video"].setText(str(video[0]))
-        
-        if source_type == "ipk":
-            audio = list(scan_root.rglob("*.wav")) or list(scan_root.rglob("*.wav.ckd")) or list(scan_root.rglob("*.ogg"))
-        else:
-            audio = list(scan_root.rglob("*.ogg")) or list(scan_root.rglob("*.wav")) or list(scan_root.rglob("*.wav.ckd"))
-        if audio: self.inputs["manual"]["audio"].setText(str(audio[0]))
+        if not self.inputs["manual"]["video"].text().strip():
+            video = self._pick_manual_video(scan_root, codename or None, source_type)
+            if video:
+                self.inputs["manual"]["video"].setText(str(video))
+
+        if not self.inputs["manual"]["audio"].text().strip():
+            audio = self._pick_manual_audio(scan_root, codename or None, source_type)
+            if audio:
+                self.inputs["manual"]["audio"].setText(str(audio))
         
         # Folders
-        for key in ["moves", "pictos", "menuart", "amb"]:
-            folder = next((d for d in scan_root.rglob("*") if d.is_dir() and key in d.name.lower()), None)
-            if folder:
+        folders = self._discover_manual_folders(scan_root)
+        for key, folder in folders.items():
+            if folder and not self.inputs["manual"][key].text().strip():
                 self.inputs["manual"][key].setText(str(folder))
+
+    def _on_manual_source_type_changed(self, text: str) -> None:
+        """Mirror V1 behavior: clear manual state when source type changes."""
+        source_type = text.strip().lower()
+        if hasattr(self, "_manual_source_hint"):
+            if source_type == "ipk":
+                self._manual_source_hint.setText("Unpacked IPK map files")
+            else:
+                self._manual_source_hint.setText("Downloaded assets + nohud HTML")
+
+        self.inputs["manual"]["root"].clear()
+        self.inputs["manual"]["codename"].clear()
+        for key in (
+            "audio",
+            "video",
+            "mtrack",
+            "sdesc",
+            "dtape",
+            "ktape",
+            "mseq",
+            "moves",
+            "pictos",
+            "menuart",
+            "amb",
+        ):
+            self.inputs["manual"][key].clear()
+
+    def _matches_codename(self, path: Path, codename: Optional[str]) -> bool:
+        if not codename:
+            return True
+        lower_codename = codename.lower()
+        lower_name = path.name.lower()
+        if re.match(rf"^{re.escape(lower_codename)}(?:[^a-z0-9]|$)", lower_name):
+            return True
+        return lower_codename in [p.lower() for p in path.parts]
+
+    def _pick_manual_video(self, scan_root: Path, codename: Optional[str], source_type: str) -> Optional[Path]:
+        if source_type == "ipk":
+            candidates = [
+                p for p in scan_root.rglob("*.webm")
+                if "mappreview" not in p.name.lower() and "videopreview" not in p.name.lower()
+            ]
+        else:
+            candidates = [
+                p for p in scan_root.glob("*.webm")
+                if "mappreview" not in p.name.lower() and "videopreview" not in p.name.lower()
+            ]
+
+        if not candidates:
+            return None
+
+        if codename:
+            scoped = [p for p in candidates if self._matches_codename(p, codename)]
+            if scoped:
+                candidates = scoped
+
+        for quality in ["ULTRA_HD", "ULTRA", "HIGH_HD", "HIGH", "MID_HD", "MID", "LOW_HD", "LOW"]:
+            suffix = f"_{quality}.webm"
+            for path in candidates:
+                if path.name.upper().endswith(suffix):
+                    return path
+        return candidates[0]
+
+    def _pick_manual_audio(self, scan_root: Path, codename: Optional[str], source_type: str) -> Optional[Path]:
+        if source_type == "ipk":
+            priority = ("*.wav", "*.wav.ckd", "*.ogg")
+        else:
+            priority = ("*.ogg", "*.wav", "*.wav.ckd")
+
+        for pattern in priority:
+            top_hits = [p for p in scan_root.glob(pattern) if "audiopreview" not in p.name.lower()]
+            if codename:
+                scoped = [p for p in top_hits if self._matches_codename(p, codename)]
+                if scoped:
+                    return scoped[0]
+            elif top_hits:
+                return top_hits[0]
+
+        for pattern in priority:
+            recursive_hits = [p for p in scan_root.rglob(pattern) if "audiopreview" not in p.name.lower()]
+            recursive_hits = [
+                p
+                for p in recursive_hits
+                if "autodance" not in str(p).lower() and not p.name.lower().startswith("amb_")
+            ]
+            if not recursive_hits:
+                continue
+            if codename:
+                scoped = [p for p in recursive_hits if self._matches_codename(p, codename)]
+                if scoped:
+                    return scoped[0]
+            else:
+                return recursive_hits[0]
+
+        return None
+
+    def _discover_manual_folders(self, scan_root: Path) -> dict[str, Optional[Path]]:
+        menuart_textures = next(
+            (
+                p
+                for p in scan_root.rglob("textures")
+                if p.is_dir() and p.parent.name.lower() == "menuart"
+            ),
+            None,
+        )
+        menuart = menuart_textures or next(
+            (p for p in scan_root.rglob("menuart") if p.is_dir()),
+            None,
+        )
+
+        amb = next(
+            (
+                p
+                for p in scan_root.rglob("amb")
+                if p.is_dir() and p.parent.name.lower() == "audio"
+            ),
+            None,
+        )
+
+        return {
+            "moves": next((p for p in scan_root.rglob("moves") if p.is_dir()), None),
+            "pictos": next((p for p in scan_root.rglob("pictos") if p.is_dir()), None),
+            "menuart": menuart,
+            "amb": amb,
+        }
 
     def _resolve_scan_root(self, root: Path, source_type: str) -> Path:
         """Prefer codename folder under world/maps for IPK-oriented scans."""

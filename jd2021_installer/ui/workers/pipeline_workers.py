@@ -35,6 +35,100 @@ from jd2021_installer.parsers.normalizer import normalize
 logger = logging.getLogger("jd2021.ui.workers")
 
 
+def _path_has_codename_component(path: Path, codename: str) -> bool:
+    codename_low = codename.lower()
+    parts = [p.lower() for p in path.parts]
+    if codename_low in parts:
+        return True
+    name_low = path.name.lower()
+    return name_low.startswith(codename_low)
+
+
+def _pick_ipk_audio(search_dirs: list[Path], codename: Optional[str]) -> Optional[Path]:
+    for pattern in ("*.ogg", "*.wav", "*.wav.ckd"):
+        candidates: list[Path] = []
+        for root in search_dirs:
+            if not root or not root.is_dir():
+                continue
+            for p in root.rglob(pattern):
+                low_path = str(p).lower().replace("\\", "/")
+                low_name = p.name.lower()
+                if "audiopreview" in low_name:
+                    continue
+                if "/amb/" in low_path or "/autodance/" in low_path:
+                    continue
+                if low_name.startswith("amb_"):
+                    continue
+                candidates.append(p)
+
+        if not candidates:
+            continue
+
+        if codename:
+            scoped = [p for p in candidates if _path_has_codename_component(p, codename)]
+            if scoped:
+                return scoped[0]
+            # V1 behavior: do not pick random media from another map when codename is known.
+            continue
+        return candidates[0]
+
+    return None
+
+
+def _pick_ipk_video(search_dirs: list[Path], codename: Optional[str]) -> Optional[Path]:
+    candidates: list[Path] = []
+    for root in search_dirs:
+        if not root or not root.is_dir():
+            continue
+        for p in root.rglob("*.webm"):
+            low_name = p.name.lower()
+            if "mappreview" in low_name or "videopreview" in low_name:
+                continue
+            candidates.append(p)
+
+    if not candidates:
+        return None
+
+    if codename:
+        scoped = [p for p in candidates if _path_has_codename_component(p, codename)]
+        if scoped:
+            candidates = scoped
+        else:
+            # V1 behavior: avoid selecting cross-map videos when codename is known.
+            return None
+
+    for quality in ("ULTRA_HD", "ULTRA", "HIGH_HD", "HIGH", "MID_HD", "MID", "LOW_HD", "LOW"):
+        suffix = f"_{quality}.webm"
+        for p in candidates:
+            if p.name.upper().endswith(suffix):
+                return p
+    return candidates[0]
+
+
+def _validate_ipk_media_presence(
+    map_output_dir: Path,
+    codename: Optional[str],
+    search_root: Optional[Path],
+) -> None:
+    search_dirs = [map_output_dir]
+    if search_root and search_root not in search_dirs:
+        search_dirs.append(search_root)
+
+    audio = _pick_ipk_audio(search_dirs, codename)
+    if not audio:
+        raise RuntimeError(
+            "No audio file found after IPK extraction. "
+            "Ensure the IPK contains .ogg, .wav, or .wav.ckd audio."
+        )
+
+    video = _pick_ipk_video(search_dirs, codename)
+    if not video:
+        raise RuntimeError(
+            "No gameplay video (.webm) found after IPK extraction. "
+            "Ensure a .webm file is in the source directory."
+        )
+
+
 class ExtractAndNormalizeWorker(QObject):
     """Extract map data and normalize it in a background thread."""
 
@@ -69,16 +163,25 @@ class ExtractAndNormalizeWorker(QObject):
             map_output_dir = self._extractor.extract(self._output_dir)
 
             codename = self._codename or self._extractor.get_codename()
+            search_root: Optional[Path] = None
+
+            if isinstance(self._extractor, ArchiveIPKExtractor):
+                # V1 parity: IPK mode also probes media alongside the selected .ipk file.
+                search_root = self._extractor.get_source_dir()
+                _validate_ipk_media_presence(map_output_dir, codename, search_root)
+            elif hasattr(self._extractor, "is_ipk_source"):
+                try:
+                    if bool(self._extractor.is_ipk_source()):  # type: ignore[attr-defined]
+                        _validate_ipk_media_presence(map_output_dir, codename, None)
+                except Exception:
+                    # Do not mask extractor failures behind the parity probe.
+                    raise
 
             self.status.emit("Parse CKDs & Metadata")
             self.progress.emit(40)
             
             self.status.emit("Normalize assets")
             self.progress.emit(50)
-            search_root: Optional[Path] = None
-            if isinstance(self._extractor, ArchiveIPKExtractor):
-                # V1 parity: IPK mode also probes media alongside the selected .ipk file.
-                search_root = self._extractor.get_source_dir()
 
             map_data = normalize(
                 map_output_dir,

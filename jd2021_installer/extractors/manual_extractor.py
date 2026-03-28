@@ -23,15 +23,39 @@ class ManualExtractor(BaseExtractor):
 
     def _resolve_root_dir(self, root: Path) -> Path:
         """Apply source-type specific root resolution for manual mode."""
-        if self._source_type != "ipk":
-            return root
+        return root
+
+    def is_ipk_source(self) -> bool:
+        """True when manual mode is operating on unpacked IPK content."""
+        return self._source_type == "ipk"
+
+    def _validate_ipk_root(self, root: Path) -> None:
+        """Validate codename/root consistency for manual IPK roots."""
+        if not self.is_ipk_source():
+            return
+        if not self._codename:
+            return
 
         world_maps = root / "world" / "maps"
-        if world_maps.is_dir():
-            candidates = [d for d in world_maps.iterdir() if d.is_dir()]
-            if candidates:
-                return sorted(candidates, key=lambda p: p.name.lower())[0]
-        return root
+        if not world_maps.is_dir():
+            return
+
+        candidates = [d.name for d in world_maps.iterdir() if d.is_dir()]
+        if not candidates:
+            return
+
+        lower_candidates = {c.lower() for c in candidates}
+        if self._codename.lower() not in lower_candidates:
+            if len(candidates) > 1:
+                raise DownloadError(
+                    "Manual IPK root contains multiple maps and codename does not match any of them. "
+                    f"Codename='{self._codename}', maps={', '.join(sorted(candidates))}"
+                )
+            logger.warning(
+                "Manual IPK codename '%s' does not match discovered map '%s'.",
+                self._codename,
+                candidates[0],
+            )
 
     def __init__(
         self,
@@ -68,6 +92,8 @@ class ManualExtractor(BaseExtractor):
         # If there are NO explicit files/dirs configured but there IS a root,
         # just yield the root directly as the extraction source for the normalizer.
         resolved_root = self._resolve_root_dir(self._root_dir) if self._root_dir and self._root_dir.is_dir() else None
+        if resolved_root:
+            self._validate_ipk_root(resolved_root)
 
         if resolved_root and not any(self._files.values()) and not any(self._dirs.values()):
             logger.info(
