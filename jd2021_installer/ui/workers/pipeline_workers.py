@@ -695,7 +695,6 @@ def install_map_to_game(
     art_map = {
         "cover_generic_path": "cover_generic",
         "cover_online_path": "cover_online",
-        "banner_path": "banner_bkg",  # Map generic banner to banner_bkg if specific one missing
         "banner_bkg_path": "banner_bkg",
         "map_bkg_path": "map_bkg",
         "cover_albumbkg_path": "cover_albumbkg",

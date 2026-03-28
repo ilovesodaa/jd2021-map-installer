@@ -615,16 +615,8 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
             if not media.cover_online_path: media.cover_online_path = general_cover
 
     media.banner_path = _get_best_asset("banner", all_media_files)
-    media.banner_bkg_path = _get_best_asset("banner", all_media_files)
+    media.banner_bkg_path = _get_best_asset("banner_bkg", all_media_files)
     media.map_bkg_path = _get_best_asset("map_bkg", all_media_files)
-    
-    # V1 Parity Banner Synthesis: if banner is missing but map_bkg or generic bkg exists, use it.
-    if not media.banner_path or not media.banner_bkg_path:
-        search_bkg = media.map_bkg_path or _get_best_asset("bkg", all_media_files)
-        if search_bkg:
-            if not media.banner_path: media.banner_path = search_bkg
-            if not media.banner_bkg_path: media.banner_bkg_path = search_bkg
-            logger.info("Synthesized banner from background for %s", codename or "map")
 
     media.cover_albumbkg_path = _get_best_asset("albumbkg", all_media_files)
     media.cover_albumcoach_path = _get_best_asset("albumcoach", all_media_files)
