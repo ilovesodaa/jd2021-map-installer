@@ -81,6 +81,21 @@ class TestMenuArt(unittest.TestCase):
         # Verify Map B did NOT "steal" Map A's banner
         self.assertIsNone(media_b.banner_bkg_path)
 
+    def test_discovery_ignores_actor_ckd_for_cover_assets(self):
+        # Setup map tree with both actor and texture files using same cover token.
+        actor_dir = self.test_dir / "menuart" / "actors"
+        tex_dir = self.test_dir / "menuart" / "textures"
+        actor_dir.mkdir(parents=True)
+        tex_dir.mkdir(parents=True)
+
+        (actor_dir / "TestMap_cover_generic.act.ckd").write_bytes(b"ACTOR")
+        (tex_dir / "TestMap_cover_generic.tga.ckd").write_bytes(b"TEX")
+
+        media = _discover_media(self.test_dir, "testmap")
+
+        self.assertIsNotNone(media.cover_generic_path)
+        self.assertEqual(media.cover_generic_path.name, "TestMap_cover_generic.tga.ckd")
+
     def test_media_processor_does_not_synthesize_banner(self):
         # Setup target directory structure
         target = self.test_dir / "target_proc"
