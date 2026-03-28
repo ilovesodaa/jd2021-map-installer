@@ -166,21 +166,25 @@ class ExtractAndNormalizeWorker(QObject):
             self.progress.emit(10)
             map_output_dir = self._extractor.extract(self._output_dir)
 
+            for warning in self._extractor.get_warnings():
+                self.status.emit(f"Warning: {warning}")
+
             codename = self._codename or self._extractor.get_codename()
             search_root: Optional[Path] = None
-            media_warnings: list[str] = []
+            media_errors: list[str] = []
 
             if isinstance(self._extractor, ArchiveIPKExtractor):
                 # V1 parity: IPK mode also probes media alongside the selected .ipk file.
                 search_root = self._extractor.get_source_dir()
-                media_warnings.extend(_validate_ipk_media_presence(map_output_dir, codename, search_root))
+                media_errors.extend(_validate_ipk_media_presence(map_output_dir, codename, search_root))
             elif hasattr(self._extractor, "is_ipk_source"):
                 if bool(self._extractor.is_ipk_source()):  # type: ignore[attr-defined]
-                    media_warnings.extend(_validate_ipk_media_presence(map_output_dir, codename, None))
+                    media_errors.extend(_validate_ipk_media_presence(map_output_dir, codename, None))
 
-            for warning in media_warnings:
-                logger.warning("IPK media probe: %s", warning)
-                self.status.emit(f"Warning: {warning}")
+            if media_errors:
+                for error in media_errors:
+                    logger.error("IPK media validation failed: %s", error)
+                raise RuntimeError(" ".join(media_errors))
 
             self.status.emit("Parse CKDs & Metadata")
             self.progress.emit(40)

@@ -21,6 +21,92 @@ logger = logging.getLogger("jd2021.extractors.manual")
 class ManualExtractor(BaseExtractor):
     """Assembles a map directory from manually specified paths."""
 
+    def _warn(self, message: str) -> None:
+        self._warnings.append(message)
+        logger.warning(message)
+
+    def get_warnings(self) -> list[str]:
+        return list(self._warnings)
+
+    def _detect_musictrack(self, root: Path) -> bool:
+        codename_lower = self._codename.lower() if self._codename else ""
+        for p in root.rglob("*musictrack*.tpl.ckd"):
+            if not p.is_file():
+                continue
+            if not codename_lower:
+                return True
+            parts_lower = [part.lower() for part in p.parts]
+            if codename_lower in parts_lower or p.name.lower().startswith(codename_lower):
+                return True
+        return False
+
+    def _validate_manual_explicit_inputs(self, root: Optional[Path]) -> None:
+        """Validate explicit manual selections before assembling output."""
+        provided_files = {k: Path(v) for k, v in self._files.items() if v}
+        provided_dirs = {k: Path(v) for k, v in self._dirs.items() if v}
+
+        if not provided_files and not provided_dirs:
+            return
+
+        # Required files mirror V1 manual-v2 behavior.
+        required_labels = {
+            "audio": "Audio file",
+            "video": "Video (.webm)",
+            "mtrack": "Musictrack CKD",
+        }
+        missing_required: list[str] = []
+
+        explicit_audio_ok = bool(provided_files.get("audio") and provided_files["audio"].is_file())
+        explicit_video_ok = bool(provided_files.get("video") and provided_files["video"].is_file())
+        explicit_mtrack_ok = bool(provided_files.get("mtrack") and provided_files["mtrack"].is_file())
+
+        root_audio_ok = False
+        root_video_ok = False
+        root_mtrack_ok = False
+        if root and root.is_dir():
+            root_audio_ok, root_video_ok = self._resolve_codename_media(root)
+            root_mtrack_ok = self._detect_musictrack(root)
+
+        if not (explicit_audio_ok or root_audio_ok):
+            missing_required.append(required_labels["audio"])
+        if not (explicit_video_ok or root_video_ok):
+            missing_required.append(required_labels["video"])
+        if not (explicit_mtrack_ok or root_mtrack_ok):
+            missing_required.append(required_labels["mtrack"])
+
+        if missing_required:
+            raise DownloadError(
+                "Manual mode missing required inputs: " + ", ".join(missing_required) + "."
+            )
+
+        optional_file_labels = {
+            "sdesc": "Songdesc CKD",
+            "dtape": "Dance tape",
+            "ktape": "Karaoke tape",
+            "mseq": "Mainsequence tape",
+        }
+        optional_dir_labels = {
+            "moves": "Moves directory",
+            "pictos": "Pictos directory",
+            "menuart": "MenuArt directory",
+            "amb": "AMB directory",
+        }
+
+        for key, p in provided_files.items():
+            if p.is_file():
+                continue
+            if key in required_labels:
+                self._warn(f"Manual override for {required_labels[key]} was not found and will be ignored: {p}")
+            else:
+                label = optional_file_labels.get(key, key)
+                self._warn(f"Manual optional file missing ({label}): {p}")
+
+        for key, p in provided_dirs.items():
+            if p.is_dir():
+                continue
+            label = optional_dir_labels.get(key, key)
+            self._warn(f"Manual optional directory missing ({label}): {p}")
+
     def _resolve_root_dir(self, root: Path) -> Path:
         """Apply source-type specific root resolution for manual mode."""
         return root
@@ -119,6 +205,7 @@ class ManualExtractor(BaseExtractor):
     def _validate_root_source_readiness(self, root: Path) -> None:
         """Eagerly validate root-only manual mode to match V1 readiness behavior."""
         has_audio, has_video = self._resolve_codename_media(root)
+        has_musictrack = self._detect_musictrack(root)
         missing: list[str] = []
 
         if self.is_ipk_source():
@@ -146,6 +233,8 @@ class ManualExtractor(BaseExtractor):
             missing.append("Audio (.ogg/.wav/.wav.ckd) not found in source folder.")
         if not has_video:
             missing.append("Gameplay video (.webm) not found in source folder.")
+        if not has_musictrack:
+            missing.append("Musictrack CKD is required (fatal for config generation).")
 
         if missing:
             raise DownloadError(" ".join(missing))
@@ -166,11 +255,15 @@ class ManualExtractor(BaseExtractor):
             files:    Dict of logical name → absolute file path (e.g. dict(audio="...", dtape="...")).
             dirs:     Dict of logical name → absolute directory path for assets (moves, pictos, etc).
         """
-        self._codename = codename.strip() if codename else ""
+        inferred_codename = codename.strip() if codename else ""
+        if not inferred_codename and root_dir:
+            inferred_codename = Path(root_dir).name.strip()
+        self._codename = inferred_codename
         self._source_type = source_type.strip().lower() if source_type else "jdu"
         self._root_dir = Path(root_dir) if root_dir else None
         self._files = files or {}
         self._dirs = dirs or {}
+        self._warnings: list[str] = []
         self.bundle_maps: list[str] = []
 
     def get_codename(self) -> Optional[str]:
@@ -201,6 +294,8 @@ class ManualExtractor(BaseExtractor):
         if not self._codename:
             raise DownloadError("Codename is required for manual mode.")
 
+        self._validate_manual_explicit_inputs(resolved_root)
+
         map_output_dir = output_dir / self._codename
         map_output_dir.mkdir(parents=True, exist_ok=True)
         
@@ -220,6 +315,8 @@ class ManualExtractor(BaseExtractor):
                 dest = map_output_dir / src.name
                 shutil.copy2(src, dest)
                 logger.info("Copied manual file: %s", src.name)
+            else:
+                self._warn(f"Manual file not found and skipped ({ftype}): {src}")
 
         # Copy specific asset directories
         for dtype, dpath_str in self._dirs.items():
@@ -230,5 +327,7 @@ class ManualExtractor(BaseExtractor):
                 dest_dir = map_output_dir / src_dir.name
                 shutil.copytree(src_dir, dest_dir, dirs_exist_ok=True)
                 logger.info("Copied manual dir: %s", src_dir.name)
+            else:
+                self._warn(f"Manual directory not found and skipped ({dtype}): {src_dir}")
 
         return map_output_dir

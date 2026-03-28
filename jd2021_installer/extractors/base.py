@@ -43,3 +43,7 @@ class BaseExtractor(ABC):
     def get_codename(self) -> Optional[str]:
         """Return the map codename if known, else None."""
         ...
+
+    def get_warnings(self) -> list[str]:
+        """Return non-fatal warnings collected during extraction."""
+        return []
