@@ -34,11 +34,26 @@ class ManualExtractor(BaseExtractor):
         if not self.is_ipk_source():
             return
 
-        world_maps = root / "world" / "maps"
-        if not world_maps.is_dir():
-            return
+        candidates = set()
 
-        candidates = sorted(d.name for d in world_maps.iterdir() if d.is_dir())
+        world_maps = root / "world" / "maps"
+        if world_maps.is_dir():
+            candidates.update(d.name for d in world_maps.iterdir() if d.is_dir())
+
+        # V1 parity: legacy bundles may use world/jd20XX/<codename>/
+        world_root = root / "world"
+        if world_root.is_dir():
+            for jd_dir in world_root.iterdir():
+                if not jd_dir.is_dir():
+                    continue
+                name = jd_dir.name.lower()
+                if not name.startswith("jd"):
+                    continue
+                if not name[2:].isdigit():
+                    continue
+                candidates.update(d.name for d in jd_dir.iterdir() if d.is_dir())
+
+        candidates = sorted(candidates)
         if not candidates:
             return
 
@@ -65,6 +80,75 @@ class ManualExtractor(BaseExtractor):
                 fallback,
             )
             self._codename = fallback
+
+    def _resolve_codename_media(self, root: Path) -> tuple[bool, bool]:
+        """Return flags for audio/video presence scoped to codename when possible."""
+        codename_lower = self._codename.lower() if self._codename else ""
+
+        has_audio = False
+        has_video = False
+        for p in root.rglob("*"):
+            if not p.is_file():
+                continue
+            name_low = p.name.lower()
+            path_low = str(p).lower().replace('\\', '/')
+
+            if "audiopreview" in name_low:
+                continue
+
+            if codename_lower:
+                in_codename_scope = codename_lower in [part.lower() for part in p.parts]
+                if not in_codename_scope and not name_low.startswith(codename_lower):
+                    continue
+
+            if name_low.endswith((".ogg", ".wav", ".wav.ckd")):
+                if "/amb/" in path_low or "/autodance/" in path_low:
+                    continue
+                if name_low.startswith("amb_"):
+                    continue
+                has_audio = True
+
+            if name_low.endswith(".webm") and "mappreview" not in name_low and "videopreview" not in name_low:
+                has_video = True
+
+            if has_audio and has_video:
+                break
+
+        return has_audio, has_video
+
+    def _validate_root_source_readiness(self, root: Path) -> None:
+        """Eagerly validate root-only manual mode to match V1 readiness behavior."""
+        has_audio, has_video = self._resolve_codename_media(root)
+        missing: list[str] = []
+
+        if self.is_ipk_source():
+            has_structure = False
+            if (root / "world" / "maps").is_dir():
+                has_structure = True
+            else:
+                world_root = root / "world"
+                if world_root.is_dir():
+                    has_structure = any(
+                        d.is_dir() and d.name.lower().startswith("jd") and d.name[2:].isdigit()
+                        for d in world_root.iterdir()
+                    )
+            if not has_structure:
+                missing.append("Unpacked IPK folder must contain world/maps/ or world/jd20XX/.")
+        else:
+            html_paths = [
+                root / "assets.html",
+                root / "nohud.html",
+            ]
+            if not any(p.is_file() for p in html_paths):
+                missing.append("Downloaded assets mode requires assets.html or nohud.html.")
+
+        if not has_audio:
+            missing.append("Audio (.ogg/.wav/.wav.ckd) not found in source folder.")
+        if not has_video:
+            missing.append("Gameplay video (.webm) not found in source folder.")
+
+        if missing:
+            raise DownloadError(" ".join(missing))
 
     def __init__(
         self,
@@ -106,6 +190,7 @@ class ManualExtractor(BaseExtractor):
             self._validate_ipk_root(resolved_root)
 
         if resolved_root and not any(self._files.values()) and not any(self._dirs.values()):
+            self._validate_root_source_readiness(resolved_root)
             logger.info(
                 "Manual extraction using root dir directly (%s): %s",
                 self._source_type,
