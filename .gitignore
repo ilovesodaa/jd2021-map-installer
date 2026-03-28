@@ -13,4 +13,6 @@ temp/
 gha-creds-*.json
 dummy/
 docs/reports/
+docs/sessions/
+tools/
 .venv/

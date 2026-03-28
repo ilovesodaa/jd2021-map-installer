@@ -317,6 +317,9 @@ class MainWindow(QMainWindow):
 
     def _on_mode_changed(self, mode: str) -> None:
         self._current_mode = mode
+        # Prevent stale targets from a previous mode from passing install checks.
+        self._current_target = None
+        self._set_preview_controls_ready(False)
         self._set_status(f"Mode: {mode}")
 
     def _on_target_selected(self, target: str) -> None:
@@ -333,19 +336,130 @@ class MainWindow(QMainWindow):
         self._config.video_quality = quality
         self._save_settings()
 
-    # -- Pre-flight ---------------------------------------------------------
-
-    def _on_preflight(self) -> None:
-        """Quick sanity checks before installation."""
+    def _collect_game_dir_checks(self) -> tuple[list[str], list[str]]:
+        """Return (blocking issues, non-blocking warnings) for game dir checks."""
         issues: list[str] = []
+        warnings: list[str] = []
+        game_dir = self._config.game_directory
 
-        if not self._config.game_directory:
+        if not game_dir:
             issues.append("Game directory is not set.")
-        elif not self._config.game_directory.is_dir():
-            issues.append(f"Game directory does not exist: {self._config.game_directory}")
+            return issues, warnings
+
+        if not game_dir.is_dir():
+            issues.append(f"Game directory does not exist: {game_dir}")
+            return issues, warnings
+
+        sku_scene = game_dir / "data" / "World" / "SkuScenes" / "SkuScene_Maps_PC_All.isc"
+        if not sku_scene.is_file():
+            issues.append(
+                "SkuScene_Maps_PC_All.isc not found under the selected game directory."
+            )
+
+        game_dir_str = str(game_dir)
+        if " " in game_dir_str:
+            warnings.append("Game path contains spaces; some external tools may fail.")
+        try:
+            game_dir_str.encode("ascii")
+        except UnicodeEncodeError:
+            warnings.append("Game path contains non-ASCII characters; some tools may fail.")
+        if "Program Files" in game_dir_str:
+            warnings.append("Game appears to be in Program Files; admin rights may be required.")
+
+        test_file = game_dir / "data" / ".write_test"
+        try:
+            test_file.parent.mkdir(parents=True, exist_ok=True)
+            test_file.write_text("test", encoding="utf-8")
+            test_file.unlink(missing_ok=True)
+        except PermissionError:
+            issues.append("Cannot write to game directory; check permissions or run as admin.")
+        except OSError as exc:
+            issues.append(f"Cannot write to game directory: {exc}")
+
+        try:
+            free_mb = shutil.disk_usage(game_dir).free // (1024 * 1024)
+            if free_mb < 500:
+                warnings.append(f"Low disk space on destination drive: {free_mb} MB free.")
+        except OSError:
+            warnings.append("Could not determine free disk space.")
+
+        return issues, warnings
+
+    def _collect_source_target_issues(self) -> list[str]:
+        """Validate mode-specific source inputs and refresh the active target."""
+        issues: list[str] = []
+        from jd2021_installer.ui.widgets.mode_selector import (
+            MODE_FETCH,
+            MODE_HTML,
+            MODE_IPK,
+            MODE_BATCH,
+            MODE_MANUAL,
+        )
+
+        idx = self._mode_selector.current_mode_index
+
+        if idx == MODE_FETCH:
+            raw = self._mode_selector.inputs["fetch"]["codenames"].text().strip()
+            codenames = [c.strip() for c in raw.split(",") if c.strip()]
+            if not codenames:
+                issues.append("Enter at least one codename for Fetch mode.")
+            else:
+                self._current_target = ",".join(codenames)
+            return issues
+
+        if idx == MODE_HTML:
+            asset_html = self._mode_selector.inputs["html"]["asset"].text().strip()
+            nohud_html = self._mode_selector.inputs["html"]["nohud"].text().strip()
+            if not asset_html or not nohud_html:
+                issues.append("Both Asset HTML and NOHUD HTML files are required.")
+                return issues
+            if not Path(asset_html).is_file():
+                issues.append(f"Asset HTML file was not found: {asset_html}")
+            if not Path(nohud_html).is_file():
+                issues.append(f"NOHUD HTML file was not found: {nohud_html}")
+            if not issues:
+                self._current_target = asset_html
+            return issues
+
+        if idx == MODE_IPK:
+            target = self._mode_selector.inputs["ipk"]["file"].text().strip()
+            if not target:
+                issues.append("Select an IPK archive first.")
+            elif not Path(target).is_file():
+                issues.append(f"IPK file was not found: {target}")
+            else:
+                self._current_target = target
+            return issues
+
+        if idx == MODE_BATCH:
+            target = self._mode_selector.inputs["batch"]["dir"].text().strip()
+            if not target:
+                issues.append("Select a batch directory first.")
+            elif not Path(target).is_dir():
+                issues.append(f"Batch directory was not found: {target}")
+            else:
+                self._current_target = target
+            return issues
+
+        if idx == MODE_MANUAL:
+            codename = self._mode_selector.inputs["manual"]["codename"].text().strip()
+            root_dir = self._mode_selector.inputs["manual"]["root"].text().strip()
+            if not codename and not root_dir:
+                issues.append("Manual mode requires a codename or a root directory.")
+            else:
+                self._current_target = root_dir or codename
+            return issues
 
         if not self._current_target:
             issues.append("No input target selected.")
+        return issues
+
+    # -- Pre-flight ---------------------------------------------------------
+
+    def _on_preflight(self) -> None:
+        """Run install pre-flight checks (V1 parity-oriented validations)."""
+        issues, warnings = self._collect_game_dir_checks()
+        issues.extend(self._collect_source_target_issues())
 
         if issues:
             QMessageBox.warning(
@@ -353,58 +467,58 @@ class MainWindow(QMainWindow):
                 "Pre-flight Check Failed",
                 "\n".join(f"• {i}" for i in issues),
             )
-        else:
-            QMessageBox.information(
-                self, "Pre-flight Check", "All checks passed! Ready to install."
+            self._set_status("Pre-flight failed")
+            return
+
+        if warnings:
+            QMessageBox.warning(
+                self,
+                "Pre-flight Check Warnings",
+                "\n".join(f"• {w}" for w in warnings),
             )
+            self._set_status("Pre-flight passed with warnings")
+        else:
+            if self._config.show_preflight_success_popup:
+                QMessageBox.information(
+                    self, "Pre-flight Check", "All checks passed! Ready to install."
+                )
+            self._set_status("Pre-flight passed")
 
     # -- Clear cache --------------------------------------------------------
 
     def _on_clear_cache(self) -> None:
-        cache = self._config.cache_directory
+        legacy_path_cache = Path("installer_paths.json")
+        has_saved_game_dir = bool(self._config.game_directory)
+        has_legacy_cache = legacy_path_cache.is_file()
 
-        # Safety check: never clear if paths overlap in either direction.
-        if self._config.game_directory:
-            try:
-                cache_resolved = cache.resolve()
-                game_resolved = self._config.game_directory.resolve()
-                if (
-                    cache_resolved == game_resolved
-                    or game_resolved in cache_resolved.parents
-                    or cache_resolved in game_resolved.parents
-                ):
-                    QMessageBox.critical(
-                        self,
-                        "Safety Error",
-                        "Cache directory overlaps with the game directory. Clearing is blocked to prevent data loss.",
-                    )
-                    return
-            except Exception:
-                pass
-
-        if not cache.exists():
-            QMessageBox.information(self, "Cache Already Empty", f"No cache directory found at:\n{cache}")
-            return
-
-        if cache.is_dir() and not any(cache.iterdir()):
-            QMessageBox.information(self, "Cache Already Empty", f"Cache directory is already empty:\n{cache}")
+        if not has_saved_game_dir and not has_legacy_cache:
+            QMessageBox.information(self, "Cache Already Empty", "No cached game path was found.")
             return
 
         reply = QMessageBox.question(
             self,
             "Clear Path Cache",
-            f"Delete all files in cache directory?\n\n{cache}",
+            "Clear saved game path cache and force path re-discovery on next install/pre-flight?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
 
         try:
-            shutil.rmtree(cache, ignore_errors=False)
-            cache.mkdir(parents=True, exist_ok=True)
-            self.append_log("Cache cleared.")
-            self._set_status("Cache cleared.")
-            QMessageBox.information(self, "Cache Cleared", "Path cache was cleared successfully.")
+            if has_legacy_cache:
+                legacy_path_cache.unlink(missing_ok=True)
+
+            self._config.game_directory = None
+            self._config_panel.set_game_directory("")
+            self._save_settings()
+
+            self.append_log("Path cache cleared.")
+            self._set_status("Path cache cleared")
+            QMessageBox.information(
+                self,
+                "Cache Cleared",
+                "Path cache cleared. The next pre-flight/install will require path resolution again.",
+            )
         except Exception as exc:
             logger.exception("Failed to clear cache: %s", exc)
             QMessageBox.warning(self, "Clear Cache Failed", f"Failed to clear cache:\n{exc}")
@@ -468,11 +582,9 @@ class MainWindow(QMainWindow):
 
     def _on_install_requested(self) -> None:
         """Launch the Extract → Normalize → Install pipeline."""
-        if not self._current_target:
-            QMessageBox.warning(self, "No Target", "Please select an input target first.")
-            return
-        if not self._config.game_directory:
-            QMessageBox.warning(self, "No Game Dir", "Please set the game directory first.")
+        game_issues, game_warnings = self._collect_game_dir_checks()
+        if game_issues:
+            QMessageBox.warning(self, "No Game Dir", "\n".join(game_issues))
             return
 
         # v1 parity: codename whitespace sanitization prompt before fetch scrape starts.
@@ -500,6 +612,18 @@ class MainWindow(QMainWindow):
                     self._set_status("Install aborted")
                     return
 
+        source_issues = self._collect_source_target_issues()
+        if source_issues:
+            QMessageBox.warning(self, "No Target", "\n".join(source_issues))
+            return
+
+        if game_warnings:
+            QMessageBox.warning(
+                self,
+                "Install Warnings",
+                "\n".join(f"• {w}" for w in game_warnings),
+            )
+
         # Pre-flight check for FFmpeg/FFplay (required for media + preview)
         import shutil
         missing_binaries = []
@@ -512,20 +636,6 @@ class MainWindow(QMainWindow):
         if missing_binaries:
             self._offer_ffmpeg_install(missing_binaries)
             return
-
-        # Pre-flight check for disk space (Minimum 500MB required on target drive)
-        try:
-            free_space_bytes = shutil.disk_usage(self._config.game_directory).free
-            free_mb = free_space_bytes / (1024 * 1024)
-            if free_mb < 500:
-                QMessageBox.warning(
-                    self,
-                    "Low Disk Space",
-                    f"You only have {int(free_mb)} MB of free space on the destination drive.\n"
-                    "Map installation may fail. Proceed with caution."
-                )
-        except OSError:
-            pass  # Non-fatal if we can't look up disk space (e.g. read-only volume edge cases)
 
         # Start dynamic per-map logging immediately if target is available
         self._start_file_logging(self._current_target)
