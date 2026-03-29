@@ -27,6 +27,7 @@ import shutil
 import sys
 import json
 import subprocess
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -1392,25 +1393,74 @@ class MainWindow(QMainWindow):
         if not map_data.media.audio_path or not map_data.media.video_path:
             return
 
-        source_root = map_data.source_dir
-        if not source_root:
-            source_root = map_data.media.audio_path.parent
+        audio_path = map_data.media.audio_path.resolve()
+        video_path = map_data.media.video_path.resolve()
+
+        source_root = self._infer_readjust_source_root(map_data, audio_path, video_path)
+        source_mode = self._infer_readjust_source_mode(map_data)
 
         target_dir = self._resolve_target_map_dir(map_data.codename)
         trk_path = target_dir / "Audio" / f"{map_data.codename}.trk"
 
         entry = ReadjustIndexEntry(
             codename=map_data.codename,
-            source_mode=self._current_mode,
+            source_mode=source_mode,
             source_root=str(source_root),
-            source_audio=str(map_data.media.audio_path),
-            source_video=str(map_data.media.video_path),
-            installed_map_dir=str(target_dir),
-            installed_trk=str(trk_path),
+            source_audio=str(audio_path),
+            source_video=str(video_path),
+            installed_map_dir=str(target_dir.resolve()),
+            installed_trk=str(trk_path.resolve()),
             last_audio_ms=float(map_data.sync.audio_ms),
             last_video_ms=float(map_data.sync.video_ms),
         )
         upsert_entry(entry)
+
+    def _infer_readjust_source_mode(self, map_data: NormalizedMapData) -> str:
+        mode = (self._current_mode or "").strip()
+        audio_suffix = map_data.media.audio_path.suffix.lower() if map_data.media.audio_path else ""
+
+        if "fetch" in mode.lower():
+            return "Fetch"
+        if "html" in mode.lower():
+            return "HTML"
+        if "ipk" in mode.lower():
+            return "IPK Archive"
+        if "batch" in mode.lower():
+            if audio_suffix == ".wav":
+                return "IPK Bundle"
+            return "Batch"
+        return mode or "unknown"
+
+    def _infer_readjust_source_root(
+        self,
+        map_data: NormalizedMapData,
+        audio_path: Path,
+        video_path: Path,
+    ) -> Path:
+        mode_low = (self._current_mode or "").lower()
+
+        if "fetch" in mode_low or "html" in mode_low:
+            candidate = (self._config.download_root / map_data.codename).resolve()
+            if candidate.is_dir():
+                return candidate
+
+        if map_data.source_dir and map_data.source_dir.exists():
+            src = map_data.source_dir.resolve()
+            if src.is_dir() and "_batch_temp" not in str(src).lower() and "_extraction" not in str(src).lower():
+                return src
+
+        audio_parent = audio_path.parent
+        video_parent = video_path.parent
+        try:
+            common = Path(os.path.commonpath([str(audio_parent), str(video_parent)]))
+            if common.exists():
+                return common.resolve()
+        except Exception:
+            pass
+
+        if audio_parent.exists():
+            return audio_parent.resolve()
+        return video_parent.resolve()
 
     def _on_nav_requested(self, direction: int) -> None:
         """Switch between maps in a batch/bundle review."""
