@@ -1,5 +1,6 @@
 import pytest
 import os
+import subprocess
 import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -211,3 +212,99 @@ def test_download_files_respects_retry_after_header(tmp_path, monkeypatch):
 
     assert "TestMap_musictrack.tpl.ckd" in downloaded
     assert 7 in sleep_calls
+
+
+def test_download_files_redownloads_corrupt_cached_nohud_webm(tmp_path, monkeypatch):
+    class FakeResponse:
+        def __init__(self, status_code, headers=None, chunks=None):
+            self.status_code = status_code
+            self.headers = headers or {}
+            self._chunks = chunks or []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+        def iter_content(self, chunk_size=1024 * 1024):
+            return iter(self._chunks)
+
+    class FakeSession:
+        def __init__(self):
+            self.headers = {}
+            self.calls = 0
+
+        def get(self, *args, **kwargs):
+            self.calls += 1
+            return FakeResponse(200, headers={"content-length": "4096"}, chunks=[b"\x1a\x45\xdf\xa3" + b"v" * 4092])
+
+    monkeypatch.setattr("requests.Session", FakeSession)
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError()))
+
+    corrupt_cached = tmp_path / "TestMap_ULTRA.hd.webm"
+    corrupt_cached.write_bytes(b"NOTWEBM" * 512)
+
+    cfg = AppConfig(max_retries=1, inter_request_delay_s=0.0)
+    urls = [
+        "https://jdcn-switch.cdn.ubisoft.cn/private/map/TestMap/TestMap_ULTRA.hd.webm/hashvalue.webm?auth=test",
+    ]
+
+    downloaded = download_files(urls, tmp_path, "ULTRA_HD", cfg)
+
+    assert "TestMap_ULTRA.hd.webm" in downloaded
+    data = (tmp_path / "TestMap_ULTRA.hd.webm").read_bytes()
+    assert data.startswith(b"\x1a\x45\xdf\xa3")
+
+
+def test_download_files_retries_when_nohud_webm_is_corrupt(tmp_path, monkeypatch):
+    class FakeResponse:
+        def __init__(self, status_code, headers=None, chunks=None):
+            self.status_code = status_code
+            self.headers = headers or {}
+            self._chunks = chunks or []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+        def iter_content(self, chunk_size=1024 * 1024):
+            return iter(self._chunks)
+
+    class FakeSession:
+        def __init__(self):
+            self.headers = {}
+            self.calls = 0
+
+        def get(self, *args, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return FakeResponse(200, headers={"content-length": "2048"}, chunks=[b"BAD!" * 512])
+            return FakeResponse(200, headers={"content-length": "4096"}, chunks=[b"\x1a\x45\xdf\xa3" + b"z" * 4092])
+
+    fake_session = FakeSession()
+    monkeypatch.setattr("requests.Session", lambda: fake_session)
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError()))
+
+    cfg = AppConfig(max_retries=2, inter_request_delay_s=0.0)
+    urls = [
+        "https://jdcn-switch.cdn.ubisoft.cn/private/map/TestMap/TestMap_ULTRA.hd.webm/hashvalue.webm?auth=test",
+    ]
+
+    downloaded = download_files(urls, tmp_path, "ULTRA_HD", cfg)
+
+    assert "TestMap_ULTRA.hd.webm" in downloaded
+    assert fake_session.calls == 2
+    assert (tmp_path / "TestMap_ULTRA.hd.webm").read_bytes().startswith(b"\x1a\x45\xdf\xa3")
