@@ -262,6 +262,78 @@ def _extract_music_track(
     return res
 
 
+def _find_source_trk_path(source_dir: Path, codename: str) -> Optional[Path]:
+    """Locate the source .trk file for a map codename (case-insensitive)."""
+    direct = source_dir / "Audio" / f"{codename}.trk"
+    if direct.exists():
+        return direct
+
+    codename_lower = codename.lower()
+    audio_dir = source_dir / "Audio"
+    if audio_dir.exists():
+        for candidate in audio_dir.glob("*.trk"):
+            if candidate.stem.lower() == codename_lower:
+                return candidate
+
+    for candidate in source_dir.rglob("*.trk"):
+        if candidate.stem.lower() == codename_lower:
+            return candidate
+
+    return None
+
+
+def _read_musictrack_fields_from_trk(trk_path: Path) -> Dict[str, float]:
+    """Read key timing fields from a UbiArt .trk text file."""
+    if not trk_path.exists():
+        return {}
+
+    try:
+        content = trk_path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+
+    fields: Dict[str, float] = {}
+    number_pattern = r"([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)"
+    for key in ("videoStartTime", "previewEntry", "previewLoopStart", "previewLoopEnd"):
+        match = re.search(rf"{key}\s*=\s*{number_pattern}", content)
+        if match:
+            try:
+                fields[key] = float(match.group(1))
+            except ValueError:
+                continue
+
+    return fields
+
+
+def _merge_preview_fields_from_trk(music_track: Optional[MusicTrackStructure], trk_path: Optional[Path]) -> None:
+    """Override preview timing values from .trk when present.
+
+    Some source CKDs (notably legacy console variants) omit or zero preview
+    loop fields even when the source .trk contains valid values.
+    """
+    if music_track is None or trk_path is None:
+        return
+
+    trk_fields = _read_musictrack_fields_from_trk(trk_path)
+    if not trk_fields:
+        return
+
+    if "previewEntry" in trk_fields:
+        music_track.preview_entry = trk_fields["previewEntry"]
+    if "previewLoopStart" in trk_fields:
+        music_track.preview_loop_start = trk_fields["previewLoopStart"]
+    if "previewLoopEnd" in trk_fields:
+        music_track.preview_loop_end = trk_fields["previewLoopEnd"]
+
+    logger.info(
+        "Merged preview timing from source .trk (%s): entry=%.3f start=%.3f end=%.3f",
+        trk_path,
+        music_track.preview_entry,
+        music_track.preview_loop_start,
+        music_track.preview_loop_end,
+    )
+
+
 def _extract_song_desc(
     directory: str, codename: Optional[str] = None
 ) -> SongDescription:
@@ -845,11 +917,14 @@ def normalize(
     # Ported from V1 map_installer.py Step 06
     is_html_source = any(source_dir.glob("*.html")) or any(source_dir.glob("**/assets.html"))
 
+    source_trk_path = _find_source_trk_path(source_dir, effective_codename)
+    _merge_preview_fields_from_trk(music_track, source_trk_path)
+
     # 5. Calculate effective video start time (with V1-style fallbacks)
     sync_data = normalize_sync(
         music_track, 
         is_html_source=is_html_source,
-        existing_trk_path=source_dir / "Audio" / f"{effective_codename}.trk"
+        existing_trk_path=source_trk_path
     )
 
     # V1 Parity: Detect whether the source contains real autodance data.
