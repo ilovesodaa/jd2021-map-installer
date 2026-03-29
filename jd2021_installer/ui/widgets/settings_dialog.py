@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import Qt
@@ -15,10 +16,16 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QPushButton,
     QLabel,
+    QFileDialog,
+    QMessageBox,
     QWidget,
 )
 
 from jd2021_installer.core.config import AppConfig
+from jd2021_installer.core.localization_update import (
+    resolve_console_save_path,
+    update_console_localization,
+)
 
 logger = logging.getLogger("jd2021.ui.widgets.settings_dialog")
 
@@ -29,7 +36,7 @@ class SettingsDialog(QDialog):
     def __init__(self, config: AppConfig, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Installer Settings")
-        self.setFixedSize(520, 420)
+        self.setFixedSize(520, 460)
         self.setModal(True)
         
         # We work on a copy of the config, and only return it if Save is clicked.
@@ -155,6 +162,14 @@ class SettingsDialog(QDialog):
         discord_row.addWidget(self.txt_discord_url)
         layout.addLayout(discord_row)
 
+        localization_row = QHBoxLayout()
+        localization_row.addWidget(QLabel("Localization:"))
+        self.btn_update_localization = QPushButton("Update In-Game Localization...")
+        self.btn_update_localization.clicked.connect(self._on_update_localization)
+        localization_row.addWidget(self.btn_update_localization)
+        localization_row.addStretch()
+        layout.addLayout(localization_row)
+
         layout.addStretch()
 
         # Buttons
@@ -184,6 +199,64 @@ class SettingsDialog(QDialog):
         self._config.discord_channel_url = self.txt_discord_url.text().strip()
         
         self.accept()
+
+    def _on_update_localization(self) -> None:
+        if not self._config.game_directory:
+            QMessageBox.warning(
+                self,
+                "Game Directory Required",
+                "Set your JD2021 game directory first, then try localization update again.",
+            )
+            return
+
+        default_dir = str(Path.cwd())
+        selected_file, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select localisation JSON",
+            default_dir,
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not selected_file:
+            return
+
+        confirm = QMessageBox.question(
+            self,
+            "Confirm Localization Update",
+            "Use this file to update in-game localization?\n\n"
+            f"Source: {selected_file}\n\n"
+            "A backup of ConsoleSave.json will be created before updating.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            console_save_path = resolve_console_save_path(Path(self._config.game_directory))
+            result = update_console_localization(Path(selected_file), console_save_path)
+            logger.info(
+                "Localization updated: %s updated, %s added, backup=%s",
+                result.updated_existing,
+                result.added_new,
+                result.backup_path,
+            )
+        except Exception as exc:
+            logger.exception("Localization update failed: %s", exc)
+            QMessageBox.critical(
+                self,
+                "Localization Update Failed",
+                f"Could not update localization:\n{exc}",
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            "Localization Updated",
+            "Localization update completed successfully.\n\n"
+            f"Updated IDs: {result.updated_existing}\n"
+            f"New IDs: {result.added_new}\n\n"
+            f"Backup: {result.backup_path}",
+        )
 
     def get_config(self) -> AppConfig:
         return self._config
