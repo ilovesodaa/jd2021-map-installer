@@ -13,7 +13,7 @@ improvement if implemented.
 
 ### 1.1 Stape BPM / Signature Data (SlotClips) -- IMPLEMENTED
 
-> **Implemented:** The installer now converts `.stape.ckd` files via `json_to_lua.py`,
+> **Implemented:** The installer now converts `.stape.ckd` files via `the CKD-to-Lua converter`,
 > overwriting the empty fallback stape with the full SlotClip data (BPM, Signature, timing
 > per section). Falls back to the empty stape if no `.stape.ckd` exists or conversion fails.
 
@@ -60,9 +60,9 @@ This means the JD2021 PC engine runs fine without SlotClip data, but the data co
 improve beat sync accuracy for sections with tempo changes, or enable future rhythm-based UI
 features.
 
-**Where in code:** `map_builder.py` `generate_text_files()` function (stape generation block)
+**Where in code:** ``installers/game_writer.py`` `generate_text_files()` function (stape generation block)
 
-**Effort:** Medium -- need to convert SlotClip JSON arrays through `json_to_lua.py` and insert
+**Effort:** Medium -- need to convert SlotClip JSON arrays through `the CKD-to-Lua converter` and insert
 into the stape template. Requires testing whether the engine actually reads them.
 
 ---
@@ -87,7 +87,7 @@ menus.
 Tags are extracted from the CKD and formatted as Lua VAL entries. If the CKD has no Tags, falls
 back to `["Main"]`.
 
-**Where in code:** `map_builder.py` `generate_text_files()` function (SongDesc generation block)
+**Where in code:** ``installers/game_writer.py`` `generate_text_files()` function (SongDesc generation block)
 
 ---
 
@@ -115,7 +115,7 @@ the on-disk reference. The `alpha_mul_b.msh` shader appears in JDU's embedded IS
 uses `EMBED_SCENE="1"` (inline XML) vs our `EMBED_SCENE="0"` (separate files). Both approaches
 are valid; the visual difference is subtle (rounded vs sharp corners on album art).
 
-**Where in code:** `map_builder.py` `generate_text_files()` function (menuart shader assignment)
+**Where in code:** ``installers/game_writer.py`` `generate_text_files()` function (menuart shader assignment)
 
 **Effort:** Medium -- would need to bundle the mask texture and switch shaders. Low priority
 given that the reference map doesn't use it either.
@@ -144,7 +144,7 @@ platform:
 ```
 
 **Current behavior:**
-`ubiart_lua.py` passes `MotionPlatformSpecifics` through as-is (dict-to-KEY/VAL conversion).
+``parsers/binary_ckd.py`` passes `MotionPlatformSpecifics` through as-is (dict-to-KEY/VAL conversion).
 There is no `"PC"` key in JDU data because PC uses mobile phone scoring, not controller/camera
 gesture scoring.
 
@@ -152,10 +152,10 @@ gesture scoring.
 
 ### 2.2 Autodance FX Parameters -- RESOLVED
 
-> **Resolved:** The installer converts `autodance/*.tpl.ckd` via `json_to_lua.py`
-> in `step_11_extract_moves`, which overwrites the empty fallback TPL from `map_builder.py`.
+> **Resolved:** The installer converts `autodance/*.tpl.ckd` via `the CKD-to-Lua converter`
+> in `step_11_extract_moves`, which overwrites the empty fallback TPL from ``installers/game_writer.py``.
 > The CKD contains the full `AutoDanceFxDesc` structure with all 60+ effect parameters, and
-> `json_to_lua.py` handles `__class` objects, nested dicts, and arrays correctly. A guard in
+> `the CKD-to-Lua converter` handles `__class` objects, nested dicts, and arrays correctly. A guard in
 > `generate_text_files()` prevents sync refinement ("Apply") from overwriting the converted
 > TPL with the empty stub. No additional changes needed.
 
@@ -180,13 +180,13 @@ These control post-processing effects applied during autodance playback (toon sh
 slime overlay, refraction, floor plane rendering).
 
 **Current behavior:**
-The installer converts `autodance/*.tpl.ckd` via `json_to_lua.py` in `step_11_extract_moves`,
+The installer converts `autodance/*.tpl.ckd` via `the CKD-to-Lua converter` in `step_11_extract_moves`,
 which overwrites the empty fallback TPL with the full CKD data including all FX parameters. A
 guard in `generate_text_files()` prevents sync refinement ("Apply") from overwriting the converted
 TPL with the empty stub.
 
-**Where in code:** `map_builder.py` `generate_text_files()` function (autodance TPL generation),
-`map_installer.py` `step_11_extract_moves()` (CKD conversion)
+**Where in code:** ``installers/game_writer.py`` `generate_text_files()` function (autodance TPL generation),
+`the installer pipeline` `step_11_extract_moves()` (CKD conversion)
 
 ---
 
@@ -216,7 +216,7 @@ KEY = "cover",  VAL = "world/maps/{map_lower}/menuart/textures/{map_lower}_cover
 KEY = "coach1", VAL = "world/maps/{map_lower}/menuart/textures/{map_lower}_coach_1_phone.png"
 ```
 
-Source: `map_builder.py` `generate_text_files()` function (PhoneImages section).
+Source: ``installers/game_writer.py`` `generate_text_files()` function (PhoneImages section).
 
 **In practice:** The reconstructed paths match the CKD paths for all standard maps. This only
 matters if a map uses non-standard naming, which hasn't been observed.

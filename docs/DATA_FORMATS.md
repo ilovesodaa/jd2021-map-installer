@@ -252,7 +252,7 @@ containing scene graph.
 
 STAPE files contain BPM and time-signature data for each section of a song.
 
-These files are converted from CKD-wrapped JSON via `json_to_lua.py` into Lua
+These files are converted from CKD-wrapped JSON via `the CKD-to-Lua converter` into Lua
 table syntax.
 
 ---

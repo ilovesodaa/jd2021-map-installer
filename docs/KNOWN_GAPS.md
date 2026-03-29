@@ -12,13 +12,13 @@ The following items from the original findings have been implemented in the code
 
 **Original issue:** Maps originally from JD2021 appeared locked (`Status = 12`, ObjectiveLocked).
 
-**Resolution:** `map_builder.py` now overrides `Status = 12` to `Status = 3` (Available) during SongDesc generation.
+**Resolution:** ``installers/game_writer.py`` now overrides `Status = 12` to `Status = 3` (Available) during SongDesc generation.
 
 ### Download Throttling / Rate Limiting (Resolved)
 
 **Original issue:** No protection against CDN throttling.
 
-**Resolution:** `map_downloader.py` now implements browser-like User-Agent, retry logic with exponential backoff, HTTP 429 handling, and inter-request delay.
+**Resolution:** ``extractors/web_playwright.py`` now implements browser-like User-Agent, retry logic with exponential backoff, HTTP 429 handling, and inter-request delay.
 
 ### Binary CKD Parsing (Resolved)
 
@@ -30,7 +30,7 @@ The following items from the original findings have been implemented in the code
 
 **Original issue:** Xbox 360 textures used tiled memory layout and byte-swapped pixels, appearing garbled when extracted.
 
-**Resolution:** `ckd_decode.py` now detects X360 texture payloads (52-byte GPU descriptor), performs 16-bit word byte-swap, and applies Xenia-derived tiled-to-linear conversion (Tiled2D algorithm) for DXT1/DXT3/DXT5 block-compressed formats.
+**Resolution:** `the CKD texture decoder` now detects X360 texture payloads (52-byte GPU descriptor), performs 16-bit word byte-swap, and applies Xenia-derived tiled-to-linear conversion (Tiled2D algorithm) for DXT1/DXT3/DXT5 block-compressed formats.
 
 ### Orphan AMB WAV CKD Handling (Resolved)
 
@@ -48,7 +48,7 @@ The following items from the original findings have been implemented in the code
 
 **Original issue:** Autodance stub wrote empty `video_structure = {}`, causing game assertion: "no valid video structure for song".
 
-**Resolution:** `map_builder.py` now generates a minimal valid `JD_AutodanceVideoStructure` with all required fields.
+**Resolution:** ``installers/game_writer.py`` now generates a minimal valid `JD_AutodanceVideoStructure` with all required fields.
 
 ---
 
