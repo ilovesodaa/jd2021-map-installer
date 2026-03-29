@@ -22,6 +22,8 @@ from typing import List, Optional, Union
 
 from jd2021_installer.core.exceptions import BinaryCKDParseError
 from jd2021_installer.core.models import (
+    BeatClip,
+    BeatsTape,
     CinematicTape,
     DanceTape,
     DefaultColors,
@@ -50,6 +52,8 @@ _SONGDESC_TEMPLATE_CRC = 0x8AC2B5C6
 _ACTOR_TEMPLATE_CRC = 0x1B857BCE
 _AUTODANCE_TEMPLATE_CRC = 0x51EA2CD0
 _SOUND_COMPONENT_TEMPLATE_CRC = 0xD94D6C53
+_TAPE_CRC = 0x2AFED161
+_BEAT_CLIP_CRC = 0x364811D4
 
 
 def _string_id(s: str) -> int:
@@ -521,6 +525,50 @@ def parse_cinematic_tape(data: bytes, map_name: str) -> CinematicTape:
     return CinematicTape(clips=clips, map_name=map_name)
 
 
+def parse_btape(data: bytes, map_name: str) -> BeatsTape:
+    """Parse a binary beats timeline tape (btape)."""
+    r = BinaryReader(data)
+
+    # Actor-wrapped tape (template-based CKD) or raw tape payload.
+    if data.startswith(b"\x00\x00\x00\x01"):
+        template_crc = _read_actor_header(r)
+        if template_crc != _TAPE_CRC:
+            raise BinaryCKDParseError(
+                f"btape actor wrapper has template 0x{template_crc:08X} (expected 0x{_TAPE_CRC:08X})"
+            )
+        r.u32()  # comp_unk1
+        r.u32()  # unk2
+        r.u32()  # unk3
+    else:
+        r.skip(12)
+
+    r.u32()  # timeline_ver
+    entries = r.u32()
+
+    clips: List[BeatClip] = []
+    for _ in range(entries):
+        r.u32()  # unknown
+        entry_class = r.u32()
+        entry_id = r.u32()
+        entry_trackid = r.u32()
+        entry_isactive = r.u32()
+        entry_starttime = r.u32()
+        entry_duration = r.u32()
+        clip_type = r.u32()
+
+        if entry_class == _BEAT_CLIP_CRC:
+            clips.append(BeatClip(
+                id=entry_id,
+                track_id=entry_trackid,
+                is_active=entry_isactive,
+                start_time=entry_starttime,
+                duration=entry_duration,
+                beat_type=clip_type,
+            ))
+
+    return BeatsTape(clips=clips, map_name=map_name)
+
+
 # ---------------------------------------------------------------------------
 # TPL dispatch (musictrack / songdesc) from Actor header
 # ---------------------------------------------------------------------------
@@ -549,8 +597,14 @@ ParseResult = Union[
     DanceTape,
     KaraokeTape,
     CinematicTape,
+    BeatsTape,
     dict,  # autodance / sound component (simple dict for now)
 ]
+
+
+def _infer_map_name(filename: str) -> str:
+    stem = filename.rsplit(".", 1)[0]
+    return stem.split("_")[0].split(".")[0]
 
 
 def parse_binary_ckd(data: bytes, filename: str) -> ParseResult:
@@ -569,12 +623,14 @@ def parse_binary_ckd(data: bytes, filename: str) -> ParseResult:
     name_lower = filename.lower()
 
     # Timeline/Tape containers
-    map_name = filename.split("_")[0]
+    map_name = _infer_map_name(filename)
 
     if "dtape" in name_lower:
         return parse_dtape(data, map_name)
     if "ktape" in name_lower:
         return parse_ktape(data, map_name)
+    if "btape" in name_lower:
+        return parse_btape(data, map_name)
     if any(ext in name_lower for ext in (
         ".tape.ckd", ".stape.ckd", ".adtape.ckd",
         ".adrecording.ckd", ".advideo.ckd"
@@ -622,6 +678,9 @@ def parse_binary_ckd(data: bytes, filename: str) -> ParseResult:
                 files = [r.split_path() for _ in range(file_count)]
                 sounds.append({"files": files})
             return {"type": "sound_component", "sound_list": sounds}
+
+        if template_crc == _TAPE_CRC and "btape" in name_lower:
+            return parse_btape(data, map_name)
 
     except (struct.error, IndexError, UnicodeDecodeError) as exc:
         raise BinaryCKDParseError(
