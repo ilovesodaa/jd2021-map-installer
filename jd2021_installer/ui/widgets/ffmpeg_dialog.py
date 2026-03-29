@@ -74,19 +74,21 @@ class DownloadWorker(QObject):
             with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
                 zip_ref.extractall(extract_temp)
             
-            # Find ffmpeg.exe and ffplay.exe in the extracted tree
-            binaries_found = 0
+            # Find ffmpeg toolchain binaries in the extracted tree.
+            required_bins = {"ffmpeg.exe", "ffplay.exe", "ffprobe.exe"}
+            binaries_found = set()
             for p in extract_temp.rglob("*.exe"):
-                if p.name.lower() in ("ffmpeg.exe", "ffplay.exe"):
+                lower_name = p.name.lower()
+                if lower_name in required_bins:
                     shutil.move(str(p), str(self._target_dir / p.name))
-                    binaries_found += 1
+                    binaries_found.add(lower_name)
             
             # Cleanup
             shutil.rmtree(extract_temp, ignore_errors=True)
             if temp_zip.exists():
                 temp_zip.unlink()
 
-            if binaries_found >= 1:
+            if "ffmpeg.exe" in binaries_found:
                 self.status.emit("Installation complete!")
                 self.progress.emit(100)
                 self.finished.emit(True)
