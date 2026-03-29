@@ -87,5 +87,4 @@ QUALITY_PATTERNS = {
     "LOW":      "_LOW.webm",
 }
 
-# Per-platform mainscene ZIP preference order (V1 parity)
-SCENE_PLATFORM_PREFERENCE = ["DURANGO", "NX", "SCARLETT"]
+SCENE_PLATFORM_PREFERENCE = ["DURANGO", "SCARLETT", "NX"]
