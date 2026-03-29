@@ -237,10 +237,20 @@ def convert_cinematic_tape(ckd_path: Path, target_dir: Path, codename: str) -> b
     return convert_tape_file(ckd_path, output)
 
 
+def convert_beats_tape(ckd_path: Path, target_dir: Path, codename: str) -> bool:
+    """Convert a beats tape CKD to the timeline directory.
+
+    Input:  ``*.btape.ckd``
+    Output: ``timeline/{codename}.btape``
+    """
+    output = target_dir / "timeline" / f"{codename}.btape"
+    return convert_tape_file(ckd_path, output)
+
+
 def auto_convert_tapes(source_dir: Path, target_dir: Path, codename: str) -> int:
     """Auto-detect and convert all tape CKD files in a directory.
 
-    Searches ``source_dir`` recursively for dtape, ktape, and
+    Searches ``source_dir`` recursively for dtape, ktape, btape, and
     mainsequence tape CKDs and converts them to UbiArt Lua format.
 
     Returns:
@@ -258,6 +268,9 @@ def auto_convert_tapes(source_dir: Path, target_dir: Path, codename: str) -> int
     cinematic_candidates = [
         p for p in source_dir.rglob("*mainsequence*tape*.ckd")
     ]
+    beats_candidates = [
+        p for p in source_dir.rglob("*btape*.ckd")
+    ]
 
     dance_src = _pick_best_tape(dance_candidates, codename, ["tml_dance", "dance"])
     if dance_src and convert_dance_tape(dance_src, target_dir, codename):
@@ -269,6 +282,10 @@ def auto_convert_tapes(source_dir: Path, target_dir: Path, codename: str) -> int
 
     cinematic_src = _pick_best_tape(cinematic_candidates, codename, ["mainsequence"])
     if cinematic_src and convert_cinematic_tape(cinematic_src, target_dir, codename):
+        converted += 1
+
+    beats_src = _pick_best_tape(beats_candidates, codename, ["btape"])
+    if beats_src and convert_beats_tape(beats_src, target_dir, codename):
         converted += 1
 
     logger.info("Auto-converted %d tape(s) for '%s'", converted, codename)

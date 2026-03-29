@@ -307,6 +307,45 @@ class CinematicTape:
 
 
 @dataclass
+class BeatClip:
+    """A single beat clip from a timeline btape."""
+    id: int
+    track_id: int
+    is_active: int
+    start_time: int
+    duration: int
+    beat_type: int
+
+    def as_ubiart_dict(self) -> Dict[str, Any]:
+        return {
+            "__class": "BeatClip",
+            "Id": self.id,
+            "TrackId": self.track_id,
+            "IsActive": self.is_active,
+            "StartTime": self.start_time,
+            "Duration": self.duration,
+            "Type": self.beat_type,
+        }
+
+
+@dataclass
+class BeatsTape:
+    """Container for beat clips (btape)."""
+    clips: List[BeatClip]
+    map_name: str
+
+    def as_ubiart_dict(self) -> Dict[str, Any]:
+        return {
+            "__class": "Tape",
+            "Clips": [c.as_ubiart_dict() for c in self.clips],
+            "TapeClock": 0,
+            "TapeBarCount": 1,
+            "FreeResourcesAfterPlay": 0,
+            "MapName": self.map_name,
+        }
+
+
+@dataclass
 class SongDescription:
     """Metadata extracted from a songdesc CKD."""
     map_name: str = "unknown"
@@ -392,6 +431,7 @@ class NormalizedMapData:
     dance_tape: Optional[DanceTape] = None
     karaoke_tape: Optional[KaraokeTape] = None
     cinematic_tape: Optional[CinematicTape] = None
+    beats_tape: Optional[BeatsTape] = None
     media: MapMedia = field(default_factory=MapMedia)
     sync: MapSync = field(default_factory=MapSync)
     source_dir: Optional[Path] = None
