@@ -121,6 +121,97 @@ def _pick_ipk_video(search_dirs: list[Path], codename: Optional[str]) -> Optiona
     return candidates[0]
 
 
+def _collect_menuart_texture_sources(source_dir: Path, codename: str) -> list[Path]:
+    """Collect candidate MenuArt texture directories for decode fallback.
+
+    Some IPK layouts only place MenuArt textures under cache/itf_cooked/<platform>
+    and not under world/maps/<codename>/MenuArt. This helper discovers both.
+    """
+    seen: set[str] = set()
+    sources: list[Path] = []
+
+    def _add(path: Path) -> None:
+        key = str(path).lower()
+        if key in seen:
+            return
+        if path.is_dir():
+            seen.add(key)
+            sources.append(path)
+
+    _add(source_dir / "MenuArt" / "textures")
+    _add(source_dir / "menuart" / "textures")
+
+    extraction_root: Optional[Path] = None
+    for candidate in [source_dir, *source_dir.parents]:
+        if (candidate / "cache" / "itf_cooked").exists():
+            extraction_root = candidate
+            break
+        if candidate.name.lower() in {"_extraction", "temp_extraction"}:
+            extraction_root = candidate
+            break
+
+    if extraction_root is None:
+        return sources
+
+    itf_cooked = extraction_root / "cache" / "itf_cooked"
+    if not itf_cooked.is_dir():
+        return sources
+
+    codename_low = codename.lower()
+    for platform_dir in itf_cooked.iterdir():
+        if not platform_dir.is_dir():
+            continue
+        _add(platform_dir / "world" / "maps" / codename / "menuart" / "textures")
+        _add(platform_dir / "world" / "maps" / codename_low / "menuart" / "textures")
+
+    return sources
+
+
+def _collect_pictogram_sources(source_dir: Path, codename: str, preferred: Optional[Path] = None) -> list[Path]:
+    """Collect candidate pictogram directories, including IPK cache fallbacks."""
+    seen: set[str] = set()
+    sources: list[Path] = []
+
+    def _add(path: Optional[Path]) -> None:
+        if path is None:
+            return
+        key = str(path).lower()
+        if key in seen:
+            return
+        if path.is_dir():
+            seen.add(key)
+            sources.append(path)
+
+    _add(preferred)
+    _add(source_dir / "pictos")
+    _add(source_dir / "timeline" / "pictos")
+
+    extraction_root: Optional[Path] = None
+    for candidate in [source_dir, *source_dir.parents]:
+        if (candidate / "cache" / "itf_cooked").exists():
+            extraction_root = candidate
+            break
+        if candidate.name.lower() in {"_extraction", "temp_extraction"}:
+            extraction_root = candidate
+            break
+
+    if extraction_root is None:
+        return sources
+
+    itf_cooked = extraction_root / "cache" / "itf_cooked"
+    if not itf_cooked.is_dir():
+        return sources
+
+    codename_low = codename.lower()
+    for platform_dir in itf_cooked.iterdir():
+        if not platform_dir.is_dir():
+            continue
+        _add(platform_dir / "world" / "maps" / codename / "timeline" / "pictos")
+        _add(platform_dir / "world" / "maps" / codename_low / "timeline" / "pictos")
+
+    return sources
+
+
 def _validate_ipk_media_presence(
     map_output_dir: Path,
     codename: Optional[str],
@@ -974,12 +1065,18 @@ def install_map_to_game(
         
         # V1 Parity: Decode textures directly in the target directory 
         # to handle loose assets copied from Fetch/HTML mode.
-        decode_menuart_textures(textures_dir, textures_dir)
-        
-        # Also decode from source if the standard structure exists
-        menuart_src = map_data.source_dir / "MenuArt" / "textures"
-        if menuart_src.exists():
-            decode_menuart_textures(menuart_src, textures_dir)
+        decoded_menuart = decode_menuart_textures(textures_dir, textures_dir)
+
+        if map_data.source_dir and map_data.source_dir.exists():
+            for menuart_src in _collect_menuart_texture_sources(map_data.source_dir, codename):
+                decoded_menuart += decode_menuart_textures(menuart_src, textures_dir)
+
+        if decoded_menuart == 0:
+            logger.warning(
+                "No MenuArt textures decoded for '%s'. "
+                "Source may not include texture payloads.",
+                codename,
+            )
 
             
         # V1 Parity: Validate and heal MenuArt (case-fix + RGBA re-save)
@@ -987,8 +1084,18 @@ def install_map_to_game(
         process_menu_art(map_target, codename)
             
         if status_callback: status_callback("Decode Pictograms")
-        if picto_src and picto_src.exists():
-            decode_pictograms(picto_src, map_target / "timeline" / "pictos")
+        decoded_pictos = 0
+        if map_data.source_dir and map_data.source_dir.exists():
+            for picto_dir in _collect_pictogram_sources(map_data.source_dir, codename, preferred=picto_src):
+                decoded_pictos += decode_pictograms(picto_dir, map_target / "timeline" / "pictos")
+        elif picto_src and picto_src.exists():
+            decoded_pictos += decode_pictograms(picto_src, map_target / "timeline" / "pictos")
+
+        if decoded_pictos == 0:
+            logger.warning(
+                "No pictograms decoded for '%s'. Source may not include pictogram textures.",
+                codename,
+            )
 
     # 5. Moves
     if media.moves_dir and media.moves_dir.exists():
