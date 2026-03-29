@@ -293,6 +293,38 @@ def convert_audio(
             shutil.rmtree(temp_dir)
 
 
+def apply_audio_gain(
+    audio_path: str | Path,
+    gain_db: float,
+    config: Optional[AppConfig] = None,
+) -> Path:
+    """Apply FFmpeg gain to a single audio file in-place.
+
+    Uses a temporary sibling file and atomic replace to avoid leaving
+    a partially written output if FFmpeg fails.
+    """
+    src = Path(audio_path)
+    if not src.exists():
+        raise MediaProcessingError(f"Audio file not found: {src}")
+
+    tmp = src.with_name(src.stem + ".gain_tmp" + src.suffix)
+    gain_expr = f"volume={gain_db}dB"
+
+    run_ffmpeg(
+        [
+            "-y",
+            "-i", str(src),
+            "-af", gain_expr,
+            str(tmp),
+        ],
+        config=config,
+    )
+
+    tmp.replace(src)
+    logger.info("Applied %+0.1fdB gain: %s", gain_db, src.name)
+    return src
+
+
 
 
 def generate_intro_amb(

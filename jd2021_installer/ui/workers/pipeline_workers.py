@@ -255,12 +255,14 @@ class InstallMapWorker(QObject):
         self,
         map_data: NormalizedMapData,
         target_dir: Path,
+        source_mode: str = "",
         config: Optional[AppConfig] = None,
         parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(parent)
         self._map_data = map_data
         self._target_dir = target_dir
+        self._source_mode = source_mode
         self._config = config
 
     def run(self) -> None:
@@ -269,6 +271,7 @@ class InstallMapWorker(QObject):
                 self._map_data, 
                 self._target_dir, 
                 self._config,
+                source_mode=self._source_mode,
                 status_callback=self.status.emit,
                 progress_callback=self.progress.emit
             )
@@ -656,6 +659,7 @@ def install_map_to_game(
     map_data: NormalizedMapData, 
     game_dir: Path, 
     config: AppConfig,
+    source_mode: str = "",
     status_callback: Optional[callable] = None,
     progress_callback: Optional[callable] = None
 ) -> None:
@@ -692,6 +696,19 @@ def install_map_to_game(
     if progress_callback: progress_callback(40)
     
     reprocess_audio(map_data, map_target, initial_a_offset, config)
+
+    # Fetch/HTML parity ticket: boost installed gameplay audio by +8 dB.
+    mode_low = (source_mode or "").lower()
+    if "fetch" in mode_low or "html" in mode_low:
+        if status_callback: status_callback("Apply +8dB JDU audio boost")
+        if progress_callback: progress_callback(45)
+        from jd2021_installer.installers.media_processor import apply_audio_gain
+
+        audio_wav = map_target / "audio" / f"{codename}.wav"
+        if audio_wav.exists():
+            apply_audio_gain(audio_wav, gain_db=8.0, config=config)
+        else:
+            logger.warning("Expected gameplay WAV missing for gain boost: %s", audio_wav)
 
     # 2b. Copy Video
     media = map_data.media
