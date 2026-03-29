@@ -20,7 +20,6 @@ from __future__ import annotations
 import logging
 import re
 import struct
-import traceback
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -28,6 +27,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 from jd2021_installer.core.config import AppConfig
 from jd2021_installer.core.exceptions import ExtractionError, IPKExtractionError
+from jd2021_installer.core.logging_config import log_exception_for_profile
 from jd2021_installer.core.models import NormalizedMapData
 from jd2021_installer.extractors.base import BaseExtractor
 from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor
@@ -331,7 +331,7 @@ class ExtractAndNormalizeWorker(QObject):
                 self.finished.emit(None)
                 return
 
-            logger.error("ExtractAndNormalize failed: %s\n%s", e, traceback.format_exc())
+            log_exception_for_profile(logger, "ExtractAndNormalize failed", e)
             self.error.emit(failed_stage, str(e))
             self.finished.emit(None)
 
@@ -371,7 +371,7 @@ class InstallMapWorker(QObject):
             self.finished.emit(True)
 
         except Exception as e:
-            logger.error("InstallMap failed: %s\n%s", e, traceback.format_exc())
+            log_exception_for_profile(logger, "InstallMap failed", e)
             self.error.emit(str(e))
             self.finished.emit(False)
 
@@ -572,7 +572,7 @@ class ApplyAndFinishWorker(QObject):
             self.status.emit("Sync offsets applied successfully.")
             self.finished.emit(True)
         except Exception as e:
-            logger.error("ApplyAndFinish failed: %s\n%s", e, traceback.format_exc())
+            log_exception_for_profile(logger, "ApplyAndFinish failed", e)
             self.error.emit(str(e))
             self.finished.emit(False)
 
@@ -613,7 +613,7 @@ class ApplyOffsetsBatchWorker(QObject):
             self.status.emit("Sync offsets applied successfully.")
             self.finished.emit(True)
         except Exception as e:
-            logger.error("ApplyOffsetsBatch failed: %s\n%s", e, traceback.format_exc())
+            log_exception_for_profile(logger, "ApplyOffsetsBatch failed", e)
             self.error.emit(str(e))
             self.finished.emit(False)
 
@@ -662,7 +662,7 @@ class ApplyReadjustOffsetsBatchWorker(QObject):
             self.status.emit("Sync offsets applied successfully.")
             self.finished.emit(True)
         except Exception as e:
-            logger.error("ApplyReadjustOffsetsBatch failed: %s\n%s", e, traceback.format_exc())
+            log_exception_for_profile(logger, "ApplyReadjustOffsetsBatch failed", e)
             self.error.emit(str(e))
             self.finished.emit(False)
 
@@ -865,7 +865,7 @@ class BatchInstallWorker(QObject):
             self.finished.emit(True)
 
         except Exception as e:
-            logger.error("BatchInstallWorker failed: %s\n%s", e, traceback.format_exc())
+            log_exception_for_profile(logger, "BatchInstallWorker failed", e)
             self.error.emit(str(e))
             self.finished.emit(False)
             

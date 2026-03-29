@@ -34,6 +34,7 @@ class AppConfig(BaseModel):
     show_preflight_success_popup: bool = True
     show_quickstart_on_launch: bool = True
     skip_quickstart: bool = False
+    log_detail_level: str = Field(default="user", pattern=r"^(quiet|user|detailed|developer)$")
 
     # Download settings
     download_timeout_s: int = 600
