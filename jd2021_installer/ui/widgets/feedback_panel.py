@@ -16,7 +16,7 @@ from enum import Enum, auto
 from typing import Optional
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QLabel,
     QListWidget,
@@ -64,18 +64,20 @@ class ProgressLogWidget(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
 
         section_label = QLabel("Progress")
-        section_label.setStyleSheet("font-weight: bold;")
+        section_label.setObjectName("progressSectionLabel")
         root.addWidget(section_label)
 
         # -- Checklist -------------------------------------------------------
         self._checklist = QListWidget()
-        self._checklist.setAlternatingRowColors(True)
+        self._checklist.setObjectName("progressChecklist")
+        self._checklist.setAlternatingRowColors(False)
         self._checklist.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         self._checklist.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         root.addWidget(self._checklist)
 
         # -- Progress bar ----------------------------------------------------
         self._progress = QProgressBar()
+        self._progress.setObjectName("progressMainBar")
         self._progress.setValue(0)
         self._progress.setTextVisible(True)
         root.addWidget(self._progress)
@@ -118,7 +120,8 @@ class ProgressLogWidget(QWidget):
             StepStatus.DONE: QColor("#4CAF50"),
             StepStatus.ERROR: QColor("#F44336"),
         }
-        item.setForeground(colour_map.get(status, QColor("#FFFFFF")))
+        default_colour = self.palette().color(self.foregroundRole())
+        item.setForeground(colour_map.get(status, default_colour))
 
     # ------------------------------------------------------------------
     # Progress bar API

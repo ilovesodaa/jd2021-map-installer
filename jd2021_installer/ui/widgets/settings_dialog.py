@@ -18,7 +18,9 @@ from PyQt6.QtWidgets import (
     QLabel,
     QFileDialog,
     QMessageBox,
+    QSpinBox,
     QWidget,
+    QSizePolicy,
 )
 
 from jd2021_installer.core.config import AppConfig
@@ -36,7 +38,7 @@ class SettingsDialog(QDialog):
     def __init__(self, config: AppConfig, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Installer Settings")
-        self.setFixedSize(520, 500)
+        self.setMinimumSize(560, 520)
         self.setModal(True)
         
         # We work on a copy of the config, and only return it if Save is clicked.
@@ -55,9 +57,10 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
+        self.setObjectName("settingsDialog")
 
         title = QLabel("Installer Settings")
-        title.setStyleSheet("font-weight: bold; font-size: 14px;")
+        title.setObjectName("settingsDialogTitle")
         layout.addWidget(title)
 
         # skip_preflight
@@ -149,6 +152,65 @@ class SettingsDialog(QDialog):
         log_row.addStretch()
         layout.addLayout(log_row)
 
+        # theme
+        theme_row = QHBoxLayout()
+        theme_label = QLabel("Theme:")
+        theme_row.addWidget(theme_label)
+
+        self.combo_theme = QComboBox()
+        self.combo_theme.addItems(["light", "dark"])
+        self.combo_theme.setCurrentText(self._config.theme)
+        self.combo_theme.setToolTip(
+            "light: default system-friendly theme\n"
+            "dark: premium dark theme"
+        )
+        theme_row.addWidget(self.combo_theme)
+        theme_row.addStretch()
+        layout.addLayout(theme_row)
+
+        # minimum window size policy
+        self.cb_enforce_min_size = QCheckBox("Enforce minimum window size")
+        self.cb_enforce_min_size.setChecked(self._config.enforce_min_window_size)
+        self.cb_enforce_min_size.setToolTip(
+            "When disabled, the main window can be resized smaller than the default minimum."
+        )
+        layout.addWidget(self.cb_enforce_min_size)
+
+        min_size_row = QHBoxLayout()
+        min_size_row.addWidget(QLabel("Minimum window size:"))
+
+        self.spin_min_width = QSpinBox()
+        self.spin_min_width.setRange(640, 3840)
+        self.spin_min_width.setValue(self._config.min_window_width)
+        self.spin_min_width.setSuffix(" px")
+        min_size_row.addWidget(self.spin_min_width)
+
+        min_size_row.addWidget(QLabel("x"))
+
+        self.spin_min_height = QSpinBox()
+        self.spin_min_height.setRange(480, 2160)
+        self.spin_min_height.setValue(self._config.min_window_height)
+        self.spin_min_height.setSuffix(" px")
+        min_size_row.addWidget(self.spin_min_height)
+        min_size_row.addStretch()
+        layout.addLayout(min_size_row)
+
+        def _toggle_min_size_inputs(enabled: bool) -> None:
+            self.spin_min_width.setEnabled(enabled)
+            self.spin_min_height.setEnabled(enabled)
+
+        self.cb_enforce_min_size.toggled.connect(_toggle_min_size_inputs)
+        _toggle_min_size_inputs(self.cb_enforce_min_size.isChecked())
+
+        self.cb_size_overlay = QCheckBox("Show floating current window size while resizing")
+        self.cb_size_overlay.setChecked(
+            getattr(self._config, "show_window_size_overlay", True)
+        )
+        self.cb_size_overlay.setToolTip(
+            "Displays an overlay like 1280 x 720 when you resize the main window."
+        )
+        layout.addWidget(self.cb_size_overlay)
+
         # video_quality
         quality_row = QHBoxLayout()
         quality_label = QLabel("Default video quality:")
@@ -195,12 +257,14 @@ class SettingsDialog(QDialog):
         btn_layout.addStretch()
 
         btn_save = QPushButton("Save")
-        btn_save.setFixedWidth(80)
+        btn_save.setMinimumWidth(80)
+        btn_save.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         btn_save.clicked.connect(self._on_save)
         btn_layout.addWidget(btn_save)
 
         btn_cancel = QPushButton("Cancel")
-        btn_cancel.setFixedWidth(80)
+        btn_cancel.setMinimumWidth(80)
+        btn_cancel.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         btn_cancel.clicked.connect(self.reject)
         btn_layout.addWidget(btn_cancel)
 
@@ -214,6 +278,11 @@ class SettingsDialog(QDialog):
         self._config.show_preflight_success_popup = self.cb_preflight_popup.isChecked()
         self._config.show_quickstart_on_launch = self.cb_quickstart.isChecked()
         self._config.log_detail_level = self.combo_log_detail.currentText()
+        self._config.theme = self.combo_theme.currentText()
+        self._config.enforce_min_window_size = self.cb_enforce_min_size.isChecked()
+        self._config.min_window_width = self.spin_min_width.value()
+        self._config.min_window_height = self.spin_min_height.value()
+        self._config.show_window_size_overlay = self.cb_size_overlay.isChecked()
         self._config.video_quality = self.combo_quality.currentText()
         self._config.discord_channel_url = self.txt_discord_url.text().strip()
         

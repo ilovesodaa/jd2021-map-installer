@@ -39,6 +39,8 @@ from jd2021_installer.parsers.binary_ckd import parse_binary_ckd
 
 logger = logging.getLogger("jd2021.parsers.normalizer")
 
+JDU_AUDIO_CALIBRATION_MS = 85.0
+
 
 # ---------------------------------------------------------------------------
 # CKD file loading (JSON-first, binary fallback)
@@ -780,7 +782,7 @@ def normalize_sync(
     """Determine the optimal audio/video sync offsets.
     
     Ported from V1 source_analysis.py logic.
-    - HTML/Fetch maps get +85ms calibration.
+    - HTML/Fetch maps get a constant +85ms audio calibration.
     - IPK/Readjust maps inherit existing videoStartTime.
     """
     from jd2021_installer.parsers.binary_ckd import calculate_marker_preroll
@@ -810,7 +812,7 @@ def normalize_sync(
         if is_html_source:
             # Fetch/HTML mode (OGG)
             # V1 parity: marker-based sync for HTML mode.
-            # Audio uses calibration (OGG delay), video does not.
+            # Audio keeps a constant +85ms calibration in all JDU branches.
             prms_video = calculate_marker_preroll(
                 music_track.markers,
                 music_track.start_beat,
@@ -819,14 +821,14 @@ def normalize_sync(
             prms_audio = calculate_marker_preroll(
                 music_track.markers,
                 music_track.start_beat,
-                include_calibration=True,
+                include_calibration=False,
             )
 
             metadata_ms = music_track.video_start_time * 1000.0
             if prms_audio is not None:
-                audio_ms = -prms_audio
+                audio_ms = -prms_audio + JDU_AUDIO_CALIBRATION_MS
             else:
-                audio_ms = metadata_ms
+                audio_ms = metadata_ms + JDU_AUDIO_CALIBRATION_MS
 
             # V1 parity: preserve metadata videoStartTime when present.
             # Only synthesize from markers when metadata is effectively zero.

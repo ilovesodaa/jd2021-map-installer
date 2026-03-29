@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -51,6 +52,14 @@ MODE_LABELS = [
     "IPK Archive",
     "Batch (Directory)",
     "Manual (Directory)",
+]
+
+MODE_KEYS = [
+    "fetch",
+    "html",
+    "ipk",
+    "batch",
+    "manual",
 ]
 
 
@@ -105,6 +114,7 @@ class ModeSelectorWidget(QWidget):
 
     mode_changed = pyqtSignal(str)  # emits the label string
     target_selected = pyqtSignal(str)  # emits the user-provided input/main path
+    source_state_changed = pyqtSignal(dict)  # emits current mode + inputs snapshot
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -124,12 +134,13 @@ class ModeSelectorWidget(QWidget):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
+        self.setObjectName("modeSelectorWidget")
 
         # Mode row layout to keep combo box concise
         mode_row = QHBoxLayout()
         lbl = QLabel("Mode:")
-        lbl.setStyleSheet("font-weight: bold;")
-        lbl.setFixedWidth(80)
+        lbl.setObjectName("modeSelectorLabel")
+        lbl.setMinimumWidth(80)
         mode_row.addWidget(lbl)
 
         self._mode_combo = QComboBox()
@@ -141,6 +152,8 @@ class ModeSelectorWidget(QWidget):
 
         # Stacked widget for mode-specific inputs
         self._stack = QStackedWidget()
+        self._stack.setObjectName("modeSelectorStack")
+        self._stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         root.addWidget(self._stack)
 
         self._stack.addWidget(self._build_fetch_page())  # 0
@@ -148,11 +161,14 @@ class ModeSelectorWidget(QWidget):
         self._stack.addWidget(self._build_ipk_page())  # 2
         self._stack.addWidget(self._build_batch_page())  # 3
         self._stack.addWidget(self._build_manual_page())  # 4
+        self._wire_state_signals()
+        self._fit_current_page_height()
 
     # -- Mode Pages ---------------------------------------------------------
 
     def _build_fetch_page(self) -> QWidget:
         page = QWidget()
+        page.setObjectName("modePage")
         lay = QHBoxLayout(page)
         lay.setContentsMargins(0, 4, 0, 0)
 
@@ -170,13 +186,14 @@ class ModeSelectorWidget(QWidget):
 
     def _build_html_page(self) -> QWidget:
         page = QWidget()
+        page.setObjectName("modePage")
         lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 4, 0, 0)
 
         warn = QLabel(
             "⚠️ Asset/NoHUD links expire after ~30 minutes! Fetch fresh links if download fails."
         )
-        warn.setStyleSheet("color: #856404; font-weight: bold;")
+        warn.setObjectName("modeHtmlWarningLabel")
         warn.setWordWrap(True)
         lay.addWidget(warn)
 
@@ -224,6 +241,7 @@ class ModeSelectorWidget(QWidget):
 
     def _build_ipk_page(self) -> QWidget:
         page = QWidget()
+        page.setObjectName("modePage")
         lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 4, 0, 0)
 
@@ -235,13 +253,13 @@ class ModeSelectorWidget(QWidget):
         )
         row.path_changed.connect(lambda t: self.target_selected.emit(t))
         lay.addWidget(row)
-        lay.addStretch()
 
         self.inputs["ipk"]["file"] = row.line_edit
         return page
 
     def _build_batch_page(self) -> QWidget:
         page = QWidget()
+        page.setObjectName("modePage")
         lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 4, 0, 0)
 
@@ -249,7 +267,7 @@ class ModeSelectorWidget(QWidget):
             "Batch installs from a folder containing map subfolders with asset/nohud HTML files "
             "or already-downloaded files."
         )
-        warn.setStyleSheet("color: #555555; font-style: italic;")
+        warn.setObjectName("modeBatchHintLabel")
         warn.setWordWrap(True)
         lay.addWidget(warn)
 
@@ -258,7 +276,6 @@ class ModeSelectorWidget(QWidget):
         )
         row.path_changed.connect(lambda t: self.target_selected.emit(t))
         lay.addWidget(row)
-        lay.addStretch()
 
         self.inputs["batch"]["dir"] = row.line_edit
         return page
@@ -266,6 +283,7 @@ class ModeSelectorWidget(QWidget):
     def _build_manual_page(self) -> QWidget:
         """The monster manual page mirroring Tkinter V1."""
         page = QWidget()
+        page.setObjectName("modePage")
         lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 4, 0, 0)
         
@@ -394,8 +412,25 @@ class ModeSelectorWidget(QWidget):
 
     def _on_mode_index_changed(self, index: int) -> None:
         self._stack.setCurrentIndex(index)
+        self._fit_current_page_height()
         self.mode_changed.emit(MODE_LABELS[index])
+        self._emit_state_changed()
         logger.debug("Mode switched to: %s", MODE_LABELS[index])
+
+    def _fit_current_page_height(self) -> None:
+        """Keep mode input panel compact for simple modes and scrollable for manual mode."""
+        current = self._stack.currentWidget()
+        if current is None:
+            return
+
+        hint = max(64, current.sizeHint().height())
+        if self._mode_combo.currentIndex() == MODE_MANUAL:
+            target_height = max(260, min(hint + 8, 420))
+        else:
+            target_height = max(72, min(hint + 8, 200))
+
+        self._stack.setMinimumHeight(target_height)
+        self._stack.setMaximumHeight(target_height)
 
     def _on_manual_root_changed(self, path: str) -> None:
         """Triggered when root folder in manual mode is changed."""
@@ -475,6 +510,42 @@ class ModeSelectorWidget(QWidget):
             "amb",
         ):
             self.inputs["manual"][key].clear()
+        self._emit_state_changed()
+
+    def _wire_state_signals(self) -> None:
+        """Emit a normalized source-state payload whenever inputs change."""
+        for mode_inputs in self.inputs.values():
+            for line_edit in mode_inputs.values():
+                line_edit.textChanged.connect(lambda _text: self._emit_state_changed())
+
+        if hasattr(self, "_manual_source_combo"):
+            self._manual_source_combo.currentTextChanged.connect(
+                lambda _text: self._emit_state_changed()
+            )
+        if hasattr(self, "_manual_sub_select"):
+            self._manual_sub_select.toggled.connect(
+                lambda _checked: self._emit_state_changed()
+            )
+        if hasattr(self, "_manual_sub_scan"):
+            self._manual_sub_scan.toggled.connect(
+                lambda _checked: self._emit_state_changed()
+            )
+
+    def _emit_state_changed(self) -> None:
+        self.source_state_changed.emit(self.get_current_state())
+
+    def _resolve_target_for_state(self, mode_key: str, fields: dict[str, str]) -> str:
+        if mode_key == "fetch":
+            return fields.get("codenames", "").strip()
+        if mode_key == "html":
+            return fields.get("asset", "").strip() or fields.get("nohud", "").strip()
+        if mode_key == "ipk":
+            return fields.get("file", "").strip()
+        if mode_key == "batch":
+            return fields.get("dir", "").strip()
+        if mode_key == "manual":
+            return fields.get("root", "").strip() or fields.get("codename", "").strip()
+        return ""
 
     def _matches_codename(self, path: Path, codename: Optional[str]) -> bool:
         if not codename:
@@ -642,3 +713,30 @@ class ModeSelectorWidget(QWidget):
         if not hasattr(self, "_manual_source_combo"):
             return "jdu"
         return self._manual_source_combo.currentText().strip().lower()
+
+    def set_fetch_codenames(self, raw_value: str) -> None:
+        """Public setter used by MainWindow (avoid direct child-input access)."""
+        self.inputs["fetch"]["codenames"].setText(raw_value)
+
+    def get_current_state(self) -> dict[str, object]:
+        """Return a normalized snapshot of selected mode and user-provided values."""
+        mode_index = self._mode_combo.currentIndex()
+        mode_key = MODE_KEYS[mode_index]
+
+        fields: dict[str, dict[str, str]] = {}
+        for key, mode_inputs in self.inputs.items():
+            fields[key] = {
+                name: line_edit.text().strip()
+                for name, line_edit in mode_inputs.items()
+            }
+
+        manual_submode = "scan" if getattr(self, "_manual_sub_scan", None) and self._manual_sub_scan.isChecked() else "select"
+        return {
+            "mode_index": mode_index,
+            "mode_label": MODE_LABELS[mode_index],
+            "mode_key": mode_key,
+            "manual_source_type": self.manual_source_type,
+            "manual_submode": manual_submode,
+            "target": self._resolve_target_for_state(mode_key, fields.get(mode_key, {})),
+            "fields": fields,
+        }
