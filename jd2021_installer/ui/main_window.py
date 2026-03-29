@@ -21,10 +21,12 @@ Layout
 from __future__ import annotations
 
 import logging
+import importlib.util
 import re
 import shutil
 import sys
 import json
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -85,6 +87,15 @@ PIPELINE_STEPS = [
     "Finalizing Offsets",
 ]
 
+# Runtime dependencies required for end-user operation.
+# key: pip package name, value: import module name
+RUNTIME_DEPENDENCIES = {
+    "pydantic": "pydantic",
+    "requests": "requests",
+    "Pillow": "PIL",
+    "playwright": "playwright",
+}
+
 
 class MainWindow(QMainWindow):
     """Primary application window — orchestrates widgets and workers."""
@@ -130,6 +141,7 @@ class MainWindow(QMainWindow):
         # Show Quickstart Guide if needed
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(500, self._show_quickstart_if_needed)
+        QTimer.singleShot(900, self._run_startup_dependency_guardrail)
 
     def closeEvent(self, event) -> None:
         """Ensure all background processes (especially ffplay) are stopped."""
@@ -183,8 +195,8 @@ class MainWindow(QMainWindow):
                 self._config.skip_quickstart = True
                 self._save_settings()
 
-    def _offer_ffmpeg_install(self, missing: list[str]) -> None:
-        """Prompt user to auto-download and install FFmpeg/FFplay."""
+    def _offer_ffmpeg_install(self, missing: list[str]) -> bool:
+        """Prompt user to auto-download and install FFmpeg toolchain."""
         msg = (
             f"The following required tools were not found: {', '.join(missing)}\n\n"
             "Would you like the installer to automatically download and configure "
@@ -194,21 +206,217 @@ class MainWindow(QMainWindow):
             self, "Missing Dependencies", msg,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
-        
-        if reply == QMessageBox.StandardButton.Yes:
-            from jd2021_installer.ui.widgets.ffmpeg_dialog import FFmpegInstallDialog
-            # Ensure tools/ffmpeg exists
-            tools_dir = Path("tools/ffmpeg")
-            tools_dir.mkdir(parents=True, exist_ok=True)
-            
-            if FFmpegInstallDialog.install(tools_dir, self):
-                # Update config and save
-                ffmpeg_exe = tools_dir / ("ffmpeg.exe" if sys.platform == "win32" else "ffmpeg")
-                self._config.ffmpeg_path = str(ffmpeg_exe)
-                self._save_settings()
-                QMessageBox.information(self, "Success", "FFmpeg has been installed successfully.")
-            else:
-                QMessageBox.warning(self, "Failed", "FFmpeg installation was cancelled or failed.")
+
+        if reply != QMessageBox.StandardButton.Yes:
+            return False
+
+        from jd2021_installer.ui.widgets.ffmpeg_dialog import FFmpegInstallDialog
+
+        tools_dir = Path("tools/ffmpeg")
+        tools_dir.mkdir(parents=True, exist_ok=True)
+
+        if FFmpegInstallDialog.install(tools_dir, self):
+            ffmpeg_exe = tools_dir / ("ffmpeg.exe" if sys.platform == "win32" else "ffmpeg")
+            ffprobe_exe = tools_dir / ("ffprobe.exe" if sys.platform == "win32" else "ffprobe")
+            self._config.ffmpeg_path = str(ffmpeg_exe)
+            self._config.ffprobe_path = str(ffprobe_exe)
+            self._save_settings()
+            QMessageBox.information(
+                self,
+                "Success",
+                "FFmpeg toolchain installed and configured successfully.",
+            )
+            return True
+
+        QMessageBox.warning(self, "Failed", "FFmpeg installation was cancelled or failed.")
+        return False
+
+    def _find_missing_python_dependencies(self) -> list[str]:
+        """Return missing pip package names from runtime dependency list."""
+        missing: list[str] = []
+        for pip_name, module_name in RUNTIME_DEPENDENCIES.items():
+            if importlib.util.find_spec(module_name) is None:
+                missing.append(pip_name)
+        return missing
+
+    def _offer_python_dependencies_install(self, missing: list[str]) -> bool:
+        """Prompt user to install missing Python packages using current interpreter."""
+        msg = (
+            "The following required Python package(s) are missing:\n\n"
+            f"- {'\n- '.join(missing)}\n\n"
+            "Install them now with pip using this app's Python environment?"
+        )
+        reply = QMessageBox.question(
+            self,
+            "Missing Python Packages",
+            msg,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return False
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", *missing],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Install Failed",
+                f"Could not run pip install:\n{exc}",
+            )
+            return False
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if result.returncode != 0:
+            output = (result.stderr or result.stdout or "Unknown pip error")[:1200]
+            QMessageBox.critical(
+                self,
+                "Install Failed",
+                "Pip failed to install required packages.\n\n"
+                f"Output:\n{output}",
+            )
+            return False
+
+        still_missing = self._find_missing_python_dependencies()
+        if still_missing:
+            QMessageBox.warning(
+                self,
+                "Dependency Check",
+                "Package installation completed, but some modules are still unavailable:\n\n"
+                + "\n".join(still_missing)
+                + "\n\nPlease restart the installer and run Pre-flight Check again.",
+            )
+            return False
+
+        QMessageBox.information(
+            self,
+            "Dependencies Installed",
+            "Required Python packages were installed successfully.",
+        )
+        return True
+
+    def _playwright_chromium_available(self) -> tuple[bool, str]:
+        """Verify that Playwright can launch Chromium in this environment."""
+        try:
+            from playwright.sync_api import sync_playwright
+        except Exception as exc:
+            return False, str(exc)
+
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                browser.close()
+            return True, ""
+        except Exception as exc:
+            return False, str(exc)
+
+    def _offer_playwright_browser_install(self) -> bool:
+        """Prompt user to install Chromium used by Playwright."""
+        reply = QMessageBox.question(
+            self,
+            "Playwright Browser Missing",
+            "Playwright Chromium is not installed or not usable.\n\n"
+            "Would you like to install Chromium now?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return False
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "playwright", "install", "chromium"],
+                capture_output=True,
+                text=True,
+                timeout=900,
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Playwright Install Failed",
+                f"Could not run Playwright install:\n{exc}",
+            )
+            return False
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if result.returncode != 0:
+            output = (result.stderr or result.stdout or "Unknown Playwright error")[:1200]
+            QMessageBox.critical(
+                self,
+                "Playwright Install Failed",
+                f"Could not install Chromium.\n\nOutput:\n{output}",
+            )
+            return False
+
+        ok, reason = self._playwright_chromium_available()
+        if not ok:
+            QMessageBox.warning(
+                self,
+                "Playwright Check",
+                "Chromium was installed, but launch verification still failed.\n\n"
+                f"Details:\n{reason[:1000]}",
+            )
+            return False
+
+        QMessageBox.information(
+            self,
+            "Playwright Ready",
+            "Playwright Chromium is installed and ready.",
+        )
+        return True
+
+    def _collect_missing_media_binaries(self) -> list[str]:
+        """Return missing media binaries required by install/preview flows."""
+        missing: list[str] = []
+        ffmpeg_ok = bool(shutil.which(self._config.ffmpeg_path))
+        ffprobe_ok = bool(shutil.which(self._config.ffprobe_path))
+        ffplay_ok = bool(shutil.which("ffplay")) or bool(
+            shutil.which(self._config.ffmpeg_path.replace("ffmpeg", "ffplay"))
+        )
+
+        if not ffmpeg_ok:
+            missing.append("ffmpeg")
+        if not ffprobe_ok:
+            missing.append("ffprobe")
+        if not ffplay_ok:
+            missing.append("ffplay")
+        return missing
+
+    def _ensure_runtime_dependencies(self, include_fetch_checks: bool) -> bool:
+        """Comprehensive guard rail for Python packages + toolchain dependencies."""
+        missing_python = self._find_missing_python_dependencies()
+        if missing_python and not self._offer_python_dependencies_install(missing_python):
+            return False
+
+        missing_media = self._collect_missing_media_binaries()
+        if missing_media and not self._offer_ffmpeg_install(missing_media):
+            return False
+
+        if include_fetch_checks:
+            ok, reason = self._playwright_chromium_available()
+            if not ok and not self._offer_playwright_browser_install():
+                if reason:
+                    QMessageBox.warning(
+                        self,
+                        "Fetch Mode Dependency",
+                        "Fetch mode cannot continue until Playwright Chromium is available.\n\n"
+                        f"Details:\n{reason[:1000]}",
+                    )
+                return False
+
+        return True
+
+    def _run_startup_dependency_guardrail(self) -> None:
+        """Run a lightweight startup dependency health check with remediation."""
+        # Do not force Playwright browser launch at startup; that check is mode-specific.
+        self._ensure_runtime_dependencies(include_fetch_checks=False)
 
     # ==================================================================
     # UI COMPOSITION  (Phase 3)
@@ -491,6 +699,12 @@ class MainWindow(QMainWindow):
             self._set_status("Pre-flight failed")
             return
 
+        from jd2021_installer.ui.widgets.mode_selector import MODE_FETCH
+        include_fetch_checks = self._mode_selector.current_mode_index == MODE_FETCH
+        if not self._ensure_runtime_dependencies(include_fetch_checks=include_fetch_checks):
+            self._set_status("Pre-flight failed")
+            return
+
         if warnings:
             QMessageBox.warning(
                 self,
@@ -645,17 +859,9 @@ class MainWindow(QMainWindow):
                 "\n".join(f"• {w}" for w in game_warnings),
             )
 
-        # Pre-flight check for FFmpeg/FFplay (required for media + preview)
-        import shutil
-        missing_binaries = []
-        if not shutil.which(self._config.ffmpeg_path):
-            missing_binaries.append("ffmpeg")
-        # Ensure ffplay is present for preview features
-        if not shutil.which("ffplay") and not shutil.which(self._config.ffmpeg_path.replace("ffmpeg", "ffplay")):
-            missing_binaries.append("ffplay")
-            
-        if missing_binaries:
-            self._offer_ffmpeg_install(missing_binaries)
+        from jd2021_installer.ui.widgets.mode_selector import MODE_FETCH
+        include_fetch_checks = self._mode_selector.current_mode_index == MODE_FETCH
+        if not self._ensure_runtime_dependencies(include_fetch_checks=include_fetch_checks):
             return
 
         # Start dynamic per-map logging immediately if target is available
