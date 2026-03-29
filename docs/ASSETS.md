@@ -34,7 +34,7 @@ The embed groups assets under several named sections:
 https://jd-s3.cdn.ubi.com/public/map/{MapName}/{platform}/{Filename}/{hash}.{ext}
 ```
 
-- `{MapName}` — the map codename (e.g. `Starships`). The installer extracts this automatically via `extract_codename_from_urls()` (`map_downloader.py:55`).
+- `{MapName}` — the map codename (e.g. `Starships`). The installer extracts this automatically via `extract_codename_from_urls()` (``extractors/web_playwright.py`:55`).
 - `{platform}` — subdirectory indicating the target platform (`pc/`, `nx/`, `ps4/`, `x1/`, `ggp/`, `wiiu/`). Absent for platform-agnostic files (cover images, phone textures, audio preview).
 - `{hash}` — MD5 content hash used by the CDN for cache-busting. Ignored by the installer.
 
@@ -47,7 +47,7 @@ https://jd-s3.cdn.ubi.com/public/map/{MapName}/{platform}/{Filename}/{hash}.{ext
 | Cover/background images (`.ckd`, `.jpg`, `.png`) | Downloaded and installed. |
 | Video/audio preview files | Skipped — preview WebMs and `AudioPreview.ogg` are not used by the installer. |
 
-The parser collects all `href` URLs from the file, filters out Discord CDN proxy URLs (`discordapp.net`), then categorises them by extension and filename pattern (`map_downloader.py:114`).
+The parser collects all `href` URLs from the file, filters out Discord CDN proxy URLs (`discordapp.net`), then categorises them by extension and filename pattern (``extractors/web_playwright.py`:114`).
 
 ---
 
@@ -97,7 +97,7 @@ The preferred video quality is set by the `--quality` flag (CLI) or the Video Qu
 
 ## How the parser works
 
-Both files are processed identically by `extract_urls()` (`map_downloader.py:28`):
+Both files are processed identically by `extract_urls()` (``extractors/web_playwright.py`:28`):
 
 1. Opens the HTML as UTF-8 text.
 2. Extracts all `href="..."` values via regex.
@@ -110,7 +110,7 @@ The distinction between asset and NOHUD content is made downstream in `download_
 
 ## File naming and placement
 
-For single-map installs the filenames are arbitrary — pass them via `--asset-html` and `--nohud-html`. For **batch installs**, `batch_install_maps.py` expects this exact layout:
+For single-map installs the filenames are arbitrary — pass them via `--asset-html` and `--nohud-html`. For **batch installs**, `the installer` expects this exact layout:
 
 ```
 MapDownloads/
