@@ -133,12 +133,35 @@ def prune_stale_entries(index_file: Path = INDEX_FILE) -> tuple[list[ReadjustInd
     kept: list[ReadjustIndexEntry] = []
     pruned: list[ReadjustIndexEntry] = []
 
+    def _has_recoverable_media(source_root: Path) -> bool:
+        if not source_root.is_dir():
+            return False
+        has_audio = False
+        has_video = False
+        try:
+            for path in source_root.rglob("*"):
+                if not path.is_file():
+                    continue
+                lower_name = path.name.lower()
+                if lower_name.endswith(".webm") and "mappreview" not in lower_name and "videopreview" not in lower_name:
+                    has_video = True
+                elif lower_name.endswith(".ogg") or lower_name.endswith(".wav") or lower_name.endswith(".wav.ckd"):
+                    if "audiopreview" not in lower_name:
+                        has_audio = True
+                if has_audio and has_video:
+                    return True
+        except OSError:
+            return False
+        return False
+
     for entry in index.entries:
-        source_root_ok = Path(entry.source_root).is_dir()
+        source_root = Path(entry.source_root)
+        source_root_ok = source_root.is_dir()
         audio_ok = Path(entry.source_audio).is_file()
         video_ok = Path(entry.source_video).is_file()
         installed_ok = Path(entry.installed_map_dir).is_dir()
-        if source_root_ok and audio_ok and video_ok and installed_ok:
+        recoverable_media_ok = source_root_ok and _has_recoverable_media(source_root)
+        if source_root_ok and installed_ok and ((audio_ok and video_ok) or recoverable_media_ok):
             kept.append(entry)
         else:
             pruned.append(entry)

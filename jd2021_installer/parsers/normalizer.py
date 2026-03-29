@@ -740,10 +740,19 @@ def normalize_sync(
             else:
                 audio_ms = metadata_ms
 
-            if prms_video is not None:
+            # V1 parity: preserve metadata videoStartTime when present.
+            # Only synthesize from markers when metadata is effectively zero.
+            if abs(metadata_ms) > 0.0001:
+                video_ms = metadata_ms
+                logger.info(
+                    "Fetch/HTML sync (metadata-preserved): audio_offset=%.3f ms (marker+cal), video_offset=%.3f ms (metadata)",
+                    audio_ms,
+                    video_ms,
+                )
+            elif prms_video is not None:
                 video_ms = -prms_video
                 logger.info(
-                    "Fetch/HTML sync (marker-driven): audio_offset=%.3f ms (marker+cal), video_offset=%.3f ms (marker)",
+                    "Fetch/HTML sync (synthesized video): audio_offset=%.3f ms (marker+cal), video_offset=%.3f ms (marker)",
                     audio_ms,
                     video_ms,
                 )
