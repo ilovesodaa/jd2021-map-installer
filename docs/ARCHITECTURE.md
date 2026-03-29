@@ -191,8 +191,11 @@ The root logger `jd2021` is configured in `main.py` with a `StreamHandler` writi
 ### Status Override for JD2021 Maps
 Maps originally released for JD2021 have `Status = 12` (ObjectiveLocked) in their JDU metadata. The game writer overrides this to `Status = 3` (Available) so maps are immediately playable.
 
-### JDVersion Capping
-`JDVersion` and `OriginalJDVersion` are capped between `min_jd_version` (2014) and `max_jd_version` (2021) to prevent `GameManagerConfig` crashes when installing maps from JD2022+ that reference config entries not present in the 2021 engine.
+### JDVersion Mapping
+`JDVersion` and `OriginalJDVersion` are handled independently:
+
+- `JDVersion` is mapped to a stable runtime branch (`2016` for legacy maps, `2021` for modern maps) to avoid `GameManagerConfig` crashes.
+- `OriginalJDVersion` keeps the map's real numeric source year (including values outside 2014-2021, such as `3` or `2026`).
 
 ### Platform Scene Preference
 The extractor prefers DURANGO (Xbox One) scene archives over NX (Switch) and SCARLETT (Xbox Series). DURANGO uses Kinect gesture files that are format-compatible with the PC adapter, while ORBIS (PS4) uses an incompatible format.

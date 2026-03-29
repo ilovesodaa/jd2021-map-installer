@@ -33,6 +33,19 @@ from jd2021_installer.core.models import (
 
 logger = logging.getLogger("jd2021.installers.media_processor")
 
+# Temporary emergency switch requested by user: disable intro AMB attempt for
+# both Fetch/HTML and IPK flows until root-cause is fully resolved.
+INTRO_AMB_ATTEMPT_ENABLED = False
+
+
+def _write_silent_stereo_wav(path: Path, duration_s: float = 0.25) -> None:
+    frames = max(1, int(round(48000 * duration_s)))
+    with wave.open(str(path), "w") as wf:
+        wf.setnchannels(2)
+        wf.setsampwidth(2)
+        wf.setframerate(48000)
+        wf.writeframes(b"\x00\x00\x00\x00" * frames)
+
 
 # ---------------------------------------------------------------------------
 # FFmpeg / FFprobe subprocess wrappers
@@ -352,6 +365,19 @@ def generate_intro_amb(
     ]
     amb_dir = next((p for p in amb_candidates if p.exists()), amb_candidates[0])
 
+    if not INTRO_AMB_ATTEMPT_ENABLED:
+        amb_dir.mkdir(parents=True, exist_ok=True)
+        intro_wavs = list(amb_dir.glob("*_intro.wav"))
+        if not intro_wavs:
+            intro_wavs = [amb_dir / f"amb_{map_lower}_intro.wav"]
+        for wav in intro_wavs:
+            _write_silent_stereo_wav(wav)
+        logger.warning(
+            "Intro AMB attempt disabled: wrote silent intro WAV(s) for '%s'",
+            map_name,
+        )
+        return
+
     # If no pre-roll silence, silence any existing intro WAV
     if a_offset >= 0 and (v_override is None or v_override >= 0):
         if amb_dir.exists():
@@ -371,14 +397,22 @@ def generate_intro_amb(
     # but the source audio still contains a pre-roll segment.
     source_preroll_dur = (marker_preroll_ms / 1000.0) if marker_preroll_ms is not None else abs(a_offset)
     audio_delay = max(0.0, intro_dur - source_preroll_dur)
+    trim_front_s = 0.0
     
     # Marker-based AMB length is reliable for IPK-style flows where a_offset is
-    # non-negative (typically 0). For negative-offset Fetch/JDU maps, marker-only
-    # duration can cut out audible intro content, so keep V1's legacy window.
+    # non-negative (typically 0).
     if marker_preroll_ms is not None and a_offset >= 0:
         audio_content_dur = marker_preroll_ms / 1000.0
         fade_start = audio_delay + audio_content_dur - 0.2
         logger.info("Using marker-based AMB duration: %.3fs", audio_content_dur)
+    elif a_offset < 0:
+        # For Fetch/HTML maps, match intro AMB to the effective video lead-in and
+        # trim the front of AMB source when audio pre-roll is longer.
+        target_window = abs(v_override) if v_override is not None and v_override < 0 else abs(a_offset)
+        audio_content_dur = target_window
+        trim_front_s = max(0.0, source_preroll_dur - target_window)
+        fade_start = max(0.0, audio_delay + audio_content_dur - 0.2)
+        logger.info("Using video-aligned AMB duration: %.3fs (front trim %.3fs)", audio_content_dur, trim_front_s)
     else:
         audio_content_dur = abs(a_offset) + 1.355
         fade_start = audio_delay + abs(a_offset) + 1.155
@@ -506,12 +540,16 @@ includeReference("world/maps/{map_name}/audio/amb/{intro_name}.ilu")'''
     else:
         af_filter = f"afade=t=out:st={fade_start:.3f}:d=0.2"
 
-    run_ffmpeg([
-        "-y", "-t", f"{audio_content_dur:.3f}", 
+    ffmpeg_args = ["-y"]
+    if trim_front_s > 0:
+        ffmpeg_args += ["-ss", f"{trim_front_s:.3f}"]
+    ffmpeg_args += [
+        "-t", f"{audio_content_dur:.3f}",
         "-i", str(ogg_path),
-        "-af", af_filter, 
+        "-af", af_filter,
         "-ar", "48000", str(intro_wav)
-    ], config=config)
+    ]
+    run_ffmpeg(ffmpeg_args, config=config)
     logger.info("Generated intro AMB: %s (%.3fs)", intro_wav.name, amb_duration)
 
 

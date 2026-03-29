@@ -383,8 +383,25 @@ def reprocess_audio(
     config: Optional[AppConfig] = None
 ) -> None:
     """Rebuild game configuration files and reprocess physical audio files."""
+    codename = map_data.codename
+    mainsequence_path = target_dir / "Cinematics" / f"{codename}_MainSequence.tape"
+    mainsequence_backup: Optional[str] = None
+    if mainsequence_path.exists():
+        try:
+            mainsequence_backup = mainsequence_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            mainsequence_backup = None
+
     # 1. Update UbiArt config (musictrack.trk, etc)
     write_game_files(map_data, target_dir, config)
+
+    # Keep converted cinematic tape content across offset reprocess runs.
+    if mainsequence_backup:
+        try:
+            mainsequence_path.parent.mkdir(parents=True, exist_ok=True)
+            mainsequence_path.write_text(mainsequence_backup, encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Could not restore existing MainSequence tape for '%s': %s", codename, exc)
     
     # 2. Ported V1 FFmpeg logic: pad/trim main audio and generate intro AMB
     from jd2021_installer.installers.media_processor import (
@@ -393,7 +410,6 @@ def reprocess_audio(
         extract_amb_clips,
     )
     
-    codename = map_data.codename
     media = map_data.media
 
     if (not media.audio_path or not media.audio_path.exists()) and map_data.source_dir:
@@ -425,6 +441,14 @@ def reprocess_audio(
         )
         
     generate_intro_amb(ogg_path, codename, target_dir, a_offset, v_override, preroll, config)
+
+    # Ensure intro AMB is triggerable even when source cinematic clip data is sparse.
+    try:
+        from jd2021_installer.installers.ambient_processor import _inject_intro_amb_soundset_clip
+
+        _inject_intro_amb_soundset_clip(target_dir, codename)
+    except Exception as exc:
+        logger.debug("AMB SoundSetClip injection skipped for '%s': %s", codename, exc)
 
     # Ported V1: Extract cinematic AMB clips from the main audio
     if map_data.cinematic_tape:
@@ -500,6 +524,13 @@ def reprocess_audio_readjust(
         )
 
     generate_intro_amb(ogg_path, codename, target_dir, a_offset, v_override, preroll, config)
+
+    try:
+        from jd2021_installer.installers.ambient_processor import _inject_intro_amb_soundset_clip
+
+        _inject_intro_amb_soundset_clip(target_dir, codename)
+    except Exception as exc:
+        logger.debug("AMB SoundSetClip injection skipped for '%s' (readjust): %s", codename, exc)
 
     if map_data.cinematic_tape:
         extract_amb_clips(map_data.cinematic_tape, media.audio_path, target_dir, codename, config)

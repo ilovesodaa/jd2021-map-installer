@@ -165,7 +165,7 @@ Creates the standard map directory structure:
 ### Key Transformations
 
 - **Status override:** `Status = 12` (ObjectiveLocked) → `Status = 3` (Available).
-- **JDVersion capping:** Clamped to `[min_jd_version, max_jd_version]` (2014–2021).
+- **JDVersion mapping:** Runtime `JDVersion` is normalized to a stable engine branch (`2016` or `2021`), while `OriginalJDVersion` preserves the map's numeric source year.
 - **Coach count inference:** If `num_coach < 1`, counts `coach_*.png/.tga` files in `MenuArt/textures/`.
 - **Color conversion:** `[R,G,B,A]` float arrays → `0xRRGGBBAA` hex strings.
 - **Lua long strings:** Handles nested brackets in metadata values.

@@ -18,6 +18,7 @@ import re
 import requests
 import shutil
 import ssl
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -123,6 +124,69 @@ def _parse_retry_after_seconds(header_value: Optional[str], fallback: int) -> in
         return max(1, int(header_value.strip()))
     except (TypeError, ValueError):
         return max(1, int(fallback))
+
+
+def _is_nohud_video_url(url: str) -> bool:
+    """Return True for NOHUD gameplay video URLs from private map CDN paths."""
+    parsed = urlparse(url)
+    path_low = parsed.path.lower()
+    if "/private/map/" not in path_low:
+        return False
+    name_low = get_filename_from_url(url).lower()
+    if not name_low.endswith(".webm"):
+        return False
+    if "mappreview" in name_low or "videopreview" in name_low:
+        return False
+    return True
+
+
+def _is_valid_webm_file(path: Path, config: AppConfig) -> bool:
+    """Validate webm integrity.
+
+    Prefers ffmpeg null-decode for robust corruption detection. Falls back to
+    EBML magic check if ffmpeg is unavailable.
+    """
+    try:
+        if not path.exists() or path.stat().st_size <= 1024:
+            return False
+    except OSError:
+        return False
+
+    try:
+        with open(path, "rb") as fh:
+            header = fh.read(4)
+        if header != b"\x1a\x45\xdf\xa3":
+            return False
+    except OSError:
+        return False
+
+    cmd = [
+        config.ffmpeg_path,
+        "-v", "error",
+        "-i", str(path),
+        "-f", "null",
+        "-",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=max(15, min(config.download_timeout_s, 180)),
+            check=False,
+        )
+        if proc.returncode != 0:
+            return False
+        if proc.stderr and proc.stderr.strip():
+            return False
+        return True
+    except (FileNotFoundError, OSError):
+        logger.debug("ffmpeg not available for integrity check; using header-only validation.")
+        return True
+    except subprocess.TimeoutExpired:
+        logger.warning("Timed out while validating webm integrity for %s", path.name)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -235,12 +299,17 @@ def download_files(
     for idx, url in enumerate(unique_urls):
         fname = get_filename_from_url(url)
         target = download_path / fname
+        is_nohud_video = _is_nohud_video_url(url)
 
         # Check if already in cache and not empty
         if target.exists() and target.stat().st_size > 1024:
-            logger.info("%s already in cache, skipping download.", fname)
-            downloaded[fname] = str(target)
-            continue
+            if is_nohud_video and not _is_valid_webm_file(target, config):
+                logger.warning("Cached NOHUD video %s is corrupt, redownloading...", fname)
+                target.unlink(missing_ok=True)
+            else:
+                logger.info("%s already in cache, skipping download.", fname)
+                downloaded[fname] = str(target)
+                continue
         
         if target.exists():
             target.unlink()
@@ -282,6 +351,10 @@ def download_files(
                     import shutil
                     logger.info("Found %s in existing game installation, copying to cache...", fname)
                     shutil.copy2(fpath, target)
+                    if is_nohud_video and not _is_valid_webm_file(target, config):
+                        logger.warning("Installed NOHUD video %s failed integrity check, redownloading...", fname)
+                        target.unlink(missing_ok=True)
+                        continue
                     found_in_game = True
                     break
         
@@ -333,6 +406,18 @@ def download_files(
                     
                     # Verify download success (non-zero size)
                     if target.stat().st_size > 1024:
+                        if is_nohud_video and not _is_valid_webm_file(target, config):
+                            logger.warning(
+                                "Downloaded NOHUD video %s failed integrity check (attempt %d/%d)",
+                                fname,
+                                attempt,
+                                config.max_retries,
+                            )
+                            target.unlink(missing_ok=True)
+                            if attempt < config.max_retries:
+                                time.sleep(config.retry_base_delay_s * (2 ** (attempt - 1)))
+                                continue
+                            break
                         success = True
                         break
                     else:

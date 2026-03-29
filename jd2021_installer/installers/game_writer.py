@@ -55,6 +55,29 @@ def color_array_to_hex(val: Any, default: str = "0xFFFFFFFF") -> str:
     return default
 
 
+def _coerce_numeric_version(value: Any, fallback: int) -> int:
+    """Return ``value`` as an int, or ``fallback`` when not purely numeric."""
+    # ``bool`` is a subclass of ``int`` but not a meaningful version value.
+    if isinstance(value, bool):
+        return fallback
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _select_playable_jd_version(jd_version: int, original_jd_version: int) -> int:
+    """Map source versions to a stable engine-compatible JDVersion.
+
+    JD2021 accepts many numeric values in SongDesc, but practical compatibility is
+    best when ``JDVersion`` is pinned to one of two known-stable engine branches:
+    2016 (legacy maps) or 2021 (modern maps).
+    """
+    if jd_version in (2016, 2021):
+        return jd_version
+    return 2021 if original_jd_version >= 2016 else 2016
+
+
 # ---------------------------------------------------------------------------
 # Directory setup
 # ---------------------------------------------------------------------------
@@ -121,8 +144,12 @@ def _write_songdesc(target: Path, name: str, sd: SongDescription,
                     num_coach: int, vst: float, config: AppConfig) -> None:
     """Write SongDesc.tpl and SongDesc.act."""
     name_lower = name.lower()
-    jd_ver = max(config.min_jd_version, min(sd.jd_version, config.max_jd_version))
-    orig_ver = max(config.min_jd_version, min(sd.original_jd_version, config.max_jd_version))
+
+    # Keep origin year truthful (numeric only), but map runtime JDVersion to a
+    # stable engine branch to avoid crashes on unsupported game config lookups.
+    raw_jd_ver = _coerce_numeric_version(sd.jd_version, 2021)
+    orig_ver = _coerce_numeric_version(sd.original_jd_version, raw_jd_ver)
+    jd_ver = _select_playable_jd_version(raw_jd_ver, orig_ver)
 
     # Tags
     tags_lua = ""
@@ -173,7 +200,7 @@ def _write_songdesc(target: Path, name: str, sd: SongDescription,
         colors_lua += f'\n\t\t\t\t\t\t{{\n\t\t\t\t\t\t\tKEY = "{key}",\n\t\t\t\t\t\t\tVAL = "{hex_val}"\n\t\t\t\t\t\t}},'
 
     dancer_name = str(sd.dancer_name).replace('"', '\\"').replace('\n', ' ')
-    audio_fade = config.audio_preview_fade_s if sd.jd_version >= 2016 else 0.0
+    audio_fade = config.audio_preview_fade_s if jd_ver >= 2016 else 0.0
     status = 3 if sd.status == 12 else sd.status
 
     tpl = f'''includeReference("EngineData/Helpers/SongDatabase.ilu")
