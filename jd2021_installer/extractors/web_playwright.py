@@ -23,7 +23,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, cast
 from urllib.parse import unquote, urlparse
 
 from jd2021_installer.core.config import (
@@ -46,8 +46,19 @@ _SEL_TEXTBOX = '[role="textbox"][data-slate-editor="true"]'
 _SEL_AUTOCOMPLETE_OPTION = '[role="option"]'
 _SEL_MESSAGE_ACCESSORIES = 'div[id^="message-accessories-"]'
 
-# CDN link validation pattern
-_CDN_PATTERN = re.compile(r'href="(https?://jd-s3\.cdn\.ubi\.com[^"]+)"', re.IGNORECASE)
+# CDN link validation patterns
+_UBI_CDN_HOST_PATTERN = re.compile(r"https?://[^\s\"']*(?:cdn\.ubi\.com|cdn\.ubisoft\.cn)", re.IGNORECASE)
+_MAP_PATH_PATTERN = re.compile(r"/(?:public|private)/map/", re.IGNORECASE)
+
+
+def _is_browser_closed_error(exc: BaseException) -> bool:
+    """Return True when Playwright indicates the page/context/browser was closed."""
+    text = str(exc).lower()
+    return (
+        "target page, context or browser has been closed" in text
+        or "browser has been closed" in text
+        or "target closed" in text
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +131,7 @@ def _parse_retry_after_seconds(header_value: Optional[str], fallback: int) -> in
 
 def _classify_urls(
     urls: List[str], quality: str
-) -> Dict[str, Optional[str]]:
+) -> Dict[str, object]:
     """Classify URLs into video, audio, mainscene, and other assets."""
     video_urls_by_quality: Dict[str, str] = {}
     audio_url: Optional[str] = None
@@ -197,9 +208,10 @@ def download_files(
     classified = _classify_urls(urls, quality)
     important_urls: List[str] = []
     for key in ("video", "audio", "mainscene"):
-        if classified[key]:
-            important_urls.append(classified[key])
-    important_urls.extend(classified.get("others", []))
+        value = cast(Optional[str], classified.get(key))
+        if value:
+            important_urls.append(value)
+    important_urls.extend(cast(List[str], classified.get("others", [])))
 
     unique_urls = list(set(important_urls))
     # Prioritize: mainscene > audio > video > others
@@ -352,12 +364,19 @@ async def _wait_for_login(page, timeout_s: int = 300) -> None:
     try:
         await textbox.wait_for(timeout=15_000)
         logger.info("Already logged in to Discord.")
-    except Exception:
+    except Exception as exc:
+        if _is_browser_closed_error(exc):
+            raise WebExtractionError("Browser was closed by user. Fetch cancelled.") from exc
         logger.info(
             "Please log in to Discord in the browser window. "
             "Waiting up to %d seconds...", timeout_s
         )
-        await textbox.wait_for(timeout=timeout_s * 1000)
+        try:
+            await textbox.wait_for(timeout=timeout_s * 1000)
+        except Exception as inner_exc:
+            if _is_browser_closed_error(inner_exc):
+                raise WebExtractionError("Browser was closed by user. Fetch cancelled.") from inner_exc
+            raise
         logger.info("Login detected.")
         await page.wait_for_timeout(3000)
 
@@ -531,8 +550,37 @@ async def _extract_embed_html(page, accessory_id: str) -> str:
 
 
 def _has_valid_cdn_links(html: str) -> bool:
-    """Return True if the embed contains valid jd-s3.cdn.ubi.com links."""
-    return bool(_CDN_PATTERN.search(html))
+    """Return True if embed contains valid Ubisoft map CDN links.
+
+    Supports both legacy/public and newer/private hosts used by NOHUD.
+    """
+    for url in extract_urls_from_html(html):
+        if _UBI_CDN_HOST_PATTERN.search(url) and _MAP_PATH_PATTERN.search(url):
+            return True
+    return False
+
+
+def _has_gameplay_video_links(html: str) -> bool:
+    """Return True if the embed contains at least one gameplay .webm link."""
+    for url in extract_urls_from_html(html):
+        # Ubisoft CDN links may wrap the real filename in a hashed path segment,
+        # so resolve the effective filename instead of relying on raw URL suffix.
+        lower_name = get_filename_from_url(url).lower()
+        if not lower_name.endswith(".webm"):
+            continue
+        if "mappreview" in lower_name or "videopreview" in lower_name:
+            continue
+        return True
+    return False
+
+
+def _is_valid_embed_response(html: str, require_gameplay_video: bool = False) -> bool:
+    """Validate an embed response before accepting it as usable."""
+    if not _has_valid_cdn_links(html):
+        return False
+    if require_gameplay_video and not _has_gameplay_video_links(html):
+        return False
+    return True
 
 
 async def _fetch_command_with_retry(
@@ -544,6 +592,7 @@ async def _fetch_command_with_retry(
     label: str,
     max_retries: int = 2,
     bot_timeout_s: int = 60,
+    require_gameplay_video: bool = False,
 ) -> str:
     """Send a slash command, wait for bot response, extract and validate HTML.
 
@@ -552,7 +601,12 @@ async def _fetch_command_with_retry(
     for attempt in range(max_retries + 1):
         if attempt > 0:
             logger.info("Retrying %s (attempt %d/%d)...", label, attempt + 1, max_retries + 1)
-            await page.wait_for_timeout(3000)
+            try:
+                await page.wait_for_timeout(3000)
+            except Exception as exc:
+                if _is_browser_closed_error(exc):
+                    raise WebExtractionError("Browser was closed by user. Fetch cancelled.") from exc
+                raise
 
         try:
             pre_id = await _get_last_accessory_id(page)
@@ -560,18 +614,37 @@ async def _fetch_command_with_retry(
             embed_id = await _wait_for_new_embed(page, pre_id, timeout_s=bot_timeout_s)
             html = await _extract_embed_html(page, embed_id)
 
-            if _has_valid_cdn_links(html):
+            if _is_valid_embed_response(html, require_gameplay_video=require_gameplay_video):
                 logger.info("Extracted %s embed HTML.", label)
                 return html
 
-            logger.warning(
-                "%s response has no valid CDN links (bot may have returned an error).",
-                label,
-            )
+            if require_gameplay_video:
+                logger.warning(
+                    "%s response has no valid gameplay video links (bot may have returned an error).",
+                    label,
+                )
+            else:
+                logger.warning(
+                    "%s response has no valid CDN links (bot may have returned an error).",
+                    label,
+                )
         except WebExtractionError as e:
             if attempt == max_retries:
                 raise
             logger.warning("%s attempt %d failed: %s", label, attempt + 1, e)
+        except Exception as e:
+            if _is_browser_closed_error(e):
+                raise WebExtractionError("Browser was closed by user. Fetch cancelled.") from e
+            if attempt == max_retries:
+                raise
+            logger.warning("%s attempt %d failed: %s", label, attempt + 1, e)
+
+    if require_gameplay_video:
+        raise WebExtractionError(
+            f"{label} response contained no valid gameplay video links after "
+            f"{max_retries + 1} attempts.\n"
+            "The bot may not have data for this codename, or NOHUD links are invalid/expired."
+        )
 
     raise WebExtractionError(
         f"{label} response contained no valid download links after "
@@ -633,6 +706,23 @@ class WebPlaywrightExtractor(BaseExtractor):
 
         if not all_urls:
             raise WebExtractionError("No URLs provided for extraction")
+
+        # V1-style guardrails: fail fast if key media links are missing.
+        classified_required = _classify_urls(all_urls, self._quality)
+        missing_required: list[str] = []
+        if not classified_required.get("mainscene"):
+            missing_required.append("MAIN_SCENE zip")
+        if not classified_required.get("audio"):
+            missing_required.append("full audio (.ogg)")
+        if not classified_required.get("video"):
+            missing_required.append("gameplay video (.webm)")
+
+        if missing_required:
+            raise WebExtractionError(
+                "Missing required download links: "
+                + ", ".join(missing_required)
+                + ". The bot likely returned an error, or the HTML links are stale/invalid."
+            )
 
         self._codename = extract_codename_from_urls(all_urls) or self._codename
         codename = self._codename or "UnknownMap"
@@ -845,7 +935,11 @@ class WebPlaywrightExtractor(BaseExtractor):
                 logger.info("Saved HTML to %s", output_dir)
 
             finally:
-                await context.close()
+                try:
+                    await context.close()
+                except Exception:
+                    # Context may already be closed if user manually closed browser.
+                    pass
 
         # Extract all URLs from both pages
         all_urls = extract_urls_from_html(assets_html) + extract_urls_from_html(nohud_html)

@@ -27,7 +27,7 @@ from typing import Optional
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from jd2021_installer.core.config import AppConfig
-from jd2021_installer.core.exceptions import IPKExtractionError
+from jd2021_installer.core.exceptions import ExtractionError, IPKExtractionError
 from jd2021_installer.core.models import NormalizedMapData
 from jd2021_installer.extractors.base import BaseExtractor
 from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor
@@ -37,6 +37,16 @@ from jd2021_installer.parsers.normalizer import normalize
 logger = logging.getLogger("jd2021.ui.workers")
 
 _V1_RECOVERABLE_IPK_ERRORS = (IPKExtractionError, AssertionError, OSError, struct.error)
+
+
+def _is_user_cancelled_browser_close(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return (
+        "target page, context or browser has been closed" in text
+        or "browser has been closed" in text
+        or "target closed" in text
+        or "fetch cancelled" in text
+    )
 
 
 def _path_has_codename_component(path: Path, codename: str) -> bool:
@@ -219,6 +229,15 @@ class ExtractAndNormalizeWorker(QObject):
             self.finished.emit(map_data)
 
         except Exception as e:
+            if isinstance(e, ExtractionError) or _is_user_cancelled_browser_close(e):
+                user_msg = str(e)
+                if _is_user_cancelled_browser_close(e):
+                    user_msg = "Browser was closed by user. Fetch cancelled."
+                logger.warning("ExtractAndNormalize failed: %s", user_msg)
+                self.error.emit(failed_stage, user_msg)
+                self.finished.emit(None)
+                return
+
             logger.error("ExtractAndNormalize failed: %s\n%s", e, traceback.format_exc())
             self.error.emit(failed_stage, str(e))
             self.finished.emit(None)
