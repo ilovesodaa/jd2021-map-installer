@@ -103,6 +103,19 @@ class TestNormalizerEdgeCases:
 
         assert media.audio_path == sidecar_audio
 
+    def test_audio_discovery_keeps_ckd_path_when_decode_fails(self, tmp_path: Path, monkeypatch) -> None:
+        """If CKD decode fails during discovery, keep source path for install-time retry."""
+        from jd2021_installer.installers import media_processor as media_processor_mod
+
+        ckd_audio = tmp_path / "sweetbutpsycho.wav.ckd"
+        ckd_audio.write_bytes(b"x" * 128)
+
+        monkeypatch.setattr(media_processor_mod, "extract_ckd_audio_v1", lambda *_args, **_kwargs: None)
+
+        media = _discover_media(str(tmp_path), codename="sweetbutpsycho")
+
+        assert media.audio_path == ckd_audio
+
     def test_autodance_stub_files_do_not_enable_autodance(self, tmp_path: Path) -> None:
         import json
 

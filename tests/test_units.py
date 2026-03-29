@@ -1,5 +1,6 @@
 import pytest
 import os
+import subprocess
 from pathlib import Path
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QApplication
@@ -72,6 +73,53 @@ def test_main_window_unit_conversion_logic():
     vo_sec = 0.5
     vo_ms = vo_sec * 1000.0
     assert vo_ms == 500.0
+
+
+def test_preview_probe_duration_uses_video_when_audio_ckd_unprobeable(monkeypatch):
+    def fake_check_output(cmd, text=True, creationflags=0):
+        target = str(cmd[-1]).lower()
+        if target.endswith("video.webm"):
+            return "200.0\n"
+        if target.endswith("audio.wav.ckd"):
+            raise subprocess.CalledProcessError(returncode=1, cmd=cmd)
+        raise AssertionError(f"Unexpected ffprobe target: {cmd[-1]}")
+
+    monkeypatch.setattr(subprocess, "check_output", fake_check_output)
+
+    duration = PreviewWidget._probe_duration(
+        video_path="C:/tmp/video.webm",
+        audio_path="C:/tmp/audio.wav.ckd",
+        v_override=-5.865,
+        a_offset=0.0,
+    )
+
+    assert duration == pytest.approx(194.135, abs=1e-3)
+
+
+def test_preview_probe_duration_audio_fallback_from_ckd(monkeypatch):
+    attempted: list[str] = []
+
+    def fake_check_output(cmd, text=True, creationflags=0):
+        target = str(cmd[-1])
+        attempted.append(target)
+        lowered = target.lower()
+        if lowered.endswith("video.webm"):
+            return "100.0\n"
+        if lowered.endswith("audio.wav"):
+            return "120.0\n"
+        raise subprocess.CalledProcessError(returncode=1, cmd=cmd)
+
+    monkeypatch.setattr(subprocess, "check_output", fake_check_output)
+
+    duration = PreviewWidget._probe_duration(
+        video_path="C:/tmp/video.webm",
+        audio_path="C:/tmp/audio.wav.ckd",
+        v_override=0.0,
+        a_offset=2.0,
+    )
+
+    assert duration == pytest.approx(122.0, abs=1e-3)
+    assert any(path.lower().endswith("audio.wav") for path in attempted)
 
 
 @pytest.mark.skipif(not _RUN_QT_WIDGET_TESTS, reason="Set JD2021_RUN_QT_WIDGET_TESTS=1 to run Qt widget behavior tests.")

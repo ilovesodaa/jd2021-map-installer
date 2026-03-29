@@ -22,7 +22,7 @@ import re
 import struct
 import traceback
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -304,6 +304,12 @@ def reprocess_audio(
     
     codename = map_data.codename
     media = map_data.media
+
+    if (not media.audio_path or not media.audio_path.exists()) and map_data.source_dir:
+        fallback_audio = _pick_ipk_audio([map_data.source_dir], codename)
+        if fallback_audio and fallback_audio.exists():
+            media.audio_path = fallback_audio
+            logger.info("Recovered missing audio source from extraction tree: %s", fallback_audio)
     
     if not media.audio_path or not media.audio_path.exists():
         raise RuntimeError(
@@ -371,6 +377,12 @@ def reprocess_audio_readjust(
 
     codename = map_data.codename
     media = map_data.media
+
+    if (not media.audio_path or not media.audio_path.exists()) and map_data.source_dir:
+        fallback_audio = _pick_ipk_audio([map_data.source_dir], codename)
+        if fallback_audio and fallback_audio.exists():
+            media.audio_path = fallback_audio
+            logger.info("Recovered missing audio source from extraction tree: %s", fallback_audio)
 
     if update_video:
         trk_path = target_dir / "Audio" / f"{codename}.trk"
@@ -748,7 +760,7 @@ class BatchInstallWorker(QObject):
 def pre_install_cleanup(
     game_dir: Path, 
     codename: str, 
-    status_callback: Optional[callable] = None
+    status_callback: Optional[Callable[[str], None]] = None
 ) -> None:
     """Clean up any previous installation of this map, including cooked cache."""
     import shutil
@@ -791,10 +803,10 @@ def pre_install_cleanup(
 def install_map_to_game(
     map_data: NormalizedMapData, 
     game_dir: Path, 
-    config: AppConfig,
+    config: Optional[AppConfig],
     source_mode: str = "",
-    status_callback: Optional[callable] = None,
-    progress_callback: Optional[callable] = None
+    status_callback: Optional[Callable[[str], None]] = None,
+    progress_callback: Optional[Callable[[int], None]] = None
 ) -> None:
     """Core installation logic: files → game directory."""
     codename = map_data.codename

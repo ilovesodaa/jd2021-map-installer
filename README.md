@@ -1,4 +1,4 @@
-# JD2021 Map Installer v2 (Not fully functional yet)
+# JD2021 Map Installer v2 (Documentation rework needed)
 
 A pure Python GUI application built on **PyQt6** for extracting, building, and installing JDU (Just Dance Unlimited) maps into Just Dance 2021 PC. Supports both server-fetched maps (HTML / live Playwright scraping) and legacy Xbox 360 IPK archives.
 

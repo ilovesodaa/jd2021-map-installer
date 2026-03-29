@@ -20,6 +20,17 @@ from jd2021_installer.installers.tape_converter import _convert_value, _load_ckd
 logger = logging.getLogger("jd2021.installers.ambient_processor")
 
 
+def _resolve_amb_dir(target_dir: Path) -> Path:
+    """Resolve AMB output dir with compatibility for existing lowercase installs."""
+    candidates = [
+        target_dir / "Audio" / "AMB",
+        target_dir / "audio" / "AMB",
+        target_dir / "Audio" / "amb",
+        target_dir / "audio" / "amb",
+    ]
+    return next((p for p in candidates if p.exists()), candidates[0])
+
+
 def _path_has_codename_component(path: Path, codename: str) -> bool:
     parts = [p.lower() for p in path.as_posix().split("/") if p]
     return codename.lower() in parts
@@ -186,7 +197,17 @@ def inject_ambient_actors(target_dir: Path, codename: str) -> bool:
         else:
             return False
 
-    amb_tpls = list((target_dir / "audio" / "amb").glob("*.tpl"))
+    amb_tpls = []
+    for amb_root in (
+        target_dir / "Audio" / "AMB",
+        target_dir / "audio" / "AMB",
+        target_dir / "Audio" / "amb",
+        target_dir / "audio" / "amb",
+    ):
+        if amb_root.exists():
+            amb_tpls.extend(amb_root.glob("*.tpl"))
+    # De-duplicate in case path aliases point to the same folder (Windows).
+    amb_tpls = sorted({tpl.resolve() for tpl in amb_tpls})
     if not amb_tpls:
         return False
 
@@ -207,7 +228,7 @@ def inject_ambient_actors(target_dir: Path, codename: str) -> bool:
                 f'\t\t\t<Actor RELATIVEZ="{z}" SCALE="1.000000 1.000000" '
                 f'xFLIPPED="0" USERFRIENDLY="{amb_name}" '
                 f'POS2D="0.000000 0.000000" ANGLE="0.000000" '
-                f'INSTANCEDATAFILE="" LUA="world/maps/{codename.lower()}/audio/amb/{amb_name}.tpl">\n'
+                f'INSTANCEDATAFILE="" LUA="World/MAPS/{codename}/audio/AMB/{amb_name}.tpl">\n'
                 f'\t\t\t\t<COMPONENTS NAME="SoundComponent">\n'
                 f'\t\t\t\t\t<SoundComponent />\n'
                 f'\t\t\t\t</COMPONENTS>\n'
@@ -235,7 +256,7 @@ def inject_ambient_actors(target_dir: Path, codename: str) -> bool:
 
 def process_ambient_directory(source_dir: Path, target_dir: Path, codename: str) -> int:
     """Process all ambient assets (templates and loose CKDs) in a directory."""
-    amb_out_dir = target_dir / "audio" / "amb"
+    amb_out_dir = _resolve_amb_dir(target_dir)
     amb_out_dir.mkdir(parents=True, exist_ok=True)
     count = 0
 

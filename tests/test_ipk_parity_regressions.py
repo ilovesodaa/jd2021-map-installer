@@ -10,6 +10,7 @@ from jd2021_installer.extractors.manual_extractor import ManualExtractor
 from jd2021_installer.ui.workers.pipeline_workers import (
     ExtractAndNormalizeWorker,
     _validate_ipk_media_presence,
+    reprocess_audio,
 )
 
 
@@ -118,3 +119,53 @@ def test_ipk_media_validation_accepts_sidecar_audio_search_root(tmp_path: Path) 
     (source_root / "MapA.ogg").write_bytes(b"ogg")
 
     _validate_ipk_media_presence(extract_root, "MapA", source_root)
+
+
+def test_reprocess_audio_recovers_missing_ipk_audio_from_source_tree(
+    tmp_path: Path,
+    sample_normalized_data,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "temp_extraction"
+    recovered_audio = (
+        source_root
+        / "cache"
+        / "itf_cooked"
+        / "x360"
+        / "world"
+        / "maps"
+        / "sweetbutpsycho"
+        / "audio"
+        / "sweetbutpsycho.wav.ckd"
+    )
+    recovered_audio.parent.mkdir(parents=True, exist_ok=True)
+    recovered_audio.write_bytes(b"X" * 128)
+
+    map_data = sample_normalized_data
+    map_data.codename = "sweetbutpsycho"
+    map_data.source_dir = source_root
+    map_data.media.audio_path = None
+
+    called: dict[str, Path] = {}
+
+    monkeypatch.setattr(
+        "jd2021_installer.ui.workers.pipeline_workers.write_game_files",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "jd2021_installer.installers.media_processor.convert_audio",
+        lambda audio_path, *_args, **_kwargs: called.setdefault("audio", Path(audio_path)),
+    )
+    monkeypatch.setattr(
+        "jd2021_installer.installers.media_processor.generate_intro_amb",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "jd2021_installer.installers.media_processor.extract_amb_clips",
+        lambda *_args, **_kwargs: 0,
+    )
+
+    reprocess_audio(map_data, tmp_path / "game_map", a_offset=0.0, config=None)
+
+    assert map_data.media.audio_path == recovered_audio
+    assert called["audio"] == recovered_audio

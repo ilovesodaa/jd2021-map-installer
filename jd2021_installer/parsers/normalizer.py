@@ -633,10 +633,21 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
         # Handle CKD extraction
         if best_audio.name.lower().endswith(".ckd"):
             from jd2021_installer.installers.media_processor import extract_ckd_audio_v1
+
             decoded = extract_ckd_audio_v1(best_audio, best_audio.parent)
             if decoded:
                 media.audio_path = Path(decoded)
                 audio_found = True
+            else:
+                # Keep the cooked source as a fallback so install-time conversion can
+                # retry extraction/decoding instead of failing as "audio missing".
+                media.audio_path = best_audio
+                audio_found = True
+                logger.warning(
+                    "Audio CKD decode deferred for '%s'; keeping source file: %s",
+                    codename or "unknown",
+                    best_audio.name,
+                )
         else:
             media.audio_path = best_audio
             audio_found = True
