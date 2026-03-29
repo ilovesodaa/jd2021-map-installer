@@ -36,6 +36,8 @@ from jd2021_installer.parsers.normalizer import normalize
 
 logger = logging.getLogger("jd2021.ui.workers")
 
+_READY_STATUS_VALUE = 3
+
 _V1_RECOVERABLE_IPK_ERRORS = (IPKExtractionError, AssertionError, OSError, struct.error)
 
 
@@ -547,6 +549,7 @@ class BatchInstallWorker(QObject):
         target_game_dir: Path,
         config: AppConfig,
         selected_maps: Optional[set[str]] = None,
+        force_unlock_locked_status: bool = False,
         parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(parent)
@@ -554,6 +557,7 @@ class BatchInstallWorker(QObject):
         self._target_dir = target_game_dir
         self._config = config
         self._selected_maps = selected_maps
+        self._force_unlock_locked_status = force_unlock_locked_status
 
     def run(self) -> None:
         try:
@@ -669,6 +673,18 @@ class BatchInstallWorker(QObject):
                         self.status.emit(f"[{map_name}] Parse CKDs & Metadata")
                         from jd2021_installer.parsers.normalizer import normalize
                         map_data = normalize(map_dir, codename=map_name, search_root=map_dir)
+
+                        status_value = int(getattr(map_data.song_desc, "status", _READY_STATUS_VALUE))
+                        if status_value != _READY_STATUS_VALUE:
+                            if self._force_unlock_locked_status:
+                                map_data.song_desc.status = _READY_STATUS_VALUE
+                                self.status.emit(
+                                    f"[{map_data.codename}] Non-default status {status_value} detected; forcing Status={_READY_STATUS_VALUE}"
+                                )
+                            else:
+                                self.status.emit(
+                                    f"[{map_data.codename}] Non-default status {status_value} detected; preserving original status"
+                                )
                         
                         emit_map_stage(1)
                         self.status.emit(f"[{map_data.codename}] Normalize assets")

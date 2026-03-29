@@ -30,6 +30,7 @@ class AppConfig(BaseModel):
     skip_preflight: bool = False
     suppress_offset_notification: bool = False
     cleanup_behavior: str = Field(default="ask", pattern=r"^(ask|delete|keep)$")
+    locked_status_behavior: str = Field(default="ask", pattern=r"^(ask|force3|keep)$")
     show_preflight_success_popup: bool = True
     show_quickstart_on_launch: bool = True
     skip_quickstart: bool = False

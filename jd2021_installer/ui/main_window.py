@@ -89,6 +89,22 @@ from jd2021_installer.ui.workers.pipeline_workers import (
 
 logger = logging.getLogger("jd2021.ui.main_window")
 
+_READY_STATUS_VALUE = 3
+# Editable status meaning labels live in code (not installer_settings.json).
+# Add or change entries here as new statuses are understood.
+_SONG_STATUS_MEANINGS: dict[int, str] = {
+    1: "Hidden",
+    2: "MojoLocked",
+    3: "Available",
+    4: "RedeemLocked",
+    5: "UplayLocked",
+    9: "GachaLocked",
+    10: "StarLocked",
+    11: "DLCLocked",
+    12: "ObjectiveLocked",
+    13: "AnthologyLocked",
+}
+
 # Granular checklist steps (V1 Parity)
 PIPELINE_STEPS = [
     "Extract map data",
@@ -1293,6 +1309,14 @@ class MainWindow(QMainWindow):
 
         # Check metadata for non-ASCII characters
         self._check_metadata(map_data)
+
+        # Detect maps that are locked behind unlock/login conditions and ask how to proceed.
+        if not self._apply_locked_status_policy_single(map_data):
+            self.append_log("Install aborted by user during locked-status prompt.")
+            self._set_status("Install aborted")
+            self._lock_ui(False)
+            self._stop_file_logging()
+            return
         
         # Start install worker
         self._start_install_worker(map_data)
@@ -1313,6 +1337,85 @@ class MainWindow(QMainWindow):
                 if field == "title": map_data.song_desc.title = corrected
                 elif field == "artist": map_data.song_desc.artist = corrected
                 elif field == "dancer_name": map_data.song_desc.dancer_name = corrected
+
+    def _apply_locked_status_policy_single(self, map_data: NormalizedMapData) -> bool:
+        """Prompt user when a map has a non-default song status and apply choice."""
+        status_value = int(getattr(map_data.song_desc, "status", _READY_STATUS_VALUE))
+        if status_value == _READY_STATUS_VALUE:
+            return True
+
+        behavior = getattr(self._config, "locked_status_behavior", "ask")
+        codename = map_data.codename
+        status_meaning = _SONG_STATUS_MEANINGS.get(status_value, "Unknown status")
+        if behavior == "force3":
+            map_data.song_desc.status = _READY_STATUS_VALUE
+            self.append_log(
+                f"[{codename}] Non-default status {status_value} ({status_meaning}) detected. Policy=force3, forcing Status={_READY_STATUS_VALUE}."
+            )
+            return True
+        if behavior == "keep":
+            self.append_log(
+                f"[{codename}] Non-default status {status_value} ({status_meaning}) detected. Policy=keep, preserving original status."
+            )
+            return True
+
+        reply = QMessageBox.question(
+            self,
+            "Non-default Song Status Detected",
+            (
+                f"Detected Status = {status_value} for '{codename}'.\n"
+                f"Meaning: {status_meaning}.\n\n"
+                f"Yes: Force Status to {_READY_STATUS_VALUE} (default playable behavior).\n"
+                "No: Keep original status value.\n"
+                "Cancel: Abort installation."
+            ),
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.No
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Yes,
+        )
+
+        if reply == QMessageBox.StandardButton.Cancel:
+            return False
+
+        if reply == QMessageBox.StandardButton.Yes:
+            map_data.song_desc.status = _READY_STATUS_VALUE
+            self.append_log(
+                f"[{codename}] Non-default status {status_value} ({status_meaning}) detected. Forcing Status={_READY_STATUS_VALUE}."
+            )
+        else:
+            self.append_log(
+                f"[{codename}] Non-default status {status_value} ({status_meaning}) detected. Preserving original status."
+            )
+        return True
+
+    def _ask_batch_locked_status_policy(self) -> Optional[bool]:
+        """Ask once for batch mode: force non-3 statuses to 3 or preserve originals."""
+        behavior = getattr(self._config, "locked_status_behavior", "ask")
+        if behavior == "force3":
+            self.append_log("Batch status policy: force3 (auto-convert any non-3 status to 3).")
+            return True
+        if behavior == "keep":
+            self.append_log("Batch status policy: keep (preserve all original status values).")
+            return False
+
+        reply = QMessageBox.question(
+            self,
+            "Batch Song Status Policy",
+            (
+                "Batch mode can auto-detect any song status that is not 3.\n\n"
+                "Yes: For every detected non-3 status, force Status to 3.\n"
+                "No: Keep original status values.\n"
+                "Cancel: Abort batch install."
+            ),
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.No
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply == QMessageBox.StandardButton.Cancel:
+            return None
+        return reply == QMessageBox.StandardButton.Yes
 
     def _start_install_worker(self, map_data: NormalizedMapData) -> None:
         worker = InstallMapWorker(
@@ -2047,6 +2150,12 @@ class MainWindow(QMainWindow):
         """Launches the dedicated Batch mode worker."""
         if not self._current_target:
             return
+
+        force_unlock_locked_status = self._ask_batch_locked_status_policy()
+        if force_unlock_locked_status is None:
+            self.append_log("Batch install aborted by user during locked-status policy prompt.")
+            self._set_status("Install aborted")
+            return
             
         from jd2021_installer.ui.workers.pipeline_workers import BatchInstallWorker
 
@@ -2063,6 +2172,7 @@ class MainWindow(QMainWindow):
             target_game_dir=self._config.game_directory, # type: ignore[arg-type]
             config=self._config,
             selected_maps=selected_maps,
+            force_unlock_locked_status=force_unlock_locked_status,
         )
         thread = QThread()
         worker.moveToThread(thread)
