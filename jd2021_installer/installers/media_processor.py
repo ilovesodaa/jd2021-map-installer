@@ -343,7 +343,14 @@ def generate_intro_amb(
     ogg_path = Path(ogg_path)
     target_dir = Path(target_dir)
     map_lower = map_name.lower()
-    amb_dir = target_dir / "audio" / "amb"
+    # Resolve AMB directory with compatibility for legacy lower-case installs.
+    amb_candidates = [
+        target_dir / "Audio" / "AMB",
+        target_dir / "audio" / "AMB",
+        target_dir / "Audio" / "amb",
+        target_dir / "audio" / "amb",
+    ]
+    amb_dir = next((p for p in amb_candidates if p.exists()), amb_candidates[0])
 
     # If no pre-roll silence, silence any existing intro WAV
     if a_offset >= 0 and (v_override is None or v_override >= 0):
@@ -359,15 +366,23 @@ def generate_intro_amb(
     amb_dir.mkdir(parents=True, exist_ok=True)
 
     intro_dur = abs(v_override) if v_override is not None and v_override < 0 else abs(a_offset)
-    audio_delay = max(0.0, intro_dur - abs(a_offset))
+    # V1 parity + IPK/JDU fix: when marker pre-roll is available, use it as the
+    # source intro length. Using |a_offset| alone breaks maps where a_offset=0
+    # but the source audio still contains a pre-roll segment.
+    source_preroll_dur = (marker_preroll_ms / 1000.0) if marker_preroll_ms is not None else abs(a_offset)
+    audio_delay = max(0.0, intro_dur - source_preroll_dur)
     
-    if marker_preroll_ms is not None:
+    # Marker-based AMB length is reliable for IPK-style flows where a_offset is
+    # non-negative (typically 0). For negative-offset Fetch/JDU maps, marker-only
+    # duration can cut out audible intro content, so keep V1's legacy window.
+    if marker_preroll_ms is not None and a_offset >= 0:
         audio_content_dur = marker_preroll_ms / 1000.0
         fade_start = audio_delay + audio_content_dur - 0.2
         logger.info("Using marker-based AMB duration: %.3fs", audio_content_dur)
     else:
         audio_content_dur = abs(a_offset) + 1.355
         fade_start = audio_delay + abs(a_offset) + 1.155
+        logger.info("Using legacy AMB duration heuristic: %.3fs", audio_content_dur)
     
     amb_duration = audio_delay + audio_content_dur
 
@@ -446,7 +461,7 @@ appendTable(component.SoundComponent_Template.soundList,DESCRIPTOR)'''
 \t}}
 }}
 includeReference("EngineData/Misc/Components/SoundComponent.ilu")
-includeReference("world/maps/{map_name.lower()}/audio/amb/{intro_name}.ilu")'''
+includeReference("world/maps/{map_name}/audio/amb/{intro_name}.ilu")'''
 
         (amb_dir / f"{intro_name}.ilu").write_text(ilu_content, encoding="utf-8")
         (amb_dir / f"{intro_name}.tpl").write_text(tpl_content, encoding="utf-8")
@@ -456,8 +471,13 @@ includeReference("world/maps/{map_name.lower()}/audio/amb/{intro_name}.ilu")'''
     audio_isc_path = target_dir / "audio" / f"{map_name}_audio.isc"
     if audio_isc_path.exists():
         isc_data = audio_isc_path.read_text(encoding="utf-8")
-        amb_lua_path = f"world/maps/{map_name.lower()}/audio/amb/{intro_name}.tpl"
-        if amb_lua_path not in isc_data:
+        legacy_amb_lua_path = f"world/maps/{map_name.lower()}/audio/amb/{intro_name}.tpl"
+        amb_lua_path = f"World/MAPS/{map_name}/audio/AMB/{intro_name}.tpl"
+        if (
+            amb_lua_path not in isc_data
+            and legacy_amb_lua_path not in isc_data
+            and f'USERFRIENDLY="{intro_name}"' not in isc_data
+        ):
             amb_actor = (
                 f'\t\t<ACTORS NAME="Actor">\n'
                 f'\t\t\t<Actor RELATIVEZ="0.000002" SCALE="1.000000 1.000000" xFLIPPED="0"'

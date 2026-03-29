@@ -350,9 +350,11 @@ class PreviewWidget(QWidget):
         if not video_path or not audio_path:
             return
 
+        resolved_audio_path = self._resolve_preview_audio_path(audio_path)
+
         # Stash for resume / seek
         self._video_path = video_path
-        self._audio_path = audio_path
+        self._audio_path = resolved_audio_path
         self._v_override = v_override
         self._a_offset = a_offset
         self._loop_start = max(0.0, loop_start)
@@ -367,7 +369,7 @@ class PreviewWidget(QWidget):
 
         # Probe duration (best effort)
         if start_time == 0.0:
-            self._duration = self._probe_duration(video_path, audio_path, v_override, a_offset)
+            self._duration = self._probe_duration(video_path, resolved_audio_path, v_override, a_offset)
             self._lbl_dur.setText(self._fmt(self._duration))
 
         # Canvas dimensions
@@ -412,11 +414,11 @@ class PreviewWidget(QWidget):
             ffplay_cmd += ["-ss", f"{aud_seek:.6f}"]
         if aud_delay_ms > 0:
             ffplay_cmd += [
-                "-i", audio_path,
+                "-i", resolved_audio_path,
                 "-af", f"adelay={aud_delay_ms}|{aud_delay_ms},asetpts=PTS-STARTPTS",
             ]
         else:
-            ffplay_cmd += ["-i", audio_path]
+            ffplay_cmd += ["-i", resolved_audio_path]
 
         # Build worker + thread
         self._position = start_time
@@ -600,6 +602,53 @@ class PreviewWidget(QWidget):
     # ==================================================================
 
     @staticmethod
+    def _resolve_preview_audio_path(audio_path: str) -> str:
+        """Resolve a preview-playable audio path.
+
+        Preview input may be a cooked `.wav.ckd` path that ffplay cannot decode.
+        Prefer existing decoded siblings first, then try a one-time decode fallback.
+        """
+        path = Path(audio_path)
+        if path.suffix.lower() != ".ckd":
+            return audio_path
+
+        base_no_ckd = path.with_suffix("")
+        stem = base_no_ckd.stem
+        preview_cache = path.parent / "_preview_audio"
+        candidates: list[Path] = [
+            base_no_ckd,
+            base_no_ckd.with_suffix(".wav"),
+            base_no_ckd.with_suffix(".ogg"),
+            path.parent / f"{stem}_raw_vgm.wav",
+            path.parent / f"{stem}_decoded.wav",
+            path.parent / f"{stem}_fixed.wav",
+            path.parent / f"{stem}_fallback_fixed.wav",
+            preview_cache / f"{stem}_raw_vgm.wav",
+            preview_cache / f"{stem}_decoded.wav",
+            preview_cache / f"{stem}_fixed.wav",
+            preview_cache / f"{stem}_fallback_fixed.wav",
+        ]
+        for candidate in candidates:
+            if candidate.exists() and candidate.suffix.lower() in {".wav", ".ogg"}:
+                if str(candidate) != audio_path:
+                    logger.debug("Preview audio fallback selected: %s", candidate)
+                return str(candidate)
+
+        try:
+            from jd2021_installer.installers.media_processor import extract_ckd_audio_v1
+
+            preview_cache.mkdir(parents=True, exist_ok=True)
+            decoded = extract_ckd_audio_v1(path, preview_cache)
+            if decoded and Path(decoded).exists():
+                logger.info("Preview audio decoded from CKD: %s", Path(decoded).name)
+                return str(decoded)
+        except Exception as exc:
+            logger.warning("Preview audio decode failed for %s: %s", path.name, exc)
+
+        logger.warning("Preview audio remains cooked CKD; ffplay may be silent: %s", path.name)
+        return audio_path
+
+    @staticmethod
     def _fmt(seconds: float) -> str:
         s = max(0.0, seconds)
         return f"{int(s // 60)}:{int(s % 60):02d}"
@@ -610,33 +659,72 @@ class PreviewWidget(QWidget):
         v_override: float, a_offset: float,
     ) -> float:
         """Estimate playable preview duration via ffprobe."""
+        def _ffprobe_duration(path: str) -> float:
+            cmd = [
+                "ffprobe", "-v", "error", "-show_entries",
+                "format=duration", "-of", "default=nw=1:nk=1",
+                path,
+            ]
+            return float(
+                subprocess.check_output(cmd, text=True, creationflags=_CFLAGS).strip()
+            )
+
+        def _audio_probe_candidates(path: str) -> list[str]:
+            # Preview sometimes points to extracted .wav.ckd, which ffprobe cannot read.
+            # Try sibling decoded files before giving up.
+            p = Path(path)
+            candidates = [str(p)]
+            if p.suffix.lower() == ".ckd":
+                no_ckd = p.with_suffix("")
+                candidates.extend(
+                    [
+                        str(no_ckd),
+                        str(no_ckd.with_suffix(".wav")),
+                        str(no_ckd.with_suffix(".ogg")),
+                    ]
+                )
+            seen: set[str] = set()
+            ordered: list[str] = []
+            for item in candidates:
+                key = item.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                ordered.append(item)
+            return ordered
+
+        v_dur: float | None = None
+        a_dur: float | None = None
+
         try:
-            cmd_v = [
-                "ffprobe", "-v", "error", "-show_entries",
-                "format=duration", "-of", "default=nw=1:nk=1",
-                video_path,
-            ]
-            v_dur = float(subprocess.check_output(cmd_v, text=True,
-                          creationflags=_CFLAGS).strip())
-            cmd_a = [
-                "ffprobe", "-v", "error", "-show_entries",
-                "format=duration", "-of", "default=nw=1:nk=1",
-                audio_path,
-            ]
-            a_dur = float(subprocess.check_output(cmd_a, text=True,
-                          creationflags=_CFLAGS).strip())
-
-            vid_beat0 = abs(v_override) if v_override else 0.0
-            v_playable = v_dur - vid_beat0
-
-            if a_offset and a_offset < 0:
-                a_playable = a_dur - abs(a_offset)
-            elif a_offset and a_offset > 0:
-                a_playable = a_dur + a_offset
-            else:
-                a_playable = a_dur
-
-            return max(v_playable, a_playable)
+            v_dur = _ffprobe_duration(video_path)
         except Exception as exc:
-            logger.warning("Duration probe failed, using 120 s fallback: %s", exc)
+            logger.debug("Video duration probe failed for %s: %s", video_path, exc)
+
+        for candidate in _audio_probe_candidates(audio_path):
+            try:
+                a_dur = _ffprobe_duration(candidate)
+                if candidate != audio_path:
+                    logger.debug("Audio duration fallback probe succeeded: %s", candidate)
+                break
+            except Exception:
+                continue
+
+        if v_dur is None and a_dur is None:
+            logger.warning("Duration probe failed, using 120 s fallback: video=%s audio=%s", video_path, audio_path)
             return 120.0
+
+        playable_values: list[float] = []
+        if v_dur is not None:
+            vid_beat0 = abs(v_override) if v_override else 0.0
+            playable_values.append(v_dur - vid_beat0)
+
+        if a_dur is not None:
+            if a_offset and a_offset < 0:
+                playable_values.append(a_dur - abs(a_offset))
+            elif a_offset and a_offset > 0:
+                playable_values.append(a_dur + a_offset)
+            else:
+                playable_values.append(a_dur)
+
+        return max(playable_values) if playable_values else 120.0

@@ -48,6 +48,9 @@ def test_amb_injection_idempotency():
         count = content.count("amb_testmap_intro.tpl")
         print(f"Injection count 1: {count}")
         assert count == 1, "First injection failed"
+        assert (
+            'LUA="World/MAPS/TestMap/audio/AMB/amb_testmap_intro.tpl"' in content
+        ), "Intro AMB actor LUA path mismatch"
         
         # 3. Second injection (should be skipped)
         generate_intro_amb(ogg_path, "TestMap", tmp_path, a_offset=-2.145, v_override=-2.145)
@@ -56,8 +59,53 @@ def test_amb_injection_idempotency():
         count = content.count("amb_testmap_intro.tpl")
         print(f"Injection count 2: {count}")
         assert count == 1, "Second injection was NOT skipped (redundant!)"
+        assert content.count('USERFRIENDLY="amb_testmap_intro"') == 1, "Actor duplicated"
         
         print("✓ AMB Injection Idempotency OK")
+
+
+def test_negative_offset_uses_legacy_intro_duration_even_with_marker_data():
+    """Fetch/JDU parity: marker-only intro can be silent when a_offset is negative."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+
+        isc_path = audio_dir / "Demo_audio.isc"
+        isc_path.write_text(
+            """<?xml version="1.0" encoding="ISO-8859-1"?>
+<root>
+	<Scene>
+		<ACTORS NAME="Actor">
+			<Actor USERFRIENDLY="MusicTrack" />
+		</ACTORS>
+		<sceneConfigs>
+			<SceneConfigs />
+		</sceneConfigs>
+	</Scene>
+</root>"""
+        )
+
+        ogg_path = tmp_path / "demo.ogg"
+        ogg_path.write_text("dummy")
+
+        mp.run_ffmpeg.reset_mock()
+        generate_intro_amb(
+            ogg_path,
+            "Demo",
+            tmp_path,
+            a_offset=-4.974,
+            v_override=-4.873,
+            marker_preroll_ms=4974.0,
+        )
+
+        assert mp.run_ffmpeg.call_count == 1, "Expected AMB FFmpeg generation call"
+        ffmpeg_args = mp.run_ffmpeg.call_args[0][0]
+        t_idx = ffmpeg_args.index("-t")
+        used_duration = float(ffmpeg_args[t_idx + 1])
+
+        # Legacy heuristic: abs(a_offset) + 1.355 (rounded to 3 decimals in command)
+        assert used_duration == 6.329, f"Unexpected intro duration: {used_duration}"
 
 if __name__ == "__main__":
     try:
