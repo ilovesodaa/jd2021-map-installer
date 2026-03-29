@@ -363,6 +363,7 @@ class SongDescription:
     tags: List[str] = field(default_factory=lambda: ["Main"])
     status: int = 3
     locale_id: int = 4294967295
+    version_loc_id: Optional[int] = None
     mojo_value: int = 0
     jd_version: int = 2021
     original_jd_version: int = 2021

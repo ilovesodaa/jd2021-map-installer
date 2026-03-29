@@ -202,65 +202,69 @@ def _write_songdesc(target: Path, name: str, sd: SongDescription,
     dancer_name = str(sd.dancer_name).replace('"', '\\"').replace('\n', ' ')
     audio_fade = config.audio_preview_fade_s if jd_ver >= 2016 else 0.0
     status = 3 if sd.status == 12 else sd.status
+    version_loc_line = (
+        f"\n\t\t\t\t\tVersionLocId = {sd.version_loc_id},"
+        if sd.version_loc_id is not None
+        else ""
+    )
 
     tpl = f'''includeReference("EngineData/Helpers/SongDatabase.ilu")
 params =
 {{
-\tNAME = "Actor_Template",
-\tActor_Template =
-\t{{
-\t\tTAGS =
-\t\t{{
-\t\t\t{{
-\t\t\t\tVAL = "songdescmain"
-\t\t\t}}
-\t\t}},
-\t\tWIP = 0,
-\t\tLOWUPDATE = 0,
-\t\tUPDATE_LAYER = 0,
-\t\tPROCEDURAL = 0,
-\t\tSTARTPAUSED = 0,
-\t\tFORCEISENVIRONMENT = 0,
-\t\tCOMPONENTS =
-\t\t{{
-\t\t\t{{
-\t\t\t\tNAME = "JD_SongDescTemplate",
-\t\t\t\tJD_SongDescTemplate =
-\t\t\t\t{{
-\t\t\t\t\tMapName = "{name}",
-\t\t\t\t\tJDVersion = {jd_ver},
-\t\t\t\t\tOriginalJDVersion = {orig_ver},
-\t\t\t\t\tArtist = {lua_long_string(sd.artist)},
-\t\t\t\t\tDancerName = "{dancer_name}",
-\t\t\t\t\tTitle = {lua_long_string(sd.title)},
-\t\t\t\t\tCredits = {lua_long_string(sd.credits or "All rights of the producer and other rightholders to the recorded work reserved. Unless otherwise authorized, the duplication, rental, loan, exchange or use of this video game for public performance, broadcasting and online distribution to the public are prohibited.")},
-\t\t\t\t\tNumCoach = {num_coach},
-\t\t\t\t\tMainCoach = {sd.main_coach},
-\t\t\t\t\tDifficulty = {sd.difficulty},
-\t\t\t\t\tSweatDifficulty = {sd.sweat_difficulty},
-\t\t\t\t\tbackgroundType = {sd.background_type},
-\t\t\t\t\tLyricsType = {sd.lyrics_type},
-\t\t\t\t\tEnergy = {sd.energy},
-\t\t\t\t\tTags =
-\t\t\t\t\t{{{tags_lua}
-\t\t\t\t\t}},
-\t\t\t\t\tStatus = {status},
-\t\t\t\t\tLocaleID = {sd.locale_id},
-\t\t\t\t\tMojoValue = {sd.mojo_value},
-\t\t\t\t\tCountInProgression = 0,
-\t\t\t\t\tPhoneImages =
-\t\t\t\t\t{{{phone_str}
-\t\t\t\t\t}},
+	NAME = "Actor_Template",
+	Actor_Template =
+	{{
+		TAGS =
+		{{
+			{{
+				VAL = "songdescmain"
+			}}
+		}},
+		WIP = 0,
+		LOWUPDATE = 0,
+		UPDATE_LAYER = 0,
+		PROCEDURAL = 0,
+		STARTPAUSED = 0,
+		FORCEISENVIRONMENT = 0,
+		COMPONENTS =
+		{{
+			{{
+				NAME = "JD_SongDescTemplate",
+				JD_SongDescTemplate =
+				{{
+					MapName = "{name}",
+					JDVersion = {jd_ver},
+					OriginalJDVersion = {orig_ver},
+					Artist = {lua_long_string(sd.artist)},
+					DancerName = "{dancer_name}",
+					Title = {lua_long_string(sd.title)},
+					Credits = {lua_long_string(sd.credits or "All rights of the producer and other rightholders to the recorded work reserved. Unless otherwise authorized, the duplication, rental, loan, exchange or use of this video game for public performance, broadcasting and online distribution to the public are prohibited.")},
+					NumCoach = {num_coach},
+					MainCoach = {sd.main_coach},
+					Difficulty = {sd.difficulty},
+					SweatDifficulty = {sd.sweat_difficulty},
+					backgroundType = {sd.background_type},
+					LyricsType = {sd.lyrics_type},
+					Energy = {sd.energy},
+					Tags =
+					{{{tags_lua}
+					}},
+					Status = {status},
+					LocaleID = {sd.locale_id},{version_loc_line}
+					CountInProgression = 0,
+					PhoneImages =
+					{{{phone_str}
+					}},
                     DefaultColors =
                     {{{colors_lua}
-\t\t\t\t\t}},
-\t\t\t\t\tVideoPreviewPath = "",
-\t\t\t\t\tMode = 0,
-\t\t\t\t\tAudioPreviewFadeTime = {audio_fade:.6f}
-\t\t\t\t}}
-\t\t\t}}
-\t\t}}
-\t}}
+					}},
+					VideoPreviewPath = "",
+					Mode = 0,
+					AudioPreviewFadeTime = {audio_fade:.6f}
+				}}
+			}}
+		}}
+	}}
 }}'''
     (target / "SongDesc.tpl").write_text(tpl, encoding="utf-8")
 

@@ -383,7 +383,12 @@ def _extract_song_desc(
             energy=int(sd.get("Energy", 1)),
             tags=sd.get("Tags", ["Main"]) or ["Main"],
             status=int(sd.get("Status", 3)),
-            locale_id=int(sd.get("LocaleID", 4294967295)),
+            locale_id=int(sd.get("LocaleID", sd.get("ID", 4294967295))),
+            version_loc_id=(
+                int(sd["VersionLocId"])
+                if "VersionLocId" in sd and sd.get("VersionLocId") is not None
+                else None
+            ),
             mojo_value=int(sd.get("MojoValue", 0)),
             jd_version=int(sd.get("JDVersion", 2021)),
             original_jd_version=int(sd.get("OriginalJDVersion", 2021)),
