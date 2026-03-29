@@ -88,6 +88,24 @@ class SettingsDialog(QDialog):
         cleanup_row.addStretch()
         layout.addLayout(cleanup_row)
 
+        # locked_status_behavior
+        locked_row = QHBoxLayout()
+        locked_label = QLabel("Non-3 song status handling:")
+        locked_row.addWidget(locked_label)
+
+        self.combo_locked_status = QComboBox()
+        self.combo_locked_status.addItems(["ask", "force3", "keep"])
+        self.combo_locked_status.setCurrentText(self._config.locked_status_behavior)
+        self.combo_locked_status.setToolTip(
+            "ask: prompt when any song status other than 3 is detected\n"
+            "force3: always force non-3 statuses to 3 (already unlocked)\n"
+            "keep: always keep the original status value\n"
+            "Status meaning labels are editable in code: jd2021_installer/ui/main_window.py (_SONG_STATUS_MEANINGS)."
+        )
+        locked_row.addWidget(self.combo_locked_status)
+        locked_row.addStretch()
+        layout.addLayout(locked_row)
+
         # show_preflight_success_popup
         self.cb_preflight_popup = QCheckBox("Show 'Pre-flight passed' popup")
         self.cb_preflight_popup.setChecked(self._config.show_preflight_success_popup)
@@ -159,6 +177,7 @@ class SettingsDialog(QDialog):
         self._config.skip_preflight = self.cb_skip_preflight.isChecked()
         self._config.suppress_offset_notification = self.cb_suppress.isChecked()
         self._config.cleanup_behavior = self.combo_cleanup.currentText()
+        self._config.locked_status_behavior = self.combo_locked_status.currentText()
         self._config.show_preflight_success_popup = self.cb_preflight_popup.isChecked()
         self._config.show_quickstart_on_launch = self.cb_quickstart.isChecked()
         self._config.video_quality = self.combo_quality.currentText()
