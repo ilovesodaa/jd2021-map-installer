@@ -31,7 +31,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QThread
+from PyQt6.QtCore import Qt, QThread, QTimer
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -49,10 +49,12 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
     QProgressDialog,
+    QSizePolicy,
 )
 
 from jd2021_installer.core.config import AppConfig
 from jd2021_installer.core.logging_config import apply_log_detail, get_file_log_level
+from jd2021_installer.core.theme import load_theme_stylesheet
 from jd2021_installer.core.models import (
     MapMedia,
     MapSync,
@@ -153,6 +155,10 @@ class MainWindow(QMainWindow):
         self._active_worker: Optional[object] = None
         self._file_logger_handler: Optional[logging.Handler] = None
         self._preview_audio_warning_shown = False
+        self._size_overlay: Optional[QLabel] = None
+        self._size_overlay_hide_timer = QTimer(self)
+        self._size_overlay_hide_timer.setSingleShot(True)
+        self._size_overlay_hide_timer.timeout.connect(self._hide_size_overlay)
 
         # Phase 4: Multi-map navigation
         self._nav_maps: list[NormalizedMapData] = []
@@ -162,7 +168,7 @@ class MainWindow(QMainWindow):
 
         # -- Window setup -----------------------------------------------------
         self.setWindowTitle("JD2021 Map Installer v2")
-        self.setMinimumSize(1060, 800)
+        self._apply_window_size_config()
 
         self._build_ui()
         self._config.log_detail_level = apply_log_detail(self._config.log_detail_level)
@@ -179,9 +185,9 @@ class MainWindow(QMainWindow):
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
         self._status_bar.showMessage("Ready")
+        self._init_size_overlay()
 
         # Show Quickstart Guide if needed
-        from PyQt6.QtCore import QTimer
         QTimer.singleShot(500, self._show_quickstart_if_needed)
         QTimer.singleShot(900, self._run_startup_dependency_guardrail)
 
@@ -226,6 +232,23 @@ class MainWindow(QMainWindow):
                 json.dump(data, f, indent=4)
         except Exception as e:
             logger.error("Failed to save settings: %s", e)
+
+    def _apply_window_size_config(self) -> None:
+        if getattr(self._config, "enforce_min_window_size", True):
+            min_w = max(640, int(getattr(self._config, "min_window_width", 1000)))
+            min_h = max(480, int(getattr(self._config, "min_window_height", 920)))
+            self.setMinimumSize(min_w, min_h)
+            return
+
+        self.setMinimumSize(0, 0)
+
+    def _apply_theme(self) -> None:
+        app = QApplication.instance()
+        if app is None:
+            return
+
+        project_root = Path(__file__).resolve().parents[2]
+        app.setStyleSheet(load_theme_stylesheet(self._config.theme, project_root))
 
     def _show_quickstart_if_needed(self) -> None:
         # Check config (we'll need to add a flag to AppConfig or settings)
@@ -467,52 +490,131 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event) -> None:
         """Handle window resize by restarting/scaling the preview if active."""
         super().resizeEvent(event)
+        self._show_size_overlay()
         if hasattr(self, "_preview_widget") and self._preview_widget.is_playing:
             # Re-trigger preview with current offsets to pick up new dimensions
             self._restart_preview_now()
 
+    def _init_size_overlay(self) -> None:
+        self._size_overlay = QLabel(self)
+        self._size_overlay.setObjectName("windowSizeOverlay")
+        self._size_overlay.setVisible(False)
+        self._size_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._size_overlay.raise_()
+
+    def _hide_size_overlay(self) -> None:
+        if self._size_overlay is not None:
+            self._size_overlay.hide()
+
+    def _show_size_overlay(self) -> None:
+        if not getattr(self._config, "show_window_size_overlay", True):
+            self._hide_size_overlay()
+            return
+
+        if self._size_overlay is None:
+            return
+
+        self._size_overlay.setText(f"{self.width()} x {self.height()}")
+        self._size_overlay.adjustSize()
+        margin = 14
+        x = max(margin, self.width() - self._size_overlay.width() - margin)
+        y = margin
+        self._size_overlay.move(x, y)
+        self._size_overlay.show()
+        self._size_overlay.raise_()
+
+        timeout_ms = int(getattr(self._config, "window_size_overlay_timeout_ms", 1100))
+        self._size_overlay_hide_timer.start(max(200, timeout_ms))
+
     def _build_ui(self) -> None:
         central = QWidget()
+        central.setObjectName("mainWindowCentral")
         self.setCentralWidget(central)
         root_layout = QHBoxLayout(central)
+        root_layout.setContentsMargins(8, 8, 8, 8)
+        root_layout.setSpacing(8)
 
-        # -- Column 1 (Left): Fixed width ------------------------------------
+        # -- Column 1 (Left): Sidebar ----------------------------------------
         left_col = QWidget()
-        left_col.setFixedWidth(450)
+        left_col.setObjectName("mainWindowLeftPanel")
+        left_col.setMinimumWidth(380)
+        left_col.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Expanding,
+        )
         left_layout = QVBoxLayout(left_col)
         left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(8)
         
         self._mode_selector = ModeSelectorWidget()
-        left_layout.addWidget(self._mode_selector)
+        self._mode_selector.setObjectName("mainWindowModeSelector")
+        self._mode_selector.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Maximum,
+        )
+        left_layout.addWidget(self._mode_selector, stretch=0)
 
         self._config_panel = ConfigWidget()
-        left_layout.addWidget(self._config_panel)
+        self._config_panel.setObjectName("mainWindowConfigPanel")
+        left_layout.addWidget(self._config_panel, stretch=0)
 
         self._action_panel = ActionWidget()
-        left_layout.addWidget(self._action_panel)
+        self._action_panel.setObjectName("mainWindowActionPanel")
+        left_layout.addWidget(self._action_panel, stretch=0)
 
         self._feedback_panel = ProgressLogWidget()
-        left_layout.addWidget(self._feedback_panel)
+        self._feedback_panel.setObjectName("mainWindowFeedbackPanel")
+        self._feedback_panel.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        left_layout.addWidget(self._feedback_panel, stretch=1)
         
         root_layout.addWidget(left_col)
 
         # -- Column 2 (Right): Expanding -------------------------------------
         right_col = QWidget()
+        right_col.setObjectName("mainWindowRightPanel")
+        right_col.setMinimumWidth(500)
+        right_col.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         right_layout = QVBoxLayout(right_col)
         right_layout.setContentsMargins(4, 0, 0, 0)
+        right_layout.setSpacing(8)
 
         self._preview_widget = PreviewWidget()
+        self._preview_widget.setObjectName("mainWindowPreviewWidget")
+        self._preview_widget.setMinimumHeight(300)
+        self._preview_widget.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         right_layout.addWidget(self._preview_widget, stretch=2)
 
         self._sync_refinement = SyncRefinementWidget()
+        self._sync_refinement.setObjectName("mainWindowSyncRefinement")
+        self._sync_refinement.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Minimum,
+        )
         right_layout.addWidget(self._sync_refinement, stretch=0)
 
         self._log_console = LogConsoleWidget()
+        self._log_console.setObjectName("mainWindowLogConsole")
+        self._log_console.setMinimumHeight(180)
+        self._log_console.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         # Wire root logger to our console
         logging.getLogger().addHandler(self._log_console.log_handler)
         right_layout.addWidget(self._log_console, stretch=1)
 
-        root_layout.addWidget(right_col, stretch=1)
+        root_layout.addWidget(right_col, stretch=6)
+        root_layout.setStretch(0, 4)
+        root_layout.setStretch(1, 6)
         
         # Apply loaded settings to config panel
         if self._config.game_directory:
@@ -536,14 +638,15 @@ class MainWindow(QMainWindow):
         # -- Mode & config signals ------------------------------------------
         self._mode_selector.mode_changed.connect(self._on_mode_changed)
         self._mode_selector.target_selected.connect(self._on_target_selected)
+        self._mode_selector.source_state_changed.connect(
+            lambda state: self._on_target_selected(str(state.get("target", "")))
+        )
         self._config_panel.game_dir_changed.connect(self._on_game_dir_changed)
         self._config_panel.quality_changed.connect(self._on_quality_changed)
-        self._config_panel.clear_cache_requested.connect(self._on_clear_cache)
 
         # -- Action panel signals -------------------------------------------
         self._action_panel.install_requested.connect(self._on_install_requested)
         self._action_panel.preflight_requested.connect(self._on_preflight)
-        self._action_panel.clear_cache_requested.connect(self._on_clear_cache)
         self._action_panel.readjust_offset_requested.connect(self._on_readjust)
         self._action_panel.settings_requested.connect(self._on_settings)
         self._action_panel.reset_state_requested.connect(self._on_reset_state)
@@ -551,7 +654,7 @@ class MainWindow(QMainWindow):
         # -- Sync refinement signals ----------------------------------------
         self._sync_refinement.preview_requested.connect(self._on_preview_toggle)
         self._sync_refinement.apply_requested.connect(self._on_apply_offset)
-        self._sync_refinement.offset_changed.connect(self._on_offset_spin_changed)
+        self._sync_refinement.offsets_changed.connect(self._on_offset_spin_changed)
         self._sync_refinement.pad_audio_requested.connect(self._on_pad_audio)
         self._sync_refinement.nav_requested.connect(self._on_nav_requested)
         
@@ -648,10 +751,13 @@ class MainWindow(QMainWindow):
             MODE_MANUAL,
         )
 
-        idx = self._mode_selector.current_mode_index
+        source_state = self._mode_selector.get_current_state()
+        idx = int(source_state.get("mode_index", MODE_FETCH))
+        fields = source_state.get("fields", {})
 
         if idx == MODE_FETCH:
-            raw = self._mode_selector.inputs["fetch"]["codenames"].text().strip()
+            fetch_fields = fields.get("fetch", {}) if isinstance(fields, dict) else {}
+            raw = str(fetch_fields.get("codenames", "")).strip()
             codenames = [c.strip() for c in raw.split(",") if c.strip()]
             if not codenames:
                 issues.append("Enter at least one codename for Fetch mode.")
@@ -660,8 +766,9 @@ class MainWindow(QMainWindow):
             return issues
 
         if idx == MODE_HTML:
-            asset_html = self._mode_selector.inputs["html"]["asset"].text().strip()
-            nohud_html = self._mode_selector.inputs["html"]["nohud"].text().strip()
+            html_fields = fields.get("html", {}) if isinstance(fields, dict) else {}
+            asset_html = str(html_fields.get("asset", "")).strip()
+            nohud_html = str(html_fields.get("nohud", "")).strip()
             if not asset_html or not nohud_html:
                 issues.append("Both Asset HTML and NOHUD HTML files are required.")
                 return issues
@@ -674,7 +781,8 @@ class MainWindow(QMainWindow):
             return issues
 
         if idx == MODE_IPK:
-            target = self._mode_selector.inputs["ipk"]["file"].text().strip()
+            ipk_fields = fields.get("ipk", {}) if isinstance(fields, dict) else {}
+            target = str(ipk_fields.get("file", "")).strip()
             if not target:
                 issues.append("Select an IPK archive first.")
             elif not Path(target).is_file():
@@ -684,7 +792,8 @@ class MainWindow(QMainWindow):
             return issues
 
         if idx == MODE_BATCH:
-            target = self._mode_selector.inputs["batch"]["dir"].text().strip()
+            batch_fields = fields.get("batch", {}) if isinstance(fields, dict) else {}
+            target = str(batch_fields.get("dir", "")).strip()
             if not target:
                 issues.append("Select a batch directory first.")
             elif not Path(target).is_dir():
@@ -694,9 +803,9 @@ class MainWindow(QMainWindow):
             return issues
 
         if idx == MODE_MANUAL:
-            manual_inputs = self._mode_selector.inputs["manual"]
-            codename = manual_inputs["codename"].text().strip()
-            root_dir = manual_inputs["root"].text().strip()
+            manual_inputs = fields.get("manual", {}) if isinstance(fields, dict) else {}
+            codename = str(manual_inputs.get("codename", "")).strip()
+            root_dir = str(manual_inputs.get("root", "")).strip()
             if not codename and not root_dir:
                 issues.append("Manual mode requires a codename or a root directory.")
                 return issues
@@ -710,7 +819,7 @@ class MainWindow(QMainWindow):
                 ("mtrack", "Musictrack CKD is required (fatal for config generation)."),
             ]
             for key, missing_msg in required_files:
-                value = manual_inputs[key].text().strip()
+                value = str(manual_inputs.get(key, "")).strip()
                 if not value:
                     issues.append(missing_msg)
                     continue
@@ -742,7 +851,8 @@ class MainWindow(QMainWindow):
             return
 
         from jd2021_installer.ui.widgets.mode_selector import MODE_FETCH
-        include_fetch_checks = self._mode_selector.current_mode_index == MODE_FETCH
+        source_state = self._mode_selector.get_current_state()
+        include_fetch_checks = int(source_state.get("mode_index", -1)) == MODE_FETCH
         if not self._ensure_runtime_dependencies(include_fetch_checks=include_fetch_checks):
             self._set_status("Pre-flight failed")
             return
@@ -808,7 +918,11 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             self._config = dialog.get_config()
             self._config.log_detail_level = apply_log_detail(self._config.log_detail_level)
+            self._apply_window_size_config()
+            self._apply_theme()
             self._save_settings()
+            if not getattr(self._config, "show_window_size_overlay", True):
+                self._hide_size_overlay()
             self._config_panel.set_video_quality(self._config.video_quality)
             self.append_log(f"Logging detail profile set to '{self._config.log_detail_level}'.")
             self._set_status("Settings saved.")
@@ -822,7 +936,7 @@ class MainWindow(QMainWindow):
 
         dialog = QDialog(self)
         dialog.setWindowTitle("Select Maps for Offset Readjust")
-        dialog.resize(620, 420)
+        dialog.setMinimumSize(560, 380)
         root = QVBoxLayout(dialog)
         root.addWidget(QLabel("Choose one or more maps from the index, or browse source folder manually."))
 
@@ -851,7 +965,7 @@ class MainWindow(QMainWindow):
         btn_select_all.clicked.connect(lambda: _set_all_checked(True))
         btns.addWidget(btn_select_all)
 
-        btn_clear = QPushButton("Clear")
+        btn_clear = QPushButton("Unselect All")
         btn_clear.clicked.connect(lambda: _set_all_checked(False))
         btns.addWidget(btn_clear)
 
@@ -1088,30 +1202,7 @@ class MainWindow(QMainWindow):
 
     def _apply_readjust_profile(self, map_data: NormalizedMapData) -> None:
         profile = str(getattr(map_data, "_readjust_profile", "generic"))
-
-        if profile == "ipk":
-            self._sync_refinement.set_audio_editable(False)
-            self._sync_refinement.set_video_editable(True)
-            self._sync_refinement._video_check.blockSignals(True)
-            self._sync_refinement._video_check.setChecked(True)
-            self._sync_refinement._video_check.setEnabled(False)
-            self._sync_refinement._video_check.blockSignals(False)
-            self._sync_refinement._video_spin.setEnabled(True)
-            return
-
-        if profile == "fetch_html":
-            self._sync_refinement.set_audio_editable(True)
-            self._sync_refinement.set_video_editable(False)
-            self._sync_refinement._video_check.blockSignals(True)
-            self._sync_refinement._video_check.setChecked(False)
-            self._sync_refinement._video_check.setEnabled(False)
-            self._sync_refinement._video_check.blockSignals(False)
-            self._sync_refinement._video_spin.setEnabled(False)
-            return
-
-        self._sync_refinement.set_audio_editable(True)
-        self._sync_refinement.set_video_editable(True)
-        self._sync_refinement._video_check.setEnabled(True)
+        self._sync_refinement.apply_profile(profile)
 
     def _activate_readjust_maps(self, maps: list[NormalizedMapData]) -> None:
         self._nav_maps = maps
@@ -1166,8 +1257,11 @@ class MainWindow(QMainWindow):
 
         # v1 parity: codename whitespace sanitization prompt before fetch scrape starts.
         from jd2021_installer.ui.widgets.mode_selector import MODE_FETCH
-        if self._mode_selector.current_mode_index == MODE_FETCH:
-            raw_value = self._mode_selector.inputs["fetch"]["codenames"].text()
+        source_state = self._mode_selector.get_current_state()
+        source_fields = source_state.get("fields", {})
+        if int(source_state.get("mode_index", -1)) == MODE_FETCH:
+            fetch_fields = source_fields.get("fetch", {}) if isinstance(source_fields, dict) else {}
+            raw_value = str(fetch_fields.get("codenames", ""))
             if re.search(r"\s", raw_value):
                 sanitized = re.sub(r"\s+", "", raw_value)
                 reply = QMessageBox.question(
@@ -1182,7 +1276,7 @@ class MainWindow(QMainWindow):
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 )
                 if reply == QMessageBox.StandardButton.Yes:
-                    self._mode_selector.inputs["fetch"]["codenames"].setText(sanitized)
+                    self._mode_selector.set_fetch_codenames(sanitized)
                     self._current_target = sanitized
                 else:
                     self.append_log("Install aborted: codename sanitization declined.")
@@ -1202,7 +1296,9 @@ class MainWindow(QMainWindow):
             )
 
         from jd2021_installer.ui.widgets.mode_selector import MODE_FETCH
-        include_fetch_checks = self._mode_selector.current_mode_index == MODE_FETCH
+        source_state = self._mode_selector.get_current_state()
+        mode_index = int(source_state.get("mode_index", -1))
+        include_fetch_checks = mode_index == MODE_FETCH
         if not self._ensure_runtime_dependencies(include_fetch_checks=include_fetch_checks):
             return
 
@@ -1211,13 +1307,13 @@ class MainWindow(QMainWindow):
 
         # Intercept batch mode - it has a completely different pipeline structure
         from jd2021_installer.ui.widgets.mode_selector import MODE_BATCH
-        if self._mode_selector.current_mode_index == MODE_BATCH:
+        if mode_index == MODE_BATCH:
             self._start_batch_install()
             return
 
         # Bundle IPK support
         from jd2021_installer.ui.widgets.mode_selector import MODE_IPK
-        if self._mode_selector.current_mode_index == MODE_IPK and Path(self._current_target).is_file():
+        if mode_index == MODE_IPK and Path(self._current_target).is_file():
             from jd2021_installer.extractors.archive_ipk import validate_ipk_magic
             try:
                 validate_ipk_magic(self._current_target)
@@ -1240,7 +1336,7 @@ class MainWindow(QMainWindow):
 
         # Resolve the correct extractor based on mode
         from jd2021_installer.ui.widgets.mode_selector import MODE_IPK
-        is_ipk = self._mode_selector.current_mode_index == MODE_IPK
+        is_ipk = mode_index == MODE_IPK
         self._sync_refinement.set_ipk_mode(is_ipk=is_ipk)
 
         extractor = self._resolve_extractor()
@@ -1663,9 +1759,10 @@ class MainWindow(QMainWindow):
 
         # Preserve current map edits before switching.
         if self._current_map is not None:
+            audio_ms, video_ms = self._sync_refinement.get_offsets()
             self._pending_offsets[self._current_map.codename] = (
-                self._sync_refinement._audio_spin.value(),
-                self._sync_refinement._video_spin.value(),
+                audio_ms,
+                video_ms,
             )
             
         new_index = self._nav_index + direction
@@ -1715,8 +1812,8 @@ class MainWindow(QMainWindow):
                     self._sync_refinement.set_preview_state(False)
                     return
 
-                v_override = self._sync_refinement._video_spin.value() / 1000.0
-                a_offset = self._sync_refinement._audio_spin.value() / 1000.0
+                v_override = self._sync_refinement.get_video_offset() / 1000.0
+                a_offset = self._sync_refinement.get_audio_offset() / 1000.0
                 loop_start, loop_end = self._get_preview_loop_seconds(self._current_map)
                 
                 logger.debug("Preview launch: v_override=%.3f, a_offset=%.3f", v_override, a_offset)
@@ -1734,12 +1831,12 @@ class MainWindow(QMainWindow):
         else:
             self._preview_widget.stop()
 
-    def _on_offset_spin_changed(self, offset_ms: float) -> None:
+    def _on_offset_spin_changed(self, audio_ms: float, video_ms: float) -> None:
         """Debounced preview restart when offsets change."""
         if self._current_map is not None:
             self._pending_offsets[self._current_map.codename] = (
-                self._sync_refinement._audio_spin.value(),
-                self._sync_refinement._video_spin.value(),
+                audio_ms,
+                video_ms,
             )
 
         if not self._preview_widget.is_playing:
@@ -1769,8 +1866,8 @@ class MainWindow(QMainWindow):
             return
 
         if self._current_map and self._current_map.media.video_path and self._current_map.media.video_path.exists():
-            v_override = self._sync_refinement._video_spin.value() / 1000.0
-            a_offset = self._sync_refinement._audio_spin.value() / 1000.0
+            v_override = self._sync_refinement.get_video_offset() / 1000.0
+            a_offset = self._sync_refinement.get_audio_offset() / 1000.0
             loop_start, loop_end = self._get_preview_loop_seconds(self._current_map)
             
             logger.debug("Debounced preview restart...")
@@ -1779,7 +1876,7 @@ class MainWindow(QMainWindow):
                 str(self._current_map.media.audio_path),
                 v_override=v_override,
                 a_offset=a_offset,
-                start_time=self._preview_widget._position,
+                start_time=self._preview_widget.get_current_position(),
                 loop_start=loop_start,
                 loop_end=loop_end,
             )
@@ -1796,8 +1893,8 @@ class MainWindow(QMainWindow):
             v_dur = get_video_duration(self._current_map.media.video_path, self._config)
             a_dur = get_video_duration(self._current_map.media.audio_path, self._config)
             diff_ms = (v_dur - a_dur) * 1000.0
-            
-            self._sync_refinement.set_offsets(audio_ms=diff_ms, video_ms=self._sync_refinement._video_spin.value())
+
+            self._sync_refinement.set_offsets(audio_ms=diff_ms, video_ms=self._sync_refinement.get_video_offset())
             self.append_log(f"Auto Pad Audio computed {diff_ms:+.1f} ms difference.")
         except Exception as e:
             self.append_log(f"Pad audio failed to compute duration: {e}")
@@ -2066,7 +2163,9 @@ class MainWindow(QMainWindow):
             MODE_MANUAL,
         )
 
-        idx = self._mode_selector.current_mode_index
+        source_state = self._mode_selector.get_current_state()
+        idx = int(source_state.get("mode_index", MODE_FETCH))
+        source_fields = source_state.get("fields", {})
 
         if idx == MODE_IPK:
             from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor
@@ -2096,9 +2195,10 @@ class MainWindow(QMainWindow):
 
         if idx == MODE_HTML:
             from jd2021_installer.extractors.web_playwright import WebPlaywrightExtractor
-            
-            asset_html = self._mode_selector.inputs["html"]["asset"].text()
-            nohud_html = self._mode_selector.inputs["html"]["nohud"].text()
+
+            html_fields = source_fields.get("html", {}) if isinstance(source_fields, dict) else {}
+            asset_html = str(html_fields.get("asset", ""))
+            nohud_html = str(html_fields.get("nohud", ""))
             
             if not asset_html and not nohud_html:
                 QMessageBox.warning(self, "Missing Files", "Please select at least one HTML file.")
@@ -2113,9 +2213,9 @@ class MainWindow(QMainWindow):
 
         if idx == MODE_MANUAL:
             from jd2021_installer.extractors.manual_extractor import ManualExtractor
-            inputs = self._mode_selector.inputs["manual"]
-            codename = inputs["codename"].text().strip()
-            root_dir = inputs["root"].text().strip()
+            manual_fields = source_fields.get("manual", {}) if isinstance(source_fields, dict) else {}
+            codename = str(manual_fields.get("codename", "")).strip()
+            root_dir = str(manual_fields.get("root", "")).strip()
             
             if not codename and not root_dir:
                 QMessageBox.warning(self, "Missing Data", "Codename or Root Directory is required for Manual mode.")
@@ -2123,22 +2223,22 @@ class MainWindow(QMainWindow):
                 
             return ManualExtractor(
                 codename=codename,
-                source_type=self._mode_selector.manual_source_type,
+                source_type=str(source_state.get("manual_source_type", "jdu")),
                 root_dir=root_dir,
                 files={
-                    "audio": inputs["audio"].text().strip(),
-                    "video": inputs["video"].text().strip(),
-                    "mtrack": inputs["mtrack"].text().strip(),
-                    "sdesc": inputs["sdesc"].text().strip(),
-                    "dtape": inputs["dtape"].text().strip(),
-                    "ktape": inputs["ktape"].text().strip(),
-                    "mseq": inputs["mseq"].text().strip(),
+                    "audio": str(manual_fields.get("audio", "")).strip(),
+                    "video": str(manual_fields.get("video", "")).strip(),
+                    "mtrack": str(manual_fields.get("mtrack", "")).strip(),
+                    "sdesc": str(manual_fields.get("sdesc", "")).strip(),
+                    "dtape": str(manual_fields.get("dtape", "")).strip(),
+                    "ktape": str(manual_fields.get("ktape", "")).strip(),
+                    "mseq": str(manual_fields.get("mseq", "")).strip(),
                 },
                 dirs={
-                    "moves": inputs["moves"].text().strip(),
-                    "pictos": inputs["pictos"].text().strip(),
-                    "menuart": inputs["menuart"].text().strip(),
-                    "amb": inputs["amb"].text().strip(),
+                    "moves": str(manual_fields.get("moves", "")).strip(),
+                    "pictos": str(manual_fields.get("pictos", "")).strip(),
+                    "menuart": str(manual_fields.get("menuart", "")).strip(),
+                    "amb": str(manual_fields.get("amb", "")).strip(),
                 }
             )
 

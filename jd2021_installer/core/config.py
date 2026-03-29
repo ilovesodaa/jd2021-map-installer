@@ -35,6 +35,12 @@ class AppConfig(BaseModel):
     show_quickstart_on_launch: bool = True
     skip_quickstart: bool = False
     log_detail_level: str = Field(default="user", pattern=r"^(quiet|user|detailed|developer)$")
+    theme: str = Field(default="light", pattern=r"^(light|dark)$")
+    enforce_min_window_size: bool = True
+    min_window_width: int = 1000
+    min_window_height: int = 920
+    show_window_size_overlay: bool = False
+    window_size_overlay_timeout_ms: int = 1100
 
     # Download settings
     download_timeout_s: int = 600

@@ -221,6 +221,7 @@ class PreviewWidget(QWidget):
     preview_started = pyqtSignal()
     preview_stopped = pyqtSignal()
     audio_unavailable = pyqtSignal()
+    position_changed = pyqtSignal(float)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -251,21 +252,24 @@ class PreviewWidget(QWidget):
     # UI CONSTRUCTION
     # ==================================================================
 
+    def _set_play_button_icon(self, playing: bool) -> None:
+        tooltip = "Pause/Stop Preview" if playing else "Start Preview"
+        self._btn_play.setText("Stop" if playing else "Preview")
+        self._btn_play.setToolTip(tooltip)
+
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(4)
+        self.setObjectName("previewWidget")
 
         # -- Video canvas ---------------------------------------------------
         self._canvas = _AspectRatioLabel("No Preview")
+        self._canvas.setObjectName("previewCanvas")
         self._canvas.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._canvas.setMinimumSize(480, 270)
         self._canvas.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding,
-        )
-        self._canvas.setStyleSheet(
-            "background-color: #111; color: #666; "
-            "font-size: 13px; border-radius: 6px;"
         )
         root.addWidget(self._canvas, stretch=1)
 
@@ -274,22 +278,25 @@ class PreviewWidget(QWidget):
         seek_row.setContentsMargins(0, 0, 0, 0)
 
         self._lbl_time = QLabel("0:00")
-        self._lbl_time.setFixedWidth(40)
+        self._lbl_time.setObjectName("previewCurrentTimeLabel")
+        self._lbl_time.setMinimumWidth(40)
+        self._lbl_time.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         self._lbl_time.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self._lbl_time.setStyleSheet("font-family: Consolas, monospace; font-size: 11px;")
         seek_row.addWidget(self._lbl_time)
 
         self._seek_slider = QSlider(Qt.Orientation.Horizontal)
         self._seek_slider.setRange(0, 1000)
         self._seek_slider.setValue(0)
         self._seek_slider.setTracking(True)
+        self._seek_slider.valueChanged.connect(self._on_seek_value_changed)
         self._seek_slider.sliderPressed.connect(self._on_seek_pressed)
         self._seek_slider.sliderReleased.connect(self._on_seek_released)
         seek_row.addWidget(self._seek_slider)
 
         self._lbl_dur = QLabel("0:00")
-        self._lbl_dur.setFixedWidth(40)
-        self._lbl_dur.setStyleSheet("font-family: Consolas, monospace; font-size: 11px;")
+        self._lbl_dur.setObjectName("previewDurationLabel")
+        self._lbl_dur.setMinimumWidth(40)
+        self._lbl_dur.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         seek_row.addWidget(self._lbl_dur)
 
         root.addLayout(seek_row)
@@ -299,25 +306,31 @@ class PreviewWidget(QWidget):
         btn_row.setContentsMargins(0, 0, 0, 0)
         btn_row.addStretch()
 
-        self._btn_rewind = QPushButton("−5 s")
-        self._btn_rewind.setFixedWidth(50)
+        self._btn_rewind = QPushButton()
+        self._btn_rewind.setObjectName("previewRewindButton")
+        self._btn_rewind.setText("-5s")
+        self._btn_rewind.setMinimumWidth(52)
+        self._btn_rewind.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self._btn_rewind.setToolTip("Rewind 5 seconds")
         self._btn_rewind.clicked.connect(lambda: self._seek_relative(-5))
         btn_row.addWidget(self._btn_rewind)
 
-        self._btn_play = QPushButton("▶")
-        self._btn_play.setFixedWidth(50)
+        self._btn_play = QPushButton()
+        self._btn_play.setObjectName("previewPlayButton")
+        self._btn_play.setMinimumWidth(52)
+        self._btn_play.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self._set_play_button_icon(False)
         self._btn_play.clicked.connect(self._toggle_playback)
         btn_row.addWidget(self._btn_play)
 
-        self._btn_forward = QPushButton("+5 s")
-        self._btn_forward.setFixedWidth(50)
+        self._btn_forward = QPushButton()
+        self._btn_forward.setObjectName("previewForwardButton")
+        self._btn_forward.setText("+5s")
+        self._btn_forward.setMinimumWidth(52)
+        self._btn_forward.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self._btn_forward.setToolTip("Forward 5 seconds")
         self._btn_forward.clicked.connect(lambda: self._seek_relative(5))
         btn_row.addWidget(self._btn_forward)
-
-        self._btn_stop = QPushButton("⏹")
-        self._btn_stop.setFixedWidth(40)
-        self._btn_stop.clicked.connect(self.stop)
-        btn_row.addWidget(self._btn_stop)
 
         btn_row.addStretch()
         root.addLayout(btn_row)
@@ -422,8 +435,9 @@ class PreviewWidget(QWidget):
 
         # Build worker + thread
         self._position = start_time
+        self.position_changed.emit(self._position)
         self._playing = True
-        self._btn_play.setText("⏸")
+        self._set_play_button_icon(True)
 
         worker = _FrameReaderWorker(
             ffmpeg_cmd, w, h,
@@ -475,24 +489,22 @@ class PreviewWidget(QWidget):
             self._position = 0.0
             self._lbl_time.setText("0:00")
             self._seek_slider.setValue(0)
+            self.position_changed.emit(self._position)
         
         if clear_canvas:
             self._canvas.clear()
             self._canvas.setText("No Preview")
-            self._canvas.setStyleSheet(
-                "background-color: #111; color: #666; "
-                "font-size: 13px; border-radius: 6px;"
-            )
 
         if self._playing:
             self._playing = False
-            self._btn_play.setText("▶")
+            self._set_play_button_icon(False)
             self.preview_stopped.emit()
 
     def reset(self) -> None:
         """Stop playback and reset all state."""
         self.stop()
         self._position = 0.0
+        self.position_changed.emit(self._position)
         self._duration = 120.0
         self._loop_start = 0.0
         self._loop_end = 0.0
@@ -506,6 +518,10 @@ class PreviewWidget(QWidget):
     def is_playing(self) -> bool:
         return self._playing
 
+    def get_current_position(self) -> float:
+        """Return current preview playback position in seconds."""
+        return self._position
+
     # ==================================================================
     # SLOTS
     # ==================================================================
@@ -517,6 +533,7 @@ class PreviewWidget(QWidget):
     @pyqtSlot(float)
     def _on_position(self, pos: float) -> None:
         self._position = pos
+        self.position_changed.emit(self._position)
         self._lbl_time.setText(self._fmt(pos))
         if self._duration > 0 and not self._seek_slider.isSliderDown():
             pct = int((pos / self._duration) * 1000)
@@ -545,7 +562,7 @@ class PreviewWidget(QWidget):
             return
 
         self._playing = False
-        self._btn_play.setText("▶")
+        self._set_play_button_icon(False)
         self.preview_stopped.emit()
 
     @pyqtSlot()
@@ -568,6 +585,7 @@ class PreviewWidget(QWidget):
     def _seek_relative(self, delta: float) -> None:
         new_pos = max(0.0, min(self._position + delta, self._duration))
         self._position = new_pos
+        self.position_changed.emit(self._position)
         if self._playing:
             self._relaunch(new_pos)
         else:
@@ -579,13 +597,27 @@ class PreviewWidget(QWidget):
     def _on_seek_released(self) -> None:
         pct = self._seek_slider.value() / 1000.0
         self._position = pct * self._duration
+        self.position_changed.emit(self._position)
         self._lbl_time.setText(self._fmt(self._position))
-        if self._resume_after_seek:
+        if self._playing or self._resume_after_seek:
             self._relaunch(self._position)
         self._resume_after_seek = False
 
     def _on_seek_pressed(self) -> None:
         self._resume_after_seek = self._playing
+
+    def _on_seek_value_changed(self, value: int) -> None:
+        target = (value / 1000.0) * self._duration
+        self._lbl_time.setText(self._fmt(target))
+        if self._seek_slider.isSliderDown():
+            return
+
+        # Clicking directly on the timeline groove may not set slider-down state.
+        # Seek immediately so click-to-seek behaves as expected.
+        if self._playing and abs(target - self._position) >= 0.25:
+            self._position = target
+            self.position_changed.emit(self._position)
+            self._relaunch(self._position)
 
     def _relaunch(self, start_time: float = 0.0) -> None:
         if self._video_path and self._audio_path:

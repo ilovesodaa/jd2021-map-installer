@@ -38,7 +38,7 @@ class SyncRefinementWidget(QWidget):
     """Audio/video offset adjustment + embedded FFplay preview frame."""
 
     # Signals
-    offset_changed = pyqtSignal(float)       # combined offset in ms
+    offsets_changed = pyqtSignal(float, float)  # (audio_ms, video_ms)
     preview_requested = pyqtSignal(bool)      # True = start, False = stop
     apply_requested = pyqtSignal(float, float) # (audio_ms, video_ms) to apply
     pad_audio_requested = pyqtSignal()
@@ -52,6 +52,10 @@ class SyncRefinementWidget(QWidget):
     # ------------------------------------------------------------------
     # UI
     # ------------------------------------------------------------------
+
+    def _set_preview_icon(self, playing: bool) -> None:
+        text = "Stop" if playing else "Preview"
+        self._btn_preview.setText(text)
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -78,6 +82,7 @@ class SyncRefinementWidget(QWidget):
 
         # Video offset toggle + spin
         self._video_check = QCheckBox("Video Offset (ms):")
+        self._video_check.setObjectName("videoOffsetCheck")
         self._video_check.setToolTip("Enable to override the engine's videoStartTime")
         self._video_check.toggled.connect(self._on_video_toggle)
         offsets_row.addWidget(self._video_check)
@@ -98,29 +103,35 @@ class SyncRefinementWidget(QWidget):
         self._audio_buttons = []
         self._video_buttons = []
         inc_row_audio = QHBoxLayout()
-        inc_row_audio.addWidget(QLabel("Adj Audio:"))
+        inc_row_audio.setSpacing(4)
+        audio_label = QLabel("Adj Audio:")
+        audio_label.setMinimumWidth(70)
+        inc_row_audio.addWidget(audio_label)
         
         for delta in [-1000.0, -100.0, -10.0, -1.0, 1.0, 10.0, 100.0, 1000.0]:
             btn = QPushButton(f"{delta:+.0f}")
-            btn.setFixedWidth(45)
-            btn.setStyleSheet("font-size: 10px; padding: 2px;")
+            btn.setMinimumWidth(50)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            btn.setProperty("syncAdjustButton", True)
             btn.clicked.connect(lambda _, d=delta: self._adjust_audio(d))
-            inc_row_audio.addWidget(btn)
+            inc_row_audio.addWidget(btn, 1)
             self._audio_buttons.append(btn)
-        inc_row_audio.addStretch()
         group_layout.addLayout(inc_row_audio)
 
         inc_row_video = QHBoxLayout()
-        inc_row_video.addWidget(QLabel("Adj Video:"))
+        inc_row_video.setSpacing(4)
+        video_label = QLabel("Adj Video:")
+        video_label.setMinimumWidth(70)
+        inc_row_video.addWidget(video_label)
         for delta in [-1000.0, -100.0, -10.0, -1.0, 1.0, 10.0, 100.0, 1000.0]:
             btn = QPushButton(f"{delta:+.0f}")
-            btn.setFixedWidth(45)
-            btn.setStyleSheet("font-size: 10px; padding: 2px;")
+            btn.setMinimumWidth(50)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            btn.setProperty("syncAdjustButton", True)
             btn.clicked.connect(lambda _, d=delta: self._adjust_video(d))
-            inc_row_video.addWidget(btn)
+            inc_row_video.addWidget(btn, 1)
             self._video_buttons.append(btn)
-            
-        inc_row_video.addStretch()
+
         group_layout.addLayout(inc_row_video)
 
 
@@ -133,8 +144,9 @@ class SyncRefinementWidget(QWidget):
         # -- Preview frame ---------------------------------------------------
         preview_row = QHBoxLayout()
 
-        self._btn_preview = QPushButton("▶  Preview")
+        self._btn_preview = QPushButton("Preview")
         self._btn_preview.setObjectName("btn_preview")
+        self._set_preview_icon(False)
         self._btn_preview.setCheckable(True)
         self._btn_preview.setToolTip("Start/stop the FFplay preview window")
         self._btn_preview.clicked.connect(self._on_preview_toggled)
@@ -150,7 +162,7 @@ class SyncRefinementWidget(QWidget):
         self._btn_sync_beatgrid.clicked.connect(self._on_sync_beatgrid)
         preview_row.addWidget(self._btn_sync_beatgrid)
 
-        self._btn_apply = QPushButton("✔  Apply Offset")
+        self._btn_apply = QPushButton("Apply Offset")
         self._btn_apply.setObjectName("btn_apply_offset")
         self._btn_apply.setToolTip("Commit the combined offset to the current map data")
         self._btn_apply.clicked.connect(self._on_apply)
@@ -188,8 +200,9 @@ class SyncRefinementWidget(QWidget):
         self._video_spin.valueChanged.connect(self._update_combined)
 
     def _update_combined(self) -> None:
-        combined = self._audio_spin.value() + self._video_spin.value()
-        self.offset_changed.emit(combined)
+        audio_ms = self._audio_spin.value()
+        video_ms = self._video_spin.value()
+        self.offsets_changed.emit(audio_ms, video_ms)
 
     def _adjust_audio(self, delta: float) -> None:
         self._audio_spin.setValue(self._audio_spin.value() + delta)
@@ -206,6 +219,58 @@ class SyncRefinementWidget(QWidget):
     def _on_video_toggle(self, checked: bool) -> None:
         self._video_spin.setEnabled(checked)
         self._update_combined()
+
+    def get_audio_offset(self) -> float:
+        """Return current audio offset (ms)."""
+        return self._audio_spin.value()
+
+    def get_video_offset(self) -> float:
+        """Return current video offset (ms)."""
+        return self._video_spin.value()
+
+    def get_offsets(self) -> tuple[float, float]:
+        """Return (audio_ms, video_ms)."""
+        return self.get_audio_offset(), self.get_video_offset()
+
+    def set_video_override(
+        self,
+        enabled: bool,
+        *,
+        lock_toggle: bool = False,
+        force_spin_enabled: Optional[bool] = None,
+    ) -> None:
+        """Public API to control video override UI state without private-field access."""
+        self._video_check.blockSignals(True)
+        self._video_check.setChecked(enabled)
+        self._video_check.setEnabled(not lock_toggle)
+        self._video_check.blockSignals(False)
+
+        if force_spin_enabled is None:
+            self._video_spin.setEnabled(enabled)
+        else:
+            self._video_spin.setEnabled(force_spin_enabled)
+        self._update_combined()
+
+    def apply_profile(self, profile_name: str) -> None:
+        """Apply readjust profile behavior to sync controls."""
+        profile = profile_name.strip().lower()
+
+        if profile == "ipk":
+            self.set_audio_editable(False)
+            self.set_video_editable(True)
+            self.set_video_override(True, lock_toggle=True, force_spin_enabled=True)
+            return
+
+        if profile in {"fetch_html", "fetch-html", "fetchhtml"}:
+            self.set_audio_editable(True)
+            self.set_video_editable(False)
+            self.set_video_override(False, lock_toggle=True, force_spin_enabled=False)
+            return
+
+        # generic/default
+        self.set_audio_editable(True)
+        self.set_video_editable(True)
+        self.set_video_override(self._video_check.isChecked(), lock_toggle=False)
 
     def set_ipk_mode(self, is_ipk: bool) -> None:
         """Disable audio padding/trimming for IPK sources."""
@@ -241,14 +306,14 @@ class SyncRefinementWidget(QWidget):
             self._nav_label.setText(label_text)
 
     def _on_preview_toggled(self, checked: bool) -> None:
-        self._btn_preview.setText("⏹  Stop" if checked else "▶  Preview")
+        self._set_preview_icon(checked)
         self.preview_requested.emit(checked)
 
     def set_preview_state(self, playing: bool) -> None:
         """Update the preview button state from outside."""
         self._btn_preview.blockSignals(True)
         self._btn_preview.setChecked(playing)
-        self._btn_preview.setText("⏹  Stop" if playing else "▶  Preview")
+        self._set_preview_icon(playing)
         self._btn_preview.blockSignals(False)
 
     def _on_apply(self) -> None:
@@ -270,8 +335,11 @@ class SyncRefinementWidget(QWidget):
         self._audio_spin.setValue(audio_ms)
         self._video_spin.setValue(video_ms)
         self._video_check.setChecked(video_ms != 0.0)
+        self._update_combined()
 
     def reset(self) -> None:
         """Reset both spinboxes to zero."""
         self._audio_spin.setValue(0.0)
         self._video_spin.setValue(0.0)
+        self._video_check.setChecked(False)
+        self._update_combined()

@@ -11,7 +11,7 @@ import logging
 from typing import Optional
 
 from PyQt6.QtCore import pyqtSignal, QObject
-from PyQt6.QtGui import QFont, QTextCursor
+from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import QPlainTextEdit, QVBoxLayout, QWidget
 
 
@@ -51,19 +51,12 @@ class LogConsoleWidget(QWidget):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
+        self.setObjectName("logConsoleWidget")
 
         self._text_edit = QPlainTextEdit()
+        self._text_edit.setObjectName("logConsoleTextEdit")
         self._text_edit.setReadOnly(True)
         self._text_edit.setPlaceholderText("Log output will appear here…")
-
-        font = QFont("Consolas", 9)
-        font.setStyleHint(QFont.StyleHint.Monospace)
-        self._text_edit.setFont(font)
-
-        # Style matches VS Code / typical dark terminals visually
-        self._text_edit.setStyleSheet(
-            "QPlainTextEdit { background-color: #1e1e1e; color: #cccccc; }"
-        )
 
         root.addWidget(self._text_edit)
 

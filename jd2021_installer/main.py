@@ -6,11 +6,16 @@ Creates the PyQt6 application, initializes logging, and shows the main window.
 from __future__ import annotations
 
 import logging
+import json
 import sys
+from pathlib import Path
 
 from PyQt6.QtWidgets import QApplication
 
+from jd2021_installer.core.config import AppConfig
 from jd2021_installer.core.logging_config import apply_log_detail
+from jd2021_installer.core.theme import load_theme_stylesheet
+from jd2021_installer.utils.icon_gen import ensure_default_icons
 from jd2021_installer.ui.main_window import MainWindow
 
 
@@ -28,13 +33,30 @@ def setup_logging(log_detail_level: str = "user") -> None:
     apply_log_detail(log_detail_level)
 
 
+def load_startup_config(project_root: Path) -> AppConfig:
+    """Load persisted config for startup concerns (like theme)."""
+    settings_file = project_root / "installer_settings.json"
+    if not settings_file.exists():
+        return AppConfig()
+
+    try:
+        data = json.loads(settings_file.read_text(encoding="utf-8"))
+        return AppConfig(**data)
+    except Exception:
+        return AppConfig()
+
+
 def main() -> int:
     """Application entry point."""
     setup_logging()
+    project_root = Path(__file__).resolve().parent.parent
+    ensure_default_icons(project_root)
+    startup_config = load_startup_config(project_root)
 
     app = QApplication([sys.argv[0]])
     app.setApplicationName("JD2021 Map Installer")
     app.setApplicationVersion("2.0.0")
+    app.setStyleSheet(load_theme_stylesheet(startup_config.theme, project_root))
 
     window = MainWindow()
     window.show()

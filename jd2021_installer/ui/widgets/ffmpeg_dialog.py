@@ -108,7 +108,7 @@ class FFmpegInstallDialog(QDialog):
         super().__init__(parent)
         self._target_dir = target_dir
         self.setWindowTitle("Installing FFmpeg")
-        self.setFixedSize(400, 150)
+        self.setMinimumSize(420, 180)
         self.setModal(True)
         self._build_ui()
 

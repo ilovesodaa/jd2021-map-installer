@@ -22,7 +22,7 @@ class BundleSelectDialog(QDialog):
     def __init__(self, ipk_name: str, maps_found: List[str], parent=None):
         super().__init__(parent)
         self.setWindowTitle("Bundle IPK Detected")
-        self.resize(300, 400)
+        self.setMinimumSize(360, 420)
 
         self._selected_maps = []
 
