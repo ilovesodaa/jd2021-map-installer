@@ -188,23 +188,39 @@ def _parse_musictrack_from_reader(r: BinaryReader) -> MusicTrackStructure:
     fade_out_duration = 0.0
     fade_out_type = 0
 
-    if is_older:
-        preview_entry = r.f32()
-        preview_loop_start = r.f32()
-        preview_loop_end = r.f32()
-        fade_in_duration = r.f32()
-        fade_in_type = r.u32()
-        fade_out_duration = r.f32()
-        fade_out_type = r.u32()
+    # Some console binaries carry preview/fade values even when ms_unk1 is not 0x6C.
+    # Parse the optional trailing block whenever enough bytes remain.
+    if r.remaining >= 32:
+        cand_preview_entry = r.f32()
+        cand_preview_loop_start = r.f32()
+        cand_preview_loop_end = r.f32()
+        cand_fade_in_duration = r.f32()
+        cand_fade_in_type = r.u32()
+        cand_fade_out_duration = r.f32()
+        cand_fade_out_type = r.u32()
         r.u32()  # unknown/discarded
 
-        # Sanity-check preview fields
-        for pval in (preview_entry, preview_loop_start, preview_loop_end):
-            if pval < 0 or pval > 10000:
-                preview_entry = 0.0
-                preview_loop_start = 0.0
-                preview_loop_end = 0.0
-                break
+        # Sanity-check preview fields; reject garbage floats from unsupported layouts.
+        valid_preview = all(0.0 <= pval <= 10000.0 for pval in (
+            cand_preview_entry,
+            cand_preview_loop_start,
+            cand_preview_loop_end,
+        ))
+        if valid_preview:
+            preview_entry = cand_preview_entry
+            preview_loop_start = cand_preview_loop_start
+            preview_loop_end = cand_preview_loop_end
+            fade_in_duration = cand_fade_in_duration
+            fade_in_type = cand_fade_in_type
+            fade_out_duration = cand_fade_out_duration
+            fade_out_type = cand_fade_out_type
+        elif is_older:
+            logger.debug(
+                "Discarded invalid preview fields from musictrack block: %.3f %.3f %.3f",
+                cand_preview_entry,
+                cand_preview_loop_start,
+                cand_preview_loop_end,
+            )
 
     return MusicTrackStructure(
         markers=markers,

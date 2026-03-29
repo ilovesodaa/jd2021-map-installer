@@ -87,11 +87,17 @@ def _write_musictrack_trk(target: Path, name: str, mt: MusicTrackStructure, vst:
         for s in mt.sections
     )
 
-    # Sanitize preview fields
-    num_markers = len(mt.markers)
-    pe = mt.preview_entry if 0 <= mt.preview_entry <= num_markers else 0.0
-    pls = mt.preview_loop_start if 0 <= mt.preview_loop_start <= num_markers else 0.0
-    ple = mt.preview_loop_end if 0 <= mt.preview_loop_end <= num_markers else 0.0
+    # Preview values in legacy console conversions may be absent (all zero).
+    # Match legacy tooling behavior by deriving a sane loop from endBeat.
+    pe = float(mt.preview_entry) if mt.preview_entry >= 0 else 0.0
+    pls = float(mt.preview_loop_start) if mt.preview_loop_start >= 0 else 0.0
+    ple = float(mt.preview_loop_end) if mt.preview_loop_end >= 0 else 0.0
+
+    if pe == 0.0 and pls == 0.0 and ple == 0.0 and mt.end_beat > 0:
+        midpoint = float(mt.end_beat // 2)
+        pe = midpoint
+        pls = midpoint
+        ple = float(mt.end_beat)
 
     content = (
         f"structure = {{ MusicTrackStructure = {{ markers = {{ {markers} }}, "

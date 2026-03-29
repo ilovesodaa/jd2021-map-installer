@@ -224,3 +224,40 @@ class TestNormalizerMusicTrack:
         
         assert sync.video_ms == -2658.0
         assert sync.audio_ms == 0.0
+
+    def test_preview_loop_values_are_merged_from_source_trk(self, tmp_path: Path) -> None:
+        """Preview loop fields should come from source .trk when CKD leaves them at zero."""
+        import json
+
+        mt_data = {
+            "COMPONENTS": [{
+                "trackData": {
+                    "structure": {
+                        "markers": [0, 2400, 4800, 7200],
+                        "signatures": [{"beats": 4, "marker": 0}],
+                        "sections": [{"sectionType": 0, "marker": 0}],
+                        "startBeat": 0,
+                        "endBeat": 3,
+                        "videoStartTime": 0.0,
+                        "previewEntry": 0,
+                        "previewLoopStart": 0,
+                        "previewLoopEnd": 0,
+                        "volume": 0.0,
+                    }
+                }
+            }]
+        }
+
+        (tmp_path / "TestMap_musictrack.tpl.ckd").write_text(json.dumps(mt_data), encoding="utf-8")
+        audio_dir = tmp_path / "Audio"
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        (audio_dir / "TestMap.trk").write_text(
+            "videoStartTime = 0.000000, previewEntry = 287, previewLoopStart = 287, previewLoopEnd = 574",
+            encoding="utf-8",
+        )
+
+        result = normalize(tmp_path, codename="TestMap")
+
+        assert result.music_track.preview_entry == 287
+        assert result.music_track.preview_loop_start == 287
+        assert result.music_track.preview_loop_end == 574
