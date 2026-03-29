@@ -48,6 +48,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QAbstractItemView,
     QFileDialog,
+    QProgressDialog,
 )
 
 from jd2021_installer.core.config import AppConfig
@@ -805,10 +806,13 @@ class MainWindow(QMainWindow):
         root.addWidget(QLabel("Choose one or more maps from the index, or browse source folder manually."))
 
         list_widget = QListWidget(dialog)
-        list_widget.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+        list_widget.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        list_widget.itemChanged.connect(lambda _item: _refresh_selection_count())
         for entry in sorted(entries, key=lambda e: e.codename.lower()):
             label = f"{entry.codename}  [{entry.source_mode}]"
             item = QListWidgetItem(label)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked)
             item.setData(Qt.ItemDataRole.UserRole, entry.codename)
             item.setToolTip(entry.source_root)
             list_widget.addItem(item)
@@ -816,12 +820,32 @@ class MainWindow(QMainWindow):
 
         btns = QHBoxLayout()
         btn_select_all = QPushButton("Select All")
-        btn_select_all.clicked.connect(list_widget.selectAll)
+        
+        def _set_all_checked(checked: bool) -> None:
+            state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+            for i in range(list_widget.count()):
+                list_widget.item(i).setCheckState(state)
+            _refresh_selection_count()
+
+        btn_select_all.clicked.connect(lambda: _set_all_checked(True))
         btns.addWidget(btn_select_all)
 
         btn_clear = QPushButton("Clear")
-        btn_clear.clicked.connect(list_widget.clearSelection)
+        btn_clear.clicked.connect(lambda: _set_all_checked(False))
         btns.addWidget(btn_clear)
+
+        count_label = QLabel()
+        btns.addWidget(count_label)
+
+        def _refresh_selection_count() -> None:
+            total = list_widget.count()
+            selected = 0
+            for i in range(total):
+                if list_widget.item(i).checkState() == Qt.CheckState.Checked:
+                    selected += 1
+            count_label.setText(f"{selected} of {total} selected")
+
+        _refresh_selection_count()
 
         btns.addStretch()
 
@@ -855,7 +879,9 @@ class MainWindow(QMainWindow):
             return
 
         selected_codes = {
-            str(item.data(Qt.ItemDataRole.UserRole)) for item in list_widget.selectedItems()
+            str(list_widget.item(i).data(Qt.ItemDataRole.UserRole))
+            for i in range(list_widget.count())
+            if list_widget.item(i).checkState() == Qt.CheckState.Checked
         }
         if not selected_codes:
             QMessageBox.information(self, "No Map Selected", "Select at least one map or use Browse Folder.")
@@ -864,11 +890,24 @@ class MainWindow(QMainWindow):
         selected_entries = [e for e in entries if e.codename in selected_codes]
         loaded_maps: list[NormalizedMapData] = []
         failed: list[str] = []
-        for entry in selected_entries:
+        progress = QProgressDialog("Loading selected maps for readjust...", "Cancel", 0, len(selected_entries), self)
+        progress.setWindowTitle("Loading Readjust Maps")
+        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+
+        for index, entry in enumerate(selected_entries, start=1):
+            progress.setLabelText(f"Loading {entry.codename} ({index}/{len(selected_entries)})")
+            QApplication.processEvents()
+            if progress.wasCanceled():
+                break
             try:
                 loaded_maps.append(self._load_readjust_map_from_index(entry))
             except Exception as exc:
                 failed.append(f"{entry.codename}: {exc}")
+            progress.setValue(index)
+
+        progress.close()
 
         if failed:
             QMessageBox.warning(
@@ -906,18 +945,54 @@ class MainWindow(QMainWindow):
             )
 
     def _build_minimal_readjust_map(self, entry: ReadjustIndexEntry) -> NormalizedMapData:
+        source_root = Path(entry.source_root)
+        discovered_audio, discovered_video = self._discover_readjust_media_paths(source_root, entry.codename)
+        audio_path = discovered_audio or Path(entry.source_audio)
+        video_path = discovered_video or Path(entry.source_video)
+
         map_data = NormalizedMapData(
             codename=entry.codename,
             song_desc=SongDescription(map_name=entry.codename, title=entry.codename),
             music_track=MusicTrackStructure(),
             media=MapMedia(
-                audio_path=Path(entry.source_audio),
-                video_path=Path(entry.source_video),
+                audio_path=audio_path,
+                video_path=video_path,
             ),
             sync=MapSync(),
-            source_dir=Path(entry.source_root),
+            source_dir=source_root,
         )
         return map_data
+
+    def _discover_readjust_media_paths(self, source_root: Path, codename: str) -> tuple[Optional[Path], Optional[Path]]:
+        if not source_root.is_dir():
+            return None, None
+
+        codename_low = codename.lower()
+        audio_matches: list[Path] = []
+        video_matches: list[Path] = []
+
+        try:
+            for path in source_root.rglob("*"):
+                if not path.is_file():
+                    continue
+                lower_name = path.name.lower()
+                if lower_name.endswith(".webm") and "mappreview" not in lower_name and "videopreview" not in lower_name:
+                    video_matches.append(path)
+                elif lower_name.endswith(".ogg") or lower_name.endswith(".wav") or lower_name.endswith(".wav.ckd"):
+                    if "audiopreview" not in lower_name:
+                        audio_matches.append(path)
+        except OSError:
+            return None, None
+
+        def _pick_best(candidates: list[Path]) -> Optional[Path]:
+            if not candidates:
+                return None
+            codename_hits = [p for p in candidates if codename_low in p.as_posix().lower().split("/") or p.name.lower().startswith(codename_low)]
+            if codename_hits:
+                return sorted(codename_hits)[0]
+            return sorted(candidates)[0]
+
+        return _pick_best(audio_matches), _pick_best(video_matches)
 
     def _resolve_target_map_dir(self, codename: str) -> Path:
         if not self._config.game_directory:
@@ -939,6 +1014,17 @@ class MainWindow(QMainWindow):
         except Exception:
             map_data = self._build_minimal_readjust_map(entry)
 
+        discovered_audio, discovered_video = self._discover_readjust_media_paths(source_root, entry.codename)
+        if discovered_audio is not None:
+            map_data.media.audio_path = discovered_audio
+        elif not map_data.media.audio_path or not map_data.media.audio_path.exists():
+            map_data.media.audio_path = Path(entry.source_audio)
+
+        if discovered_video is not None:
+            map_data.media.video_path = discovered_video
+        elif not map_data.media.video_path or not map_data.media.video_path.exists():
+            map_data.media.video_path = Path(entry.source_video)
+
         installed_trk = Path(entry.installed_trk)
         vst = read_video_start_time_from_trk(installed_trk)
         if vst is None:
@@ -951,8 +1037,9 @@ class MainWindow(QMainWindow):
         is_ipk = "ipk" in mode_low
         is_fetch_html = ("fetch" in mode_low) or ("html" in mode_low)
 
-        default_audio_ms = entry.last_audio_ms if abs(entry.last_audio_ms) > 0.0001 else map_data.sync.audio_ms
-        default_video_ms = entry.last_video_ms if abs(entry.last_video_ms) > 0.0001 else (vst * 1000.0)
+        # Always trust the persisted index values (including legitimate 0.0 values).
+        default_audio_ms = float(entry.last_audio_ms)
+        default_video_ms = float(entry.last_video_ms)
 
         if is_ipk:
             map_data.sync.audio_ms = 0.0
@@ -1627,6 +1714,7 @@ class MainWindow(QMainWindow):
         self._current_map.video_start_time_override = (video_ms / 1000.0)
         self._pending_offsets[self._current_map.codename] = (audio_ms, video_ms)
         is_readjust_index_mode = bool(getattr(self._current_map, "_readjust_indexed", False))
+        self._readjust_pending_updates.clear()
 
         # Bundle parity: apply reviewed offsets to every map in the bundle, not only the active one.
         if len(self._nav_maps) > 1:
@@ -1666,14 +1754,12 @@ class MainWindow(QMainWindow):
                     )
                 )
 
-            self._readjust_pending_updates.clear()
             for map_data in self._nav_maps:
                 map_audio_ms, map_video_ms = self._pending_offsets.get(
                     map_data.codename,
                     (map_data.sync.audio_ms, map_data.sync.video_ms),
                 )
-                if bool(getattr(map_data, "_readjust_indexed", False)):
-                    self._readjust_pending_updates.append((map_data.codename, map_audio_ms, map_video_ms))
+                self._readjust_pending_updates.append((map_data.codename, map_audio_ms, map_video_ms))
 
             if any(bool(getattr(m, "_readjust_indexed", False)) for m in self._nav_maps):
                 worker = ApplyReadjustOffsetsBatchWorker(entries=readjust_entries, config=self._config)
@@ -1732,6 +1818,7 @@ class MainWindow(QMainWindow):
                 a_offset=audio_ms / 1000.0,
                 config=self._config,
             )
+            self._readjust_pending_updates = [(self._current_map.codename, audio_ms, video_ms)]
         thread = QThread()
         worker.moveToThread(thread)
 
