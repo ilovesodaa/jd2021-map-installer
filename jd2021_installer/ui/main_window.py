@@ -52,6 +52,7 @@ from PyQt6.QtWidgets import (
 )
 
 from jd2021_installer.core.config import AppConfig
+from jd2021_installer.core.logging_config import apply_log_detail, get_file_log_level
 from jd2021_installer.core.models import (
     MapMedia,
     MapSync,
@@ -143,6 +144,7 @@ class MainWindow(QMainWindow):
 
         # -- Application state ------------------------------------------------
         self._config = self._load_settings()
+        self._config.log_detail_level = apply_log_detail(self._config.log_detail_level)
         self._current_map: Optional[NormalizedMapData] = None
         self._current_target: Optional[str] = None
         self._current_mode: str = "Fetch (Codename)"
@@ -163,6 +165,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1060, 800)
 
         self._build_ui()
+        self._config.log_detail_level = apply_log_detail(self._config.log_detail_level)
         self._wire_signals()
 
         # Phase 4.4 Quickstart
@@ -804,8 +807,10 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(self._config, self)
         if dialog.exec():
             self._config = dialog.get_config()
+            self._config.log_detail_level = apply_log_detail(self._config.log_detail_level)
             self._save_settings()
             self._config_panel.set_video_quality(self._config.video_quality)
+            self.append_log(f"Logging detail profile set to '{self._config.log_detail_level}'.")
             self._set_status("Settings saved.")
 
     def _on_readjust(self) -> None:
@@ -1259,7 +1264,7 @@ class MainWindow(QMainWindow):
         # Wire signals
         thread.started.connect(worker.run)
         worker.progress.connect(self._feedback_panel.set_progress)
-        worker.status.connect(self.append_log)
+        worker.status.connect(self._on_status_updated)
         worker.error.connect(self._on_extract_error)
         worker.finished.connect(lambda data: self._on_extract_finished(data))
         worker.finished.connect(thread.quit)
@@ -1443,8 +1448,7 @@ class MainWindow(QMainWindow):
 
     def _on_status_updated(self, msg: str) -> None:
         """Map backend status messages to checklist steps for visual feedback."""
-        # Main log console still gets everything
-        logger.info(msg)
+        self._log_with_level(msg, self._classify_status_level(msg))
         
         # Fix for Batch mode status strings e.g. "[1/10] Normalize assets (Koi)" or "[Koi] Extract map data"
         clean_msg = msg
@@ -2179,7 +2183,6 @@ class MainWindow(QMainWindow):
 
         thread.started.connect(worker.run)
         worker.progress.connect(self._feedback_panel.set_progress)
-        worker.status.connect(self.append_log)
         worker.status.connect(self._on_status_updated)
         worker.discovered_maps.connect(self._feedback_panel.set_checklist_steps)
         
@@ -2230,13 +2233,10 @@ class MainWindow(QMainWindow):
         log_path = logs_dir / f"install_{codename}_{timestamp}.log"
         
         self._file_logger_handler = logging.FileHandler(str(log_path), encoding="utf-8")
-        file_fmt = logging.Formatter(
-            "%(asctime)s [%(levelname)-5s] %(name)s: %(message)s",
-            datefmt="%H:%M:%S"
-        )
-        self._file_logger_handler.setLevel(logging.DEBUG)
-        self._file_logger_handler.setFormatter(file_fmt)
+        self._file_logger_handler.setLevel(get_file_log_level(self._config.log_detail_level))
         logging.getLogger("jd2021").addHandler(self._file_logger_handler)
+        self._config.log_detail_level = apply_log_detail(self._config.log_detail_level)
+        logger.info("Install log file: %s", log_path)
 
     def _stop_file_logging(self) -> None:
         """Removes the active FileHandler and cleanly closes handles."""
@@ -2250,13 +2250,29 @@ class MainWindow(QMainWindow):
 
     # -- Public convenience methods (kept for compatibility) ----------------
 
+    def _log_with_level(self, text: str, level: int) -> None:
+        if level >= logging.ERROR:
+            logger.error(text)
+        elif level >= logging.WARNING:
+            logger.warning(text)
+        elif level <= logging.DEBUG:
+            logger.debug(text)
+        else:
+            logger.info(text)
+
+    def _classify_status_level(self, text: str) -> int:
+        lowered = text.strip().lower()
+        if lowered.startswith("error") or " failed" in lowered or lowered.startswith("failed"):
+            return logging.ERROR
+        if lowered.startswith("warning") or " warning" in lowered:
+            return logging.WARNING
+        if lowered.startswith("debug"):
+            return logging.DEBUG
+        return logging.INFO
+
     def append_log(self, text: str) -> None:
         """Append text to the GUI log console."""
-        # Worker status messages are already logged via _on_status_updated.
-        is_worker_status = text in PIPELINE_STEPS or (text.startswith("[") and "]" in text)
-        if not is_worker_status:
-            logger.info(text)
-        self._log_console.append_log(text)
+        self._log_with_level(text, self._classify_status_level(text))
 
     def set_progress(self, value: int) -> None:
         """Set the progress bar value (delegated to ProgressLogWidget)."""

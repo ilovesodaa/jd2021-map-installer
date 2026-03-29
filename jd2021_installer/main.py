@@ -10,20 +10,22 @@ import sys
 
 from PyQt6.QtWidgets import QApplication
 
+from jd2021_installer.core.logging_config import apply_log_detail
 from jd2021_installer.ui.main_window import MainWindow
 
 
-def setup_logging() -> None:
+def setup_logging(log_detail_level: str = "user") -> None:
     """Configure root logger for the application."""
     root = logging.getLogger("jd2021")
     if root.handlers:
+        apply_log_detail(log_detail_level)
         return
-    root.setLevel(logging.DEBUG)
+    root.setLevel(logging.INFO)
 
     handler = logging.StreamHandler(sys.stdout)
-    handler.setLevel(logging.INFO)
     handler.setFormatter(logging.Formatter("%(message)s"))
     root.addHandler(handler)
+    apply_log_detail(log_detail_level)
 
 
 def main() -> int:

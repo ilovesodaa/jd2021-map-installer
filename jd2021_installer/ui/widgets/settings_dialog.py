@@ -36,7 +36,7 @@ class SettingsDialog(QDialog):
     def __init__(self, config: AppConfig, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Installer Settings")
-        self.setFixedSize(520, 460)
+        self.setFixedSize(520, 500)
         self.setModal(True)
         
         # We work on a copy of the config, and only return it if Save is clicked.
@@ -131,6 +131,24 @@ class SettingsDialog(QDialog):
         )
         layout.addWidget(self.cb_quickstart)
 
+        # log_detail_level
+        log_row = QHBoxLayout()
+        log_label = QLabel("Log detail level:")
+        log_row.addWidget(log_label)
+
+        self.combo_log_detail = QComboBox()
+        self.combo_log_detail.addItems(["quiet", "user", "detailed", "developer"])
+        self.combo_log_detail.setCurrentText(self._config.log_detail_level)
+        self.combo_log_detail.setToolTip(
+            "quiet: show warnings/errors only\n"
+            "user: normal user-facing progress and issues\n"
+            "detailed: normal output + debug details in install log files\n"
+            "developer: full debug output in UI and logs"
+        )
+        log_row.addWidget(self.combo_log_detail)
+        log_row.addStretch()
+        layout.addLayout(log_row)
+
         # video_quality
         quality_row = QHBoxLayout()
         quality_label = QLabel("Default video quality:")
@@ -195,6 +213,7 @@ class SettingsDialog(QDialog):
         self._config.locked_status_behavior = self.combo_locked_status.currentText()
         self._config.show_preflight_success_popup = self.cb_preflight_popup.isChecked()
         self._config.show_quickstart_on_launch = self.cb_quickstart.isChecked()
+        self._config.log_detail_level = self.combo_log_detail.currentText()
         self._config.video_quality = self.combo_quality.currentText()
         self._config.discord_channel_url = self.txt_discord_url.text().strip()
         
