@@ -332,6 +332,74 @@ def reprocess_audio(
         extract_amb_clips(map_data.cinematic_tape, media.audio_path, target_dir, codename, config)
 
 
+def _update_trk_video_start_time(trk_path: Path, value_seconds: float) -> None:
+    """Patch videoStartTime in an existing .trk file."""
+    if not trk_path.exists():
+        raise RuntimeError(f"Missing .trk file for readjust apply: {trk_path}")
+
+    content = trk_path.read_text(encoding="utf-8")
+    pattern = r"videoStartTime\s*=\s*([-+]?\d*\.?\d+)"
+    replacement = f"videoStartTime = {value_seconds:.6f}"
+    updated, count = re.subn(pattern, replacement, content, count=1)
+    if count == 0:
+        raise RuntimeError(f"Could not find videoStartTime in {trk_path}")
+    trk_path.write_text(updated, encoding="utf-8")
+
+
+def reprocess_audio_readjust(
+    map_data: NormalizedMapData,
+    target_dir: Path,
+    *,
+    a_offset: float,
+    v_override: float,
+    update_video: bool,
+    update_audio: bool,
+    config: Optional[AppConfig] = None,
+) -> None:
+    """Apply readjust offsets without rewriting full map config files.
+
+    This mode is used for readjust sessions restored from index entries where
+    source CKD payloads may no longer be complete.
+    """
+    from jd2021_installer.installers.media_processor import (
+        convert_audio,
+        generate_intro_amb,
+        extract_amb_clips,
+    )
+
+    codename = map_data.codename
+    media = map_data.media
+
+    if update_video:
+        trk_path = target_dir / "Audio" / f"{codename}.trk"
+        _update_trk_video_start_time(trk_path, v_override)
+
+    if not update_audio:
+        return
+
+    if not media.audio_path or not media.audio_path.exists():
+        raise RuntimeError(
+            f"Audio source missing for '{codename}'. Cannot apply readjust audio offset."
+        )
+
+    convert_audio(media.audio_path, codename, target_dir, a_offset, config)
+
+    ogg_path = target_dir / "audio" / f"{codename}.ogg"
+    preroll = None
+    if map_data.music_track and map_data.music_track.markers:
+        from jd2021_installer.parsers.binary_ckd import calculate_marker_preroll
+
+        preroll = calculate_marker_preroll(
+            map_data.music_track.markers,
+            map_data.music_track.start_beat,
+        )
+
+    generate_intro_amb(ogg_path, codename, target_dir, a_offset, v_override, preroll, config)
+
+    if map_data.cinematic_tape:
+        extract_amb_clips(map_data.cinematic_tape, media.audio_path, target_dir, codename, config)
+
+
 class ApplyAndFinishWorker(QObject):
     """Safely executes reprocess_audio(), clearing cache and finalizing offsets."""
 
@@ -410,6 +478,55 @@ class ApplyOffsetsBatchWorker(QObject):
             self.finished.emit(True)
         except Exception as e:
             logger.error("ApplyOffsetsBatch failed: %s\n%s", e, traceback.format_exc())
+            self.error.emit(str(e))
+            self.finished.emit(False)
+
+
+class ApplyReadjustOffsetsBatchWorker(QObject):
+    """Apply readjust offsets across one or more maps."""
+
+    progress = pyqtSignal(int)
+    status = pyqtSignal(str)
+    error = pyqtSignal(str)
+    finished = pyqtSignal(bool)
+
+    def __init__(
+        self,
+        entries: list[tuple[NormalizedMapData, Path, float, float, bool, bool]],
+        config: Optional[AppConfig] = None,
+        parent: Optional[QObject] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._entries = entries
+        self._config = config
+
+    def run(self) -> None:
+        try:
+            total = len(self._entries)
+            if total == 0:
+                self.finished.emit(True)
+                return
+
+            for idx, (map_data, target_dir, a_offset, v_override, update_video, update_audio) in enumerate(self._entries, start=1):
+                codename = map_data.codename
+                self.status.emit(f"[{codename}] Finalizing Offsets")
+                progress = int(((idx - 1) / total) * 100)
+                self.progress.emit(progress)
+                reprocess_audio_readjust(
+                    map_data,
+                    target_dir,
+                    a_offset=a_offset,
+                    v_override=v_override,
+                    update_video=update_video,
+                    update_audio=update_audio,
+                    config=self._config,
+                )
+
+            self.progress.emit(100)
+            self.status.emit("Sync offsets applied successfully.")
+            self.finished.emit(True)
+        except Exception as e:
+            logger.error("ApplyReadjustOffsetsBatch failed: %s\n%s", e, traceback.format_exc())
             self.error.emit(str(e))
             self.finished.emit(False)
 

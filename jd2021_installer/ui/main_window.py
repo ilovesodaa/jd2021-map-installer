@@ -41,10 +41,29 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QWidget,
     QLabel,
+    QDialog,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QAbstractItemView,
+    QFileDialog,
 )
 
 from jd2021_installer.core.config import AppConfig
-from jd2021_installer.core.models import NormalizedMapData
+from jd2021_installer.core.models import (
+    MapMedia,
+    MapSync,
+    MusicTrackStructure,
+    NormalizedMapData,
+    SongDescription,
+)
+from jd2021_installer.core.readjust_index import (
+    ReadjustIndexEntry,
+    prune_stale_entries,
+    read_video_start_time_from_trk,
+    update_offsets,
+    upsert_entry,
+)
 from jd2021_installer.ui.widgets import (
     ActionWidget,
     ConfigWidget,
@@ -63,6 +82,7 @@ from jd2021_installer.ui.workers.pipeline_workers import (
     InstallMapWorker,
     ApplyAndFinishWorker,
     ApplyOffsetsBatchWorker,
+    ApplyReadjustOffsetsBatchWorker,
 )
 
 logger = logging.getLogger("jd2021.ui.main_window")
@@ -118,6 +138,7 @@ class MainWindow(QMainWindow):
         self._nav_maps: list[NormalizedMapData] = []
         self._nav_index: int = 0
         self._pending_offsets: dict[str, tuple[float, float]] = {}
+        self._readjust_pending_updates: list[tuple[str, float, float]] = []
 
         # -- Window setup -----------------------------------------------------
         self.setWindowTitle("JD2021 Map Installer v2")
@@ -770,32 +791,243 @@ class MainWindow(QMainWindow):
             self._set_status("Settings saved.")
 
     def _on_readjust(self) -> None:
-        from PyQt6.QtWidgets import QFileDialog
-        from jd2021_installer.parsers.normalizer import normalize
-        folder = QFileDialog.getExistingDirectory(self, "Select map output directory to readjust offset")
-        if folder:
+        entries, pruned = prune_stale_entries()
+        if pruned:
+            self.append_log(
+                f"Readjust index auto-pruned {len(pruned)} stale entr{'y' if len(pruned) == 1 else 'ies'}."
+            )
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Select Maps for Offset Readjust")
+        dialog.resize(620, 420)
+        root = QVBoxLayout(dialog)
+        root.addWidget(QLabel("Choose one or more maps from the index, or browse source folder manually."))
+
+        list_widget = QListWidget(dialog)
+        list_widget.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+        for entry in sorted(entries, key=lambda e: e.codename.lower()):
+            label = f"{entry.codename}  [{entry.source_mode}]"
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, entry.codename)
+            item.setToolTip(entry.source_root)
+            list_widget.addItem(item)
+        root.addWidget(list_widget)
+
+        btns = QHBoxLayout()
+        btn_select_all = QPushButton("Select All")
+        btn_select_all.clicked.connect(list_widget.selectAll)
+        btns.addWidget(btn_select_all)
+
+        btn_clear = QPushButton("Clear")
+        btn_clear.clicked.connect(list_widget.clearSelection)
+        btns.addWidget(btn_clear)
+
+        btns.addStretch()
+
+        picked_folder: dict[str, Optional[str]] = {"value": None}
+
+        def _browse_fallback() -> None:
+            folder = QFileDialog.getExistingDirectory(dialog, "Select Source Folder for Readjust")
+            if folder:
+                picked_folder["value"] = folder
+                dialog.accept()
+
+        btn_browse = QPushButton("Browse Folder…")
+        btn_browse.clicked.connect(_browse_fallback)
+        btns.addWidget(btn_browse)
+
+        btn_load = QPushButton("Load Selected")
+        btn_load.clicked.connect(dialog.accept)
+        btns.addWidget(btn_load)
+
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.clicked.connect(dialog.reject)
+        btns.addWidget(btn_cancel)
+
+        root.addLayout(btns)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        if picked_folder["value"]:
+            self._load_readjust_from_folder(picked_folder["value"])
+            return
+
+        selected_codes = {
+            str(item.data(Qt.ItemDataRole.UserRole)) for item in list_widget.selectedItems()
+        }
+        if not selected_codes:
+            QMessageBox.information(self, "No Map Selected", "Select at least one map or use Browse Folder.")
+            return
+
+        selected_entries = [e for e in entries if e.codename in selected_codes]
+        loaded_maps: list[NormalizedMapData] = []
+        failed: list[str] = []
+        for entry in selected_entries:
             try:
-                map_data = normalize(folder)
-                self._current_map = map_data
-                self._current_target = folder
-                self._sync_refinement.setVisible(True)
-                
-                # Use calculated offsets from Normalizer
-                logger.info("Readjust: setting UI offsets: audio=%.1f, video=%.1f", 
-                            map_data.sync.audio_ms, map_data.sync.video_ms)
-                self._sync_refinement.set_offsets(
-                    audio_ms=map_data.sync.audio_ms, 
-                    video_ms=map_data.sync.video_ms
-                )
-                
-                is_ipk = bool(map_data.media.audio_path and map_data.media.audio_path.suffix.lower() == ".wav")
-                self._sync_refinement.set_ipk_mode(is_ipk=is_ipk)
-                self._set_preview_controls_ready(True)
-                
-                self.append_log(f"Loaded {map_data.codename} for offset readjustment.")
-                self._set_status(f"Readjusting offset for {map_data.codename}")
-            except Exception as e:
-                QMessageBox.warning(self, "Load Error", f"Failed to load map data:\n{e}")
+                loaded_maps.append(self._load_readjust_map_from_index(entry))
+            except Exception as exc:
+                failed.append(f"{entry.codename}: {exc}")
+
+        if failed:
+            QMessageBox.warning(
+                self,
+                "Readjust Load Warning",
+                "Some maps could not be loaded:\n\n" + "\n".join(failed),
+            )
+
+        if not loaded_maps:
+            return
+
+        self._activate_readjust_maps(loaded_maps)
+
+    def _load_readjust_from_folder(self, folder: str) -> None:
+        from jd2021_installer.parsers.normalizer import normalize
+
+        try:
+            map_data = normalize(folder)
+            setattr(map_data, "_readjust_profile", "generic")
+            setattr(map_data, "_readjust_update_audio", True)
+            setattr(map_data, "_readjust_update_video", True)
+            target_dir = self._resolve_target_map_dir(map_data.codename)
+            setattr(map_data, "_readjust_target_dir", target_dir)
+            self._activate_readjust_maps([map_data])
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Readjust Unavailable",
+                (
+                    "Readjust could not load this folder.\n\n"
+                    "Readjust requires valid source files for preview/apply.\n"
+                    "If sources were deleted after install, readjust is not available.\n\n"
+                    f"Details: {exc}"
+                ),
+            )
+
+    def _build_minimal_readjust_map(self, entry: ReadjustIndexEntry) -> NormalizedMapData:
+        map_data = NormalizedMapData(
+            codename=entry.codename,
+            song_desc=SongDescription(map_name=entry.codename, title=entry.codename),
+            music_track=MusicTrackStructure(),
+            media=MapMedia(
+                audio_path=Path(entry.source_audio),
+                video_path=Path(entry.source_video),
+            ),
+            sync=MapSync(),
+            source_dir=Path(entry.source_root),
+        )
+        return map_data
+
+    def _resolve_target_map_dir(self, codename: str) -> Path:
+        if not self._config.game_directory:
+            raise RuntimeError("Game directory not configured.")
+        game_dir = self._config.game_directory
+        while game_dir.name.lower() in ("world", "data"):
+            game_dir = game_dir.parent
+        return game_dir / "data" / "World" / "MAPS" / codename
+
+    def _load_readjust_map_from_index(self, entry: ReadjustIndexEntry) -> NormalizedMapData:
+        from jd2021_installer.parsers.normalizer import normalize
+
+        source_root = Path(entry.source_root)
+        if not source_root.is_dir():
+            raise RuntimeError("Source folder no longer exists.")
+
+        try:
+            map_data = normalize(source_root, codename=entry.codename, search_root=source_root)
+        except Exception:
+            map_data = self._build_minimal_readjust_map(entry)
+
+        installed_trk = Path(entry.installed_trk)
+        vst = read_video_start_time_from_trk(installed_trk)
+        if vst is None:
+            source_trk = source_root / "Audio" / f"{entry.codename}.trk"
+            vst = read_video_start_time_from_trk(source_trk)
+        if vst is None:
+            vst = map_data.sync.video_ms / 1000.0
+
+        mode_low = entry.source_mode.lower()
+        is_ipk = "ipk" in mode_low
+        is_fetch_html = ("fetch" in mode_low) or ("html" in mode_low)
+
+        default_audio_ms = entry.last_audio_ms if abs(entry.last_audio_ms) > 0.0001 else map_data.sync.audio_ms
+        default_video_ms = entry.last_video_ms if abs(entry.last_video_ms) > 0.0001 else (vst * 1000.0)
+
+        if is_ipk:
+            map_data.sync.audio_ms = 0.0
+            map_data.sync.video_ms = default_video_ms
+            setattr(map_data, "_readjust_profile", "ipk")
+            setattr(map_data, "_readjust_update_audio", False)
+            setattr(map_data, "_readjust_update_video", True)
+        elif is_fetch_html:
+            map_data.sync.audio_ms = default_audio_ms
+            map_data.sync.video_ms = default_video_ms
+            setattr(map_data, "_readjust_profile", "fetch_html")
+            setattr(map_data, "_readjust_update_audio", True)
+            setattr(map_data, "_readjust_update_video", False)
+        else:
+            map_data.sync.audio_ms = default_audio_ms
+            map_data.sync.video_ms = default_video_ms
+            setattr(map_data, "_readjust_profile", "generic")
+            setattr(map_data, "_readjust_update_audio", True)
+            setattr(map_data, "_readjust_update_video", True)
+
+        map_data.video_start_time_override = map_data.sync.video_ms / 1000.0
+        setattr(map_data, "_readjust_target_dir", Path(entry.installed_map_dir))
+        setattr(map_data, "_readjust_indexed", True)
+        return map_data
+
+    def _apply_readjust_profile(self, map_data: NormalizedMapData) -> None:
+        profile = str(getattr(map_data, "_readjust_profile", "generic"))
+
+        if profile == "ipk":
+            self._sync_refinement.set_audio_editable(False)
+            self._sync_refinement.set_video_editable(True)
+            self._sync_refinement._video_check.blockSignals(True)
+            self._sync_refinement._video_check.setChecked(True)
+            self._sync_refinement._video_check.setEnabled(False)
+            self._sync_refinement._video_check.blockSignals(False)
+            self._sync_refinement._video_spin.setEnabled(True)
+            return
+
+        if profile == "fetch_html":
+            self._sync_refinement.set_audio_editable(True)
+            self._sync_refinement.set_video_editable(False)
+            self._sync_refinement._video_check.blockSignals(True)
+            self._sync_refinement._video_check.setChecked(False)
+            self._sync_refinement._video_check.setEnabled(False)
+            self._sync_refinement._video_check.blockSignals(False)
+            self._sync_refinement._video_spin.setEnabled(False)
+            return
+
+        self._sync_refinement.set_audio_editable(True)
+        self._sync_refinement.set_video_editable(True)
+        self._sync_refinement._video_check.setEnabled(True)
+
+    def _activate_readjust_maps(self, maps: list[NormalizedMapData]) -> None:
+        self._nav_maps = maps
+        self._nav_index = 0
+        self._current_map = self._nav_maps[0]
+        self._pending_offsets = {
+            m.codename: (m.sync.audio_ms, m.sync.video_ms) for m in self._nav_maps
+        }
+
+        if len(self._nav_maps) > 1:
+            self._sync_refinement.set_nav_visible(True, f"Map 1 / {len(self._nav_maps)}")
+        else:
+            self._sync_refinement.set_nav_visible(False)
+
+        first_audio_ms, first_video_ms = self._pending_offsets.get(
+            self._current_map.codename,
+            (self._current_map.sync.audio_ms, self._current_map.sync.video_ms),
+        )
+        self._sync_refinement.set_offsets(first_audio_ms, first_video_ms)
+        self._apply_readjust_profile(self._current_map)
+
+        self._set_preview_controls_ready(True)
+        self.append_log(f"Loaded {len(self._nav_maps)} map(s) for offset readjustment.")
+        self._set_status(f"Readjusting offset for {self._current_map.codename}")
+        self._on_preview_toggle(True)
 
     # -- Reset state --------------------------------------------------------
 
@@ -805,6 +1037,7 @@ class MainWindow(QMainWindow):
         self._nav_maps = []
         self._nav_index = 0
         self._pending_offsets.clear()
+        self._readjust_pending_updates.clear()
         self._sync_refinement.reset()
         self._preview_widget.reset()
         self._set_preview_controls_ready(False)
@@ -1109,6 +1342,7 @@ class MainWindow(QMainWindow):
 
             # Start preview for the current map
             if self._current_map:
+                self._register_map_in_readjust_index(self._current_map)
                 self._set_preview_controls_ready(True)
                 self._on_preview_toggle(True)
         self._lock_ui(False)
@@ -1118,6 +1352,9 @@ class MainWindow(QMainWindow):
         """Called when a batch install completes with a list of map data."""
         if not installed_maps:
             return
+
+        for map_data in installed_maps:
+            self._register_map_in_readjust_index(map_data)
         
         self._nav_maps = installed_maps
         self._nav_index = 0
@@ -1146,6 +1383,34 @@ class MainWindow(QMainWindow):
         )
         self._set_preview_controls_ready(True)
         self._on_preview_toggle(True)
+
+    def _register_map_in_readjust_index(self, map_data: NormalizedMapData) -> None:
+        """Upsert one map's source metadata for readjust discovery."""
+        if not map_data or not map_data.codename:
+            return
+
+        if not map_data.media.audio_path or not map_data.media.video_path:
+            return
+
+        source_root = map_data.source_dir
+        if not source_root:
+            source_root = map_data.media.audio_path.parent
+
+        target_dir = self._resolve_target_map_dir(map_data.codename)
+        trk_path = target_dir / "Audio" / f"{map_data.codename}.trk"
+
+        entry = ReadjustIndexEntry(
+            codename=map_data.codename,
+            source_mode=self._current_mode,
+            source_root=str(source_root),
+            source_audio=str(map_data.media.audio_path),
+            source_video=str(map_data.media.video_path),
+            installed_map_dir=str(target_dir),
+            installed_trk=str(trk_path),
+            last_audio_ms=float(map_data.sync.audio_ms),
+            last_video_ms=float(map_data.sync.video_ms),
+        )
+        upsert_entry(entry)
 
     def _on_nav_requested(self, direction: int) -> None:
         """Switch between maps in a batch/bundle review."""
@@ -1182,6 +1447,7 @@ class MainWindow(QMainWindow):
                 audio_ms,
                 video_ms,
             )
+            self._apply_readjust_profile(self._current_map)
             
             # Start preview for the new map
             self._on_preview_toggle(True)
@@ -1310,10 +1576,12 @@ class MainWindow(QMainWindow):
         # V1 Parity: use the absolute offset from the spinbox directly
         self._current_map.video_start_time_override = (video_ms / 1000.0)
         self._pending_offsets[self._current_map.codename] = (audio_ms, video_ms)
+        is_readjust_index_mode = bool(getattr(self._current_map, "_readjust_indexed", False))
 
         # Bundle parity: apply reviewed offsets to every map in the bundle, not only the active one.
         if len(self._nav_maps) > 1:
             entries: list[tuple[NormalizedMapData, Path, float]] = []
+            readjust_entries: list[tuple[NormalizedMapData, Path, float, float, bool, bool]] = []
             base_game_dir = self._config.game_directory
             while base_game_dir.name.lower() in ("world", "data"):
                 base_game_dir = base_game_dir.parent
@@ -1324,15 +1592,43 @@ class MainWindow(QMainWindow):
                     (map_data.sync.audio_ms, map_data.sync.video_ms),
                 )
                 map_data.video_start_time_override = map_video_ms / 1000.0
+                target_dir_attr = getattr(map_data, "_readjust_target_dir", None)
+                target_dir = Path(target_dir_attr) if target_dir_attr else (
+                    base_game_dir / "data" / "World" / "MAPS" / map_data.codename
+                )
+
                 entries.append(
                     (
                         map_data,
-                        base_game_dir / "data" / "World" / "MAPS" / map_data.codename,
+                        target_dir,
                         map_audio_ms / 1000.0,
                     )
                 )
 
-            worker = ApplyOffsetsBatchWorker(entries=entries, config=self._config)
+                readjust_entries.append(
+                    (
+                        map_data,
+                        target_dir,
+                        map_audio_ms / 1000.0,
+                        map_video_ms / 1000.0,
+                        bool(getattr(map_data, "_readjust_update_video", True)),
+                        bool(getattr(map_data, "_readjust_update_audio", True)),
+                    )
+                )
+
+            self._readjust_pending_updates.clear()
+            for map_data in self._nav_maps:
+                map_audio_ms, map_video_ms = self._pending_offsets.get(
+                    map_data.codename,
+                    (map_data.sync.audio_ms, map_data.sync.video_ms),
+                )
+                if bool(getattr(map_data, "_readjust_indexed", False)):
+                    self._readjust_pending_updates.append((map_data.codename, map_audio_ms, map_video_ms))
+
+            if any(bool(getattr(m, "_readjust_indexed", False)) for m in self._nav_maps):
+                worker = ApplyReadjustOffsetsBatchWorker(entries=readjust_entries, config=self._config)
+            else:
+                worker = ApplyOffsetsBatchWorker(entries=entries, config=self._config)
             thread = QThread()
             worker.moveToThread(thread)
 
@@ -1358,14 +1654,34 @@ class MainWindow(QMainWindow):
         base_game_dir = self._config.game_directory
         while base_game_dir.name.lower() in ("world", "data"):
             base_game_dir = base_game_dir.parent
-            
-        worker = ApplyAndFinishWorker(
-            self._current_map,
-            base_game_dir / "data" / "World" / "MAPS" / self._current_map.codename,
-            self._config.cache_directory / self._current_map.codename,
-            a_offset=audio_ms / 1000.0,
-            config=self._config,
-        )
+
+        if is_readjust_index_mode:
+            target_dir_attr = getattr(self._current_map, "_readjust_target_dir", None)
+            target_dir = Path(target_dir_attr) if target_dir_attr else (
+                base_game_dir / "data" / "World" / "MAPS" / self._current_map.codename
+            )
+            worker = ApplyReadjustOffsetsBatchWorker(
+                entries=[
+                    (
+                        self._current_map,
+                        target_dir,
+                        audio_ms / 1000.0,
+                        video_ms / 1000.0,
+                        bool(getattr(self._current_map, "_readjust_update_video", True)),
+                        bool(getattr(self._current_map, "_readjust_update_audio", True)),
+                    )
+                ],
+                config=self._config,
+            )
+            self._readjust_pending_updates = [(self._current_map.codename, audio_ms, video_ms)]
+        else:
+            worker = ApplyAndFinishWorker(
+                self._current_map,
+                base_game_dir / "data" / "World" / "MAPS" / self._current_map.codename,
+                self._config.cache_directory / self._current_map.codename,
+                a_offset=audio_ms / 1000.0,
+                config=self._config,
+            )
         thread = QThread()
         worker.moveToThread(thread)
 
@@ -1386,6 +1702,9 @@ class MainWindow(QMainWindow):
         self._lock_ui(False)
         if success:
             logger.info("✅  Offsets applied and audio reprocessed.")
+            for codename, audio_ms, video_ms in self._readjust_pending_updates:
+                update_offsets(codename, audio_ms=audio_ms, video_ms=video_ms)
+            self._readjust_pending_updates.clear()
             if len(self._nav_maps) > 1:
                 for map_data in self._nav_maps:
                     if map_data.codename in self._feedback_panel._step_items:
@@ -1398,6 +1717,8 @@ class MainWindow(QMainWindow):
             self._set_preview_controls_ready(False)
             # V1 Parity: Don't auto-restart preview anymore after apply
             self._prompt_cleanup()
+        else:
+            self._readjust_pending_updates.clear()
 
     def _on_preview_audio_unavailable(self) -> None:
         if self._preview_audio_warning_shown:
