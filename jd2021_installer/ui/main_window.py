@@ -997,6 +997,7 @@ class MainWindow(QMainWindow):
         worker = InstallMapWorker(
             map_data=map_data,
             target_dir=self._config.game_directory,  # type: ignore[arg-type]
+            source_mode=self._current_mode,
             config=self._config,
         )
         thread = QThread()
