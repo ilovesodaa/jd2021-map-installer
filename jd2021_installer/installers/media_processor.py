@@ -47,6 +47,25 @@ def _write_silent_stereo_wav(path: Path, duration_s: float = 0.25) -> None:
         wf.writeframes(b"\x00\x00\x00\x00" * frames)
 
 
+def _write_silent_ogg(path: Path, config: Optional[AppConfig] = None) -> bool:
+    """Create a tiny silent OGG using FFmpeg, returning True on success."""
+    tmp_wav = path.with_suffix(".tmp_silence.wav")
+    try:
+        _write_silent_stereo_wav(tmp_wav, duration_s=0.25)
+        run_ffmpeg([
+            "-y",
+            "-i", str(tmp_wav),
+            "-c:a", "libvorbis",
+            str(path),
+        ], config=config)
+        return path.exists()
+    except Exception:
+        return False
+    finally:
+        if tmp_wav.exists():
+            tmp_wav.unlink()
+
+
 # ---------------------------------------------------------------------------
 # FFmpeg / FFprobe subprocess wrappers
 # ---------------------------------------------------------------------------
@@ -268,6 +287,18 @@ def convert_audio(
         if extracted:
             effective_audio = Path(extracted)
             logger.info("Using extracted audio payload for conversion: %s", effective_audio.name)
+        else:
+            logger.warning(
+                "Could not decode CKD audio '%s'; generating silent fallback audio to allow install.",
+                audio_path.name,
+            )
+            wav_out.parent.mkdir(parents=True, exist_ok=True)
+            _write_silent_stereo_wav(wav_out, duration_s=1.0)
+            if not ogg_out.exists():
+                if not _write_silent_ogg(ogg_out, config=config):
+                    # Last-resort fallback if ffmpeg/ogg encode fails
+                    shutil.copy2(wav_out, ogg_out)
+            return
 
     try:
         # 2. Generate menu preview OGG
@@ -892,6 +923,11 @@ def decode_xma2_audio(
         logger.info("Decoded X360 audio → %s", output_wav.name)
         return output_wav
     except subprocess.CalledProcessError as e:
+        if e.returncode == 3221225781:
+            raise MediaProcessingError(
+                "vgmstream failed (0xC0000135: missing runtime dependency). "
+                "Re-run setup.bat so tools/vgmstream includes required DLL files."
+            )
         raise MediaProcessingError(
             f"vgmstream failed (exit {e.returncode}):\n"
             f"  stdout: {e.stdout[:300]}\n  stderr: {e.stderr[:300]}"

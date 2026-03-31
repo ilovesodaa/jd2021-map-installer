@@ -22,7 +22,7 @@ echo.
 echo [3/3] Installing vgmstream toolchain...
 if not exist tools\vgmstream mkdir tools\vgmstream
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $zip='tools/vgmstream/vgmstream-win64.zip'; $extract='tools/vgmstream/_extract'; if (Test-Path $extract) { Remove-Item -Recurse -Force $extract }; Invoke-WebRequest -Uri 'https://github.com/vgmstream/vgmstream-releases/releases/download/nightly/vgmstream-win64.zip' -OutFile $zip; Expand-Archive -Path $zip -DestinationPath $extract -Force; Get-ChildItem -Path $extract -Recurse -File | Where-Object { $_.Name -in @('vgmstream-cli.exe','vgmstream.exe') } | ForEach-Object { Copy-Item -Path $_.FullName -Destination ('tools/vgmstream/' + $_.Name) -Force }; Remove-Item -Recurse -Force $extract; Remove-Item -Force $zip"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $zip='tools/vgmstream/vgmstream-win64.zip'; $extract='tools/vgmstream/_extract'; if (Test-Path $extract) { Remove-Item -Recurse -Force $extract }; Invoke-WebRequest -Uri 'https://github.com/vgmstream/vgmstream-releases/releases/download/nightly/vgmstream-win64.zip' -OutFile $zip; Expand-Archive -Path $zip -DestinationPath $extract -Force; $bin = Get-ChildItem -Path $extract -Recurse -File | Where-Object { $_.Name -in @('vgmstream-cli.exe','vgmstream.exe') } | Select-Object -First 1; if (-not $bin) { throw 'vgmstream executable not found in archive' }; $runtimeRoot = $bin.Directory.FullName; Get-ChildItem -Path $runtimeRoot -Force | ForEach-Object { Copy-Item -Path $_.FullName -Destination 'tools/vgmstream' -Recurse -Force }; Remove-Item -Recurse -Force $extract; Remove-Item -Force $zip"
 if errorlevel 1 (
 	echo.
 	echo [WARNING] vgmstream auto-install failed.
