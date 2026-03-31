@@ -1,0 +1,76 @@
+name: "Sync fork with upstream"
+
+on:
+  schedule:
+    - cron: '0 4 * * *' # daily at 04:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        persist-credentials: true
+
+    - name: Get parent repository info
+      id: repo_info
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const { data } = await github.rest.repos.get({ owner: context.repo.owner, repo: context.repo.repo });
+          if (!data.parent) throw new Error("Repository is not a fork or parent not found");
+          core.setOutput("parent_full_name", data.parent.full_name);
+          core.setOutput("parent_default_branch", data.parent.default_branch);
+
+    - name: Configure git
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+    - name: Add upstream, fetch and merge
+      run: |
+        set -e
+        UPSTREAM=${{ steps.repo_info.outputs.parent_full_name }}
+        UPSTREAM_BRANCH=${{ steps.repo_info.outputs.parent_default_branch }}
+
+        echo "Upstream: $UPSTREAM"
+        echo "Upstream branch: $UPSTREAM_BRANCH"
+
+        git remote add upstream https://github.com/$UPSTREAM.git || true
+        git fetch upstream --prune
+
+        BRANCH=${GITHUB_REF#refs/heads/}
+        if [ -z "$BRANCH" ] || [ "$BRANCH" = "refs/heads/" ]; then
+          BRANCH=$(git rev-parse --abbrev-ref HEAD)
+        fi
+
+        echo "Working on branch: $BRANCH"
+
+        # Ensure branch exists locally and checkout
+        if git show-ref --verify --quiet refs/heads/$BRANCH; then
+          git checkout $BRANCH
+        else
+          git checkout -b $BRANCH
+        fi
+
+        # Try fast-forward first, otherwise do a merge commit. If conflicts occur, abort and fail.
+        if git merge --ff-only upstream/$UPSTREAM_BRANCH; then
+          echo "Fast-forwarded $BRANCH from upstream/$UPSTREAM_BRANCH"
+        else
+          echo "Performing merge with upstream/$UPSTREAM_BRANCH"
+          if git merge upstream/$UPSTREAM_BRANCH -m "Merge upstream changes from $UPSTREAM/$UPSTREAM_BRANCH"; then
+            echo "Merged upstream changes"
+          else
+            echo "Merge conflicts detected. Aborting and exiting. Manual resolution required."
+            git merge --abort || true
+            exit 1
+          fi
+        fi
+
+        git push origin $BRANCH
