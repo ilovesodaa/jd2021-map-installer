@@ -1,4 +1,6 @@
-# JDU Data Mapping Specification
+# Data Mapping Specification
+
+> **Last Updated:** April 2026 | **Applies to:** JD2021 Map Installer v2
 
 This document details how raw data from the Just Dance Unlimited (JDU) JSON payloads is mapped, transformed, or ignored when porting maps to the Just Dance 2021 PC (UbiArt) engine.
 
@@ -42,7 +44,9 @@ The timing markers in the original `musictrack.tpl.ckd` are verbatim audio sampl
 | `previewEntry` | Beat index where the song select preview begins. |
 | `volume` | dB adjustment (usually 0). |
 
-**DANGER**: Do not calculate `videoStartTime` synthetically. Extract the exact value from the original JDU metadata. Even a small error causes permanent audio/video desync.
+**DANGER**: Do not calculate `videoStartTime` synthetically when authoritative JDU metadata is available. Even a small error causes permanent audio/video desync.
+
+**V2 IPK Limitation (Important):** In IPK-only workflows, source metadata is not always sufficient to reconstruct exact lead-in timing, so `videoStartTime` may remain approximate. Manual sync tuning in the installer is expected for many IPK maps.
 
 ### The videoStartTime Coupling
 
@@ -51,7 +55,9 @@ The timing markers in the original `musictrack.tpl.ckd` are verbatim audio sampl
 1. The video player seeks to `videoStartTime` seconds at map start (negative = shows pre-roll frames before beat 0).
 2. The WAV audio is delayed by exactly `abs(videoStartTime)` seconds from game start.
 
-This means any map with `videoStartTime < 0` will have `abs(videoStartTime)` seconds of silence at the start, as the video plays its intro but the WAV hasn't started yet. See **[AUDIO_TIMING.md](AUDIO_TIMING.md)** for the full explanation and the AMB-based solution.
+This means any map with `videoStartTime < 0` will have `abs(videoStartTime)` seconds of silence at the start, as the video plays its intro but the WAV hasn't started yet. See **[AUDIO_TIMING.md](../03_media/AUDIO_TIMING.md)** for the full explanation.
+
+**Current V2 Runtime Status:** Intro AMB compensation is currently under temporary mitigation and should not be assumed to reliably fill this pre-roll silence in all cases.
 
 ### SFI (Sound Format Info)
 
@@ -59,6 +65,8 @@ JD2021 PC requires an explicit XML declaration of the sound format:
 ```xml
 <SoundFormatInfo Format="PCM" IsStreamed="1" IsMusic="1" Platform="PC" />
 ```
+
+**Dependency Note:** End-to-end audio processing in V2 depends on local FFmpeg/FFprobe availability, and some legacy decode paths depend on `vgmstream`.
 
 ---
 
@@ -121,17 +129,23 @@ Maps that include ambient sound templates in their IPK (`audio/amb/*.tpl.ckd`) a
 
 These are placed in `Audio/AMB/` and injected as SoundComponent actors into the audio ISC. The WAV files they reference are initially created as silent placeholders, since JDU-hosted AMB audio is not directly downloadable.
 
-For SoundSetClip AMBs with `StartTime <= 0` referenced in the mainsequence tape, `extract_amb_audio` overwrites these placeholders with real audio extracted from the OGG pre-roll. AMBs with `StartTime > 0` (mid-song background sounds) remain as silent placeholders.
+For SoundSetClip AMBs with `StartTime <= 0` referenced in the mainsequence tape, the intended behavior is to overwrite these placeholders with real audio extracted from the OGG pre-roll. AMBs with `StartTime > 0` (mid-song background sounds) remain as silent placeholders.
+
+**Current V2 Limitation (Prominent):** Intro AMB extraction/compensation is currently in a temporary mitigation state. In practical terms, pre-roll intro AMB coverage may be disabled, and silent placeholders may be retained.
 
 ### Synthetic Intro AMB (Pre-Roll Coverage)
 
-Regardless of whether the map has AMB data in its IPK, the pipeline generates a real-content intro AMB whenever `videoStartTime < 0`. This covers the silence caused by the engine's WAV scheduling delay. See **[AUDIO_TIMING.md](AUDIO_TIMING.md)** for full technical details.
+This section describes the intended V2 design behavior, not guaranteed current runtime behavior.
+
+Design intent: regardless of whether the map has AMB data in its IPK, the pipeline can generate a real-content intro AMB whenever `videoStartTime < 0`. This covers the silence caused by the engine's WAV scheduling delay. See **[AUDIO_TIMING.md](../03_media/AUDIO_TIMING.md)** for full technical details.
 
 The intro AMB:
 - Sources audio from the same OGG as the main track (making any overlap inaudible)
 - Duration: marker-based (primary) or `abs(videoStartTime) + 1.355s` (fallback) — see AUDIO_TIMING.md Section 5
 - 200ms linear fade-out at the end
 - Automatically regenerated when audio timing is adjusted in the sync loop
+
+**Current V2 Limitation (Authoritative):** The temporary mitigation can bypass this synthetic intro AMB path and keep silent intro behavior. Treat manual sync refinement as the reliable operator workflow until the mitigation is lifted.
 
 ---
 
