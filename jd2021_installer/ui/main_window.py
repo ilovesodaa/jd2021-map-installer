@@ -1203,6 +1203,35 @@ class MainWindow(QMainWindow):
     def _apply_readjust_profile(self, map_data: NormalizedMapData) -> None:
         profile = str(getattr(map_data, "_readjust_profile", "generic"))
         self._sync_refinement.apply_profile(profile)
+        self._sync_refinement.set_ipk_mode(is_ipk=self._is_ipk_source_map(map_data))
+
+    def _is_ipk_source_map(self, map_data: Optional[NormalizedMapData]) -> bool:
+        """Best-effort detection for maps originating from IPK sources."""
+        if map_data is None:
+            return False
+
+        profile = str(getattr(map_data, "_readjust_profile", "")).strip().lower()
+        if profile == "ipk":
+            return True
+
+        if bool(getattr(map_data, "_is_ipk_source", False)):
+            return True
+
+        mode_low = (self._current_mode or "").lower()
+        if "ipk" in mode_low:
+            return True
+
+        source_dir = getattr(map_data, "source_dir", None)
+        if source_dir:
+            src_low = str(source_dir).lower().replace("\\", "/")
+            if "_batch_temp" in src_low and "/world/maps/" in src_low:
+                return True
+
+        audio_path = map_data.media.audio_path
+        if audio_path and audio_path.name.lower().endswith(".wav.ckd"):
+            return True
+
+        return False
 
     def _activate_readjust_maps(self, maps: list[NormalizedMapData]) -> None:
         self._nav_maps = maps
@@ -1627,9 +1656,9 @@ class MainWindow(QMainWindow):
                     self._current_map.sync.video_ms
                 )
 
-                # Check if IPK mode based on audio file type
-                is_ipk = bool(self._current_map.media.audio_path and self._current_map.media.audio_path.suffix.lower() == ".wav")
-                self._sync_refinement.set_ipk_mode(is_ipk=is_ipk)
+                self._sync_refinement.set_ipk_mode(
+                    is_ipk=self._is_ipk_source_map(self._current_map)
+                )
 
             # Start preview for the current map
             if self._current_map:
@@ -1672,6 +1701,7 @@ class MainWindow(QMainWindow):
             first_audio_ms,
             first_video_ms,
         )
+        self._apply_readjust_profile(self._current_map)
         self._set_preview_controls_ready(True)
         self._on_preview_toggle(True)
 

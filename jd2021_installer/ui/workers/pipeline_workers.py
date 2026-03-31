@@ -766,7 +766,8 @@ class BatchInstallWorker(QObject):
                     
                     map_dir = candidate
                     map_names_for_candidate: list[str] = []
-                    if candidate.is_file() and candidate.suffix.lower() == ".ipk":
+                    is_candidate_ipk = bool(candidate.is_file() and candidate.suffix.lower() == ".ipk")
+                    if is_candidate_ipk:
                         # Extract IPK to temp dir
                         from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor
                         # Try to get codename from IPK name for early status
@@ -807,6 +808,7 @@ class BatchInstallWorker(QObject):
                         self.status.emit(f"[{map_name}] Parse CKDs & Metadata")
                         from jd2021_installer.parsers.normalizer import normalize
                         map_data = normalize(map_dir, codename=map_name, search_root=map_dir)
+                        setattr(map_data, "_is_ipk_source", is_candidate_ipk)
 
                         status_value = int(getattr(map_data.song_desc, "status", _READY_STATUS_VALUE))
                         if status_value != _READY_STATUS_VALUE:
