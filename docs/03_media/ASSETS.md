@@ -1,6 +1,16 @@
 # Asset HTML Files
 
+> **Last Updated:** April 2026 | **Applies to:** JD2021 Map Installer v2
+
 Each map install requires **two HTML files** exported from the JDHelper Discord bot. These are the only external inputs the installer needs before it can download and install a map.
+
+This page documents the **HTML input workflow** used by JD2021 Map Installer v2. V2 also supports Fetch by codename, IPK archive mode, batch directory mode, and manual source folder installs; those modes are documented separately.
+
+> **Critical V2 Behavior and Limits (Read First)**
+>
+> 1. **Intro AMB is temporarily disabled globally** as a stability mitigation in v2. Expect silent intro placeholders rather than reliable intro ambient playback.
+> 2. **Video timing may still require manual adjustment** after install in the Sync/Readjust flow. This is especially common in IPK-derived maps, and can still appear map-by-map in other sources.
+> 3. **FFmpeg/FFprobe and vgmstream must be available** for full media processing/decoding behavior. Missing tools can cause degraded behavior, fallback paths, or install-time warnings.
 
 | File | Conventional name | Source bot command | Contains |
 |---|---|---|---|
@@ -34,7 +44,7 @@ The embed groups assets under several named sections:
 https://jd-s3.cdn.ubi.com/public/map/{MapName}/{platform}/{Filename}/{hash}.{ext}
 ```
 
-- `{MapName}` — the map codename (e.g. `Starships`). The installer extracts this automatically via `extract_codename_from_urls()` (``extractors/web_playwright.py`:55`).
+- `{MapName}` — the map codename (e.g. `Starships`). The installer extracts this automatically from discovered URLs.
 - `{platform}` — subdirectory indicating the target platform (`pc/`, `nx/`, `ps4/`, `x1/`, `ggp/`, `wiiu/`). Absent for platform-agnostic files (cover images, phone textures, audio preview).
 - `{hash}` — MD5 content hash used by the CDN for cache-busting. Ignored by the installer.
 
@@ -47,7 +57,7 @@ https://jd-s3.cdn.ubi.com/public/map/{MapName}/{platform}/{Filename}/{hash}.{ext
 | Cover/background images (`.ckd`, `.jpg`, `.png`) | Downloaded and installed. |
 | Video/audio preview files | Skipped — preview WebMs and `AudioPreview.ogg` are not used by the installer. |
 
-The parser collects all `href` URLs from the file, filters out Discord CDN proxy URLs (`discordapp.net`), then categorises them by extension and filename pattern (``extractors/web_playwright.py`:114`).
+The parser collects all `href` URLs from the file, filters out Discord CDN proxy URLs (`discordapp.net`), then categorizes them by extension and filename pattern.
 
 ---
 
@@ -93,24 +103,26 @@ All 8 video tiers and the audio track share the same `auth` token in a single bo
 
 The preferred video quality is set by the `--quality` flag (CLI) or the Video Quality dropdown (GUI). If the requested tier is not present in the HTML, the pipeline falls back through lower tiers automatically.
 
+> **Timing note:** Even with correctly downloaded NOHUD assets, final in-game sync can vary by map/source. Use the installer's Sync/Readjust workflow for per-map correction when needed.
+
 ---
 
 ## How the parser works
 
-Both files are processed identically by `extract_urls()` (``extractors/web_playwright.py`:28`):
+Both files are processed identically by `extract_urls()`:
 
 1. Opens the HTML as UTF-8 text.
 2. Extracts all `href="..."` values via regex.
 3. Strips Discord proxy URLs (`discordapp.net`) and decodes HTML entities (`&amp;` → `&`).
 4. Returns a flat list of CDN URLs.
 
-The distinction between asset and NOHUD content is made downstream in `download_files()` by filename pattern matching — `.ogg` without `AudioPreview` = audio track, `_ULTRA.webm` / `_HIGH.hd.webm` etc. = video, `MAIN_SCENE_*.zip` = main scene, `.ckd` / `.jpg` / `.png` = textures.
+The distinction between asset and NOHUD content is made downstream in `download_files()` by filename pattern matching: `.ogg` without `AudioPreview` = audio track, `_ULTRA.webm` / `_HIGH.hd.webm` etc. = video, `MAIN_SCENE_*.zip` = main scene, `.ckd` / `.jpg` / `.png` = textures.
 
 ---
 
 ## File naming and placement
 
-For single-map installs the filenames are arbitrary — pass them via `--asset-html` and `--nohud-html`. For **batch installs**, `the installer` expects this exact layout:
+For single-map installs the filenames are arbitrary - pass them via `--asset-html` and `--nohud-html`. For **batch installs**, the installer expects this exact layout:
 
 ```
 MapDownloads/

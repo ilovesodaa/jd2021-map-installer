@@ -1,6 +1,14 @@
 # Third-Party Tools
 
+> **Last Updated:** April 2026 | **Applies to:** JD2021 Map Installer v2
+
 This document lists all external tools and libraries used by the JD2021 Map Installer v2, where they are used, and what they do.
+
+## Current V2 Limitations (Important)
+
+- **Intro AMB behavior is currently under temporary mitigation.** Intro AMB attempts are intentionally disabled in current V2 builds, and silent intro placeholders are expected until the AMB redesign/parity work is completed.
+- **IPK video start timing is approximate by design.** Many IPK maps still require manual in-app video offset tuning after installation because binary metadata does not reliably preserve lead-in timing.
+- **Runtime tools are mandatory for media-heavy workflows.** Missing FFmpeg/FFprobe or vgmstream can degrade conversion/preview behavior.
 
 ---
 
@@ -74,6 +82,15 @@ Requires a one-time setup: `playwright install chromium`.
 |------------|---------|
 | `installers/media_processor.py` (`get_video_duration()`) | Determines video duration for preview generation |
 
+### vgmstream
+
+**Purpose:** Decoding support for console-oriented audio formats (notably X360/XMA2 paths) used by some map sources.
+
+| Where Used | Purpose |
+|------------|---------|
+| `installers/media_processor.py` | Fallback/decode path for non-OGG source audio where FFmpeg alone is insufficient |
+| `setup.bat` / `tools/vgmstream/` | Runtime acquisition and local tool placement |
+
 ---
 
 ## Referenced Tools (Not Bundled)
@@ -94,6 +111,8 @@ Tape processing logic was analyzed and ported into the binary CKD parser. Contri
 AMB extraction algorithm used as a reference:
 - Marker tick-to-millisecond formula (`markers[idx] / 48.0`)
 - SoundSetClip splitting logic
+
+Note for current V2 behavior: while this reference informs the AMB pipeline implementation, intro AMB playback remains temporarily disabled in active builds (see limitations section above).
 
 ### JustDanceTools
 

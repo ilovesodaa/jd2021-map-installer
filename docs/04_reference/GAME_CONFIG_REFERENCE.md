@@ -1,8 +1,12 @@
 # Game Configuration Reference
 
+> **Last Updated:** April 2026 | **Applies to:** JD2021 Map Installer v2
+
 This document maps the configuration files inside the JD2021 PC game data directory. It is a reference for understanding what each file controls and which files are relevant to modding.
 
 This replaces the previous `JD21_Configuration_Map.md`.
+
+Scope note for V2: this document focuses on game/runtime configuration surfaces and installer-generated config artifacts. Workflow details for Fetch/HTML/IPK/Batch/Manual install modes and readjust UX live in pipeline and operator docs.
 
 ---
 
@@ -25,6 +29,7 @@ These files are created by the installer pipeline, not part of the base game.
 |------|--------|---------|
 | `installer_paths.json` | JSON | Cached game-data directory paths and SkuScene reference |
 | `installer_settings.json` | JSON | Global installer settings: default_quality, a_offset, v_override, marker_preroll_ms |
+| `map_readjust_index.json` | JSON | Persistent readjust index linking installed maps to source roots for post-install offset workflows |
 
 ---
 
@@ -176,3 +181,28 @@ All `.isg` and `.ilu` files are plain-text Lua table syntax, directly editable w
 - The game references PS4/PS5/Xbox/Switch/Stadia platforms across configs; only PC paths are active
 - Resolution can be changed via `config.xml` or `RUNNER.bat`
 - `mapsObjectives.ilu` controls map unlock conditions; the pipeline's Status override (`Status = 3`) bypasses these
+
+---
+
+## 9. V2 Installer Behavior and Limitations (Critical)
+
+These points are current V2 behavior and should be treated as operational constraints when using this reference with mod installs.
+
+### Ambient (AMB)
+- Intro AMB handling is currently in a temporary mitigation state in V2.
+- Intro AMB attempt logic is intentionally disabled globally; silent intro placeholder behavior is expected until redesign/parity validation is completed.
+- AMB path resolution remains sensitive to source folder shape and casing conventions.
+
+### Audio/Video Timing
+- IPK-derived `videoStartTime` remains approximate by design because source metadata often does not reliably encode lead-in.
+- Manual video offset tuning is expected for many IPK maps after installation.
+- `installer_settings.json` timing controls (`a_offset`, `v_override`, `marker_preroll_ms`) are still the main global adjustment surface.
+
+### Runtime Dependencies (Required for Full Functionality)
+- FFmpeg/FFprobe are required for media conversion/probing paths.
+- vgmstream runtime is required for X360/XMA2 decode paths.
+- Missing or partial tool availability can produce degraded installs, preview limitations, or fallback behavior.
+
+### Pipeline Context
+- V2 supports multiple install input modes (Fetch, HTML, IPK, Batch directory, Manual source folder) and readjust workflows.
+- This file remains valid as a config map across those modes, but mode-specific troubleshooting should be read alongside current operator/troubleshooting docs.

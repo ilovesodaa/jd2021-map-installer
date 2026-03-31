@@ -1,6 +1,11 @@
-# Troubleshooting Guide - JD2021 Map Installer
+# Troubleshooting Guide - JD2021 Map Installer v2
 
-This guide covers common errors and their solutions, derived from the error handling and logging throughout the codebase.
+> **Last Updated:** April 2026 | **Applies to:** JD2021 Map Installer v2
+
+This guide covers common errors and their solutions, derived from the error handling and logging throughout the V2 codebase.
+
+> **Important (Current V2 Limitation): Intro AMB generation is temporarily disabled by design.**
+> The installer currently writes silent intro placeholders instead of attempting intro AMB synthesis. This is an intentional mitigation while AMB intro behavior is being redesigned.
 
 ---
 
@@ -25,6 +30,7 @@ This guide covers common errors and their solutions, derived from the error hand
 - **"xtx_extractor/ package not found"**: Missing bundled dependency — re-clone the repository.
 - **ffplay not found (warning)**: Sync preview unavailable but installation works.
 - **ffprobe not found (warning)**: Duration calculations unavailable.
+- **vgmstream not found (warning)**: IPK/XMA2 decode may fail or use reduced-fidelity fallback paths. Ensure `vgmstream-cli.exe` is available via setup/runtime tools.
 
 ## Game Path Discovery Issues
 
@@ -45,11 +51,11 @@ This guide covers common errors and their solutions, derived from the error hand
 
 ## Audio/Sync Issues
 
-- **Silence at map start**: Normal if no intro AMB exists. Pipeline generates intro AMB automatically using audio from the same OGG/WAV source. If still silent, check `Audio/AMB/` directory for the intro WAV/TPL/ILU files.
+- **Silence at map start**: Expected in current V2 for intro AMB segments. Intro AMB synthesis is temporarily disabled and silent intro placeholders are generated intentionally.
 - **Progressive audio desync**: Wrong sample rate. WAV must be 48kHz (matches markers). Re-run with correct settings.
 - **Audio too early or too late**: `a_offset` value incorrect. Use sync refinement to adjust. Marker-based default is usually correct for HTML/fetch maps.
 - **Pictos/karaoke appear too early**: `videoStartTime` incorrectly set to 0 on a pre-roll map. Restore original negative value.
-- **Double audio**: AMB intro and main WAV should overlap inaudibly (same source, phase-coherent). If you hear doubling, check if multiple AMB actors are injected into the audio ISC.
+- **Unexpected intro layering/double audio**: Usually indicates stale AMB actor state from older installs or manual edits. Reinstall the map cleanly and verify only expected audio actors remain in the generated ISC.
 - **"adding a brick in the past" assertion in-game**: The engine received `videoStartTime = 0.0` for a map that actually has pre-roll. For IPK maps, the pipeline synthesizes `v_override` from markers, but if this synthesis fails, the raw `0.0` passes through. Check pipeline output for "Synthesized v_override from markers" message.
 
 ### IPK Audio Sync
@@ -75,7 +81,7 @@ IPK maps have unique sync characteristics:
 - **Stale audio/video from previous map** — If installing a second IPK map without resetting, the first map's audio/video paths could carry over. Fixed in current version: browsing a new IPK file clears `_source_spec` and hidden audio/video entries. Use **Reset State** if issues persist.
 - **IPK re-extraction not happening** — If the extracted folder already exists, the pipeline may skip re-extraction. With `manual_ipk_file` set, re-extraction is now forced. If you change the IPK file, click **Reset State** first, then re-analyze.
 - **vgmstream decode failure** — XMA2 audio inside the IPK requires `vgmstream-cli.exe` (bundled in `3rdPartyTools/JDTools`). If the tool is missing or the WAV CKD uses an unsupported codec, audio decode falls back to CKD header stripping. Check that `vgmstream-cli.exe` exists in the expected path.
-- **Orphan AMB WAV CKDs** — Some IPK maps (e.g., Koi) contain `amb_*_intro.wav.ckd` files without matching `amb_*_intro.tpl.ckd` templates. Step 09 auto-generates synthetic TPL/ILU wrappers for these. If the AMB is still silent, check the pipeline log for orphan detection messages.
+- **Orphan AMB WAV CKDs** — Some IPK maps (e.g., Koi) contain `amb_*_intro.wav.ckd` files without matching `amb_*_intro.tpl.ckd` templates. Step 09 still synthesizes wrappers for compatibility, but intro playback remains intentionally silent in current V2 due to the global intro AMB mitigation.
 
 ## Config Generation Issues
 
@@ -101,7 +107,7 @@ IPK maps have unique sync characteristics:
 
 ## Batch Installation Issues
 
-- **"No valid map folders found"**: Each map folder must contain both `assets.html` and `nohud.html`.
+- **"No valid map folders found"**: In batch mode, valid candidates are either IPK files or map folders containing both `assets.html` and `nohud.html`.
 - **Link expiration with many maps**: The two-phase batch mode downloads all maps first (Phase 1) before processing (Phase 2). If you still get 403s, reduce number of maps per batch.
 - **Map skipped as "already installed"**: Use without `--skip-existing` flag, or delete the `MAPS/{map_name}/` directory first.
 
@@ -110,6 +116,8 @@ IPK maps have unique sync characteristics:
 - Always get fresh HTML links immediately before running the installer (links expire in ~30 minutes).
 - Use video quality tier that matches what's already downloaded to avoid re-downloading.
 - For IPK maps, expect to spend time fine-tuning the VIDEO_OFFSET in the Sync Refinement panel. Use the Preview button to test.
+- Run setup and dependency checks before troubleshooting map-specific issues (Playwright runtime, FFmpeg/FFprobe, and vgmstream for IPK-heavy maps).
+- Treat intro AMB silence as expected behavior in current V2 unless release notes explicitly state AMB intro synthesis has been re-enabled.
 - Global installer settings are saved to `installer_settings.json` and auto-loaded on reinstall.
 - Per-map sync configs are saved automatically and reloaded when reinstalling the same map.
 - Log files are written to `logs/install_{map_name}_{timestamp}.log`.
