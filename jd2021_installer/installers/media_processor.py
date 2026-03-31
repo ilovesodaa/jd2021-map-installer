@@ -674,9 +674,10 @@ VGMSTREAM_DEFAULT_PATHS = (
 def _resolve_vgmstream_binary(vgmstream_path: Optional[str | Path] = None) -> Path:
     """Locate a usable vgmstream binary.
 
-    V1 parity:
-    - Prefer local tools/vgmstream binaries.
-    - Fall back to sibling V1 repo tool path if present.
+    Resolution order:
+    - explicit path parameter
+    - local tools/vgmstream binaries
+    - PATH lookup
     """
     if vgmstream_path:
         candidate = Path(vgmstream_path).expanduser().resolve()
@@ -686,13 +687,10 @@ def _resolve_vgmstream_binary(vgmstream_path: Optional[str | Path] = None) -> Pa
     repo_root = Path(__file__).resolve().parents[2]
     candidates = [repo_root / rel for rel in VGMSTREAM_DEFAULT_PATHS]
 
-    # Common local fallback: sibling V1 repository with bundled vgmstream.exe
-    candidates.append(repo_root.parent / "jd2021-map-installerV1" / "tools" / "vgmstream" / "vgmstream.exe")
-
-    # Legacy local setup path from V1
-    candidates.append(
-        repo_root / "3rdPartyTools" / "jd2021pc tools" / "JDTools - 1.9.0" / "bin" / "vgmstream.exe"
-    )
+    for command_name in ("vgmstream-cli.exe", "vgmstream.exe"):
+        on_path = shutil.which(command_name)
+        if on_path:
+            candidates.append(Path(on_path))
 
     for candidate in candidates:
         if candidate.exists():
@@ -702,8 +700,45 @@ def _resolve_vgmstream_binary(vgmstream_path: Optional[str | Path] = None) -> Pa
     raise MediaProcessingError(
         "vgmstream binary not found. Checked:\n"
         f"  - {checked}\n"
-        "Install vgmstream in tools/vgmstream/ or keep the V1 tools folder available."
+        "Install vgmstream in tools/vgmstream/ (run setup.bat to auto-install)."
     )
+
+
+def _find_audio_magic_offset(data: bytes, search_limit: int = 4 * 1024 * 1024) -> tuple[int | None, str | None]:
+    """Find RIFF/OggS magic in a CKD payload region.
+
+    Some bundles prepend metadata blocks larger than 44 bytes before the audio
+    stream starts. Search a wider window so we can recover standard payloads
+    without requiring vgmstream.
+    """
+    if not data:
+        return None, None
+
+    window = data[: max(0, min(len(data), search_limit))]
+    riff_offset = window.find(b"RIFF")
+    ogg_offset = window.find(b"OggS")
+
+    if riff_offset >= 0 and (ogg_offset < 0 or riff_offset <= ogg_offset):
+        return riff_offset, ".wav"
+    if ogg_offset >= 0:
+        return ogg_offset, ".ogg"
+    return None, None
+
+
+def _ffmpeg_decode_unknown_payload(payload_file: Path, output_wav: Path) -> bool:
+    """Attempt to decode unknown payloads with FFmpeg directly."""
+    try:
+        run_ffmpeg([
+            "-y",
+            "-i", str(payload_file),
+            "-ar", "48000",
+            "-ac", "2",
+            str(output_wav),
+        ])
+        return output_wav.exists()
+    except Exception as exc:
+        logger.debug("FFmpeg unknown-payload decode failed for %s: %s", payload_file.name, exc)
+        return False
 
 
 # Ported from V1: _extract_ckd_audio
@@ -761,34 +796,33 @@ def extract_ckd_audio_v1(ckd_path: str | Path, output_dir: str | Path) -> Option
     elif payload[:4] == b"RIFF":
         ext = ".wav"
     else:
-        # CKD header may be larger than 44 bytes — scan for magic bytes
-        riff_offset = data.find(b"RIFF", 0, 512)
-        ogg_offset = data.find(b"OggS", 0, 512)
-        if riff_offset >= 0 and (ogg_offset < 0 or riff_offset <= ogg_offset):
-            payload = data[riff_offset:]
-            ext = ".wav"
-        elif ogg_offset >= 0:
-            payload = data[ogg_offset:]
-            ext = ".ogg"
+        # CKD header may be much larger than 44 bytes.
+        magic_offset, magic_ext = _find_audio_magic_offset(data)
+        if magic_offset is not None and magic_ext:
+            payload = data[magic_offset:]
+            ext = magic_ext
         else:
-            # Proprietary format (XMA, etc.) -- strip header to temp file and try vgmstream
+            # Proprietary format (XMA, etc.) -- write payload and try decoders.
             temp_payload = output_dir / f"{base}_payload.bin"
             temp_payload.write_bytes(payload)
             out_path = output_dir / (base + "_decoded.wav")
-            
+
             try:
                 decoded = decode_xma2_audio(temp_payload, out_path)
                 if decoded and decoded.exists():
                     if is_valid_wav(decoded):
                         return str(decoded)
-                    else:
-                        logger.info("Fallback decoded WAV has wrong format; transcoding...")
-                        fixed_wav = output_dir / f"{base}_fallback_fixed.wav"
-                        run_ffmpeg(["-y", "-i", str(decoded), "-ar", "48000", "-ac", "2", str(fixed_wav)])
-                        if fixed_wav.exists():
-                            return str(fixed_wav)
+                    logger.info("Fallback decoded WAV has wrong format; transcoding...")
+                    fixed_wav = output_dir / f"{base}_fallback_fixed.wav"
+                    run_ffmpeg(["-y", "-i", str(decoded), "-ar", "48000", "-ac", "2", str(fixed_wav)])
+                    if fixed_wav.exists():
+                        return str(fixed_wav)
             except Exception as e:
                 logger.warning("vgmstream fallback failed for payload %s: %s", ckd_path.name, e)
+                ffmpeg_out = output_dir / f"{base}_ffmpeg_fallback.wav"
+                if _ffmpeg_decode_unknown_payload(temp_payload, ffmpeg_out):
+                    logger.info("Recovered audio using FFmpeg fallback: %s", ffmpeg_out.name)
+                    return str(ffmpeg_out)
             finally:
                 if temp_payload.exists():
                     temp_payload.unlink()
