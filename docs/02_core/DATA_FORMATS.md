@@ -346,7 +346,7 @@ the source OGG file during conversion.
 
 ### Installer Settings JSON
 
-Located at `installer_settings.json` in the project root. See [MAP_CONFIG_FORMAT.md](MAP_CONFIG_FORMAT.md) for full documentation.
+Located at `installer_settings.json` in the project root. See [MAP_CONFIG_FORMAT.md](../04_reference/MAP_CONFIG_FORMAT.md) for full documentation.
 
 **Fields:**
 

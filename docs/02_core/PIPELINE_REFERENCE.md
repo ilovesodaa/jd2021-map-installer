@@ -1,12 +1,28 @@
 # Pipeline Reference
 
-This document describes the JD2021 Map Installer v2 data pipeline: how map data flows from source (web or IPK) through extraction, normalization, and installation into playable UbiArt engine files.
+**Last Updated:** April 2026 | **Applies to:** JD2021 Map Installer v2
+
+This document describes the JD2021 Map Installer v2 data pipeline: how map data flows from source ingestion (Fetch/HTML/IPK/Batch/Manual) through extraction, normalization, and installation into playable UbiArt engine files.
+
+## Current Behavior Notes (April 2026)
+
+> [!IMPORTANT]
+> **Intro AMB is temporarily disabled in current V2 behavior.**
+> Intro ambient playback is intentionally forced to silent placeholder behavior as an emergency stability mitigation. Do not expect intro AMB parity with legacy behavior at this time.
+
+> [!NOTE]
+> **IPK-derived video timing may require manual tuning.**
+> For many IPK maps, `videoStartTime` is approximate by design due to source metadata limitations. Manual post-install offset adjustment is expected.
+
+> [!WARNING]
+> **Runtime dependencies are required for full pipeline coverage.**
+> Missing or misconfigured FFmpeg/FFprobe, vgmstream, or Playwright Chromium can cause degraded behavior, fallback processing, or workflow failures.
 
 ---
 
 ## Pipeline Overview
 
-V2 replaces the legacy 16-step monolithic pipeline with a three-phase architecture:
+V2 replaces the legacy monolithic flow with a three-phase architecture:
 
 ```
 ┌─────────────────┐      ┌──────────────────┐      ┌─────────────────┐
@@ -22,6 +38,8 @@ V2 replaces the legacy 16-step monolithic pipeline with a three-phase architectu
 
 Each phase is orchestrated by a `QObject` worker running on a `QThread`, communicating with the GUI through Qt signals.
 
+Pipeline execution is launched from multiple UI modes (Fetch by codename, HTML, IPK, Batch directory, Manual source). Source mode affects extraction strategy, but all successful paths converge into the same normalization and installation contracts.
+
 ---
 
 ## Phase 1 — Extraction
@@ -32,7 +50,7 @@ Each phase is orchestrated by a `QObject` worker running on a `QThread`, communi
 
 ### Web Extraction (`WebPlaywrightExtractor`)
 
-Handles HTML files exported from JDHelper or direct URL lists.
+Handles HTML files exported from JDHelper, direct URL lists, and fetch-driven URL discovery.
 
 **Steps:**
 1. Collect URLs from `asset_html`, `nohud_html`, and/or direct URL list.
@@ -68,7 +86,7 @@ Handles Xbox 360 `.ipk` archive files.
 
 ### Live Scraping (`scrape_live()`)
 
-Future mode using Playwright to scrape live JDU asset pages:
+Live/experimental mode using Playwright to scrape JDU asset pages:
 
 1. Launch headless Chromium via `playwright.async_api`.
 2. Navigate to page URL and wait for `networkidle`.
@@ -76,6 +94,9 @@ Future mode using Playwright to scrape live JDU asset pages:
 4. Return URL list for the standard download pipeline.
 
 Runs in an `asyncio` event loop inside a `QThread` worker.
+
+Operational caveat:
+- Link expiry and remote endpoint behavior can break fetch sessions even when local code is healthy. Retry and fallback logic reduce, but do not eliminate, this fragility.
 
 ---
 
@@ -119,6 +140,10 @@ The stateless parser (`binary_ckd.py`) handles legacy binary (cooked) UbiArt fil
 After normalization, the following checks are applied:
 - `MusicTrackStructure.markers` must not be empty → raises `ValidationError`.
 - Preview fields (entry, loop start, loop end) are sanity-checked against marker count.
+
+Source-shape caveats:
+- Some IPK-derived maps rely on cache-like layouts (`cache/`, `itf_cooked`) for pictogram/texture discovery when canonical paths are incomplete.
+- Path casing and folder-shape differences are handled with fallbacks, especially around audio/ambient-related assets.
 
 **Output:** `NormalizedMapData` — the single canonical representation of a map.
 
@@ -170,6 +195,10 @@ Creates the standard map directory structure:
 - **Color conversion:** `[R,G,B,A]` float arrays → `0xRRGGBBAA` hex strings.
 - **Lua long strings:** Handles nested brackets in metadata values.
 
+Behavior caveats:
+- **Intro ambient behavior:** Current V2 generation keeps intro ambient effectively silent by policy (temporary mitigation).
+- **IPK video sync expectation:** `videoStartTime` is frequently a best-effort value for IPK sources; in-app readjustment is the intended follow-up step.
+
 **Errors:** `GameWriterError` wraps any file generation failure.
 
 ### Media Processing
@@ -186,6 +215,11 @@ Creates the standard map directory structure:
 | `generate_audio_preview()` | Create audio preview with fade-out (Vorbis) |
 | `convert_image()` | Pillow-based format conversion with optional resize |
 | `generate_cover_tga()` | Convert cover to 720×720 TGA for game engine |
+
+Dependency notes:
+- `ffmpeg`/`ffprobe` must be available for preview generation, timing probes, and many media transforms.
+- `vgmstream` is required for parts of the legacy/X360 audio decode path.
+- Dependency gaps can trigger fallback behavior, reduced output quality, or hard failure depending on operation.
 
 ---
 
@@ -219,3 +253,14 @@ All workers catch exceptions in their `run()` method:
 3. Emit `finished.emit(None)` or `finished.emit(False)` to signal failure.
 
 The `MainWindow` connects to these signals to display errors in the log panel and re-enable UI controls.
+
+---
+
+## Related Operational Flows
+
+This reference focuses on the extraction-normalization-installation core. In current V2 usage, two adjacent flows are also important:
+
+1. **Post-install sync/readjust:** Users commonly refine offsets after install (especially IPK maps).
+2. **Batch install + batch apply:** Multi-map processing and subsequent offset updates are part of normal operator workflow.
+
+These flows are orchestrated in `MainWindow` and reuse outputs from the core pipeline described above.
