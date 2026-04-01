@@ -1,6 +1,20 @@
 # Manual Map Porting Guide (Just Dance 2021 PC)
 
-This guide provides a technical breakdown of manually porting a Just Dance Unlimited (JDU) map into the Just Dance 2021 PC engine (UbiArt). The automated pipeline (`the installer pipeline`) handles all of this — this guide exists for those who need to understand what the automation does, reproduce a step manually, or debug a problem.
+> **Last Updated:** April 2026 | **Applies to:** JD2021 Map Installer v2
+
+This guide provides a technical breakdown of manually porting a Just Dance Unlimited (JDU) map into the Just Dance 2021 PC engine (UbiArt). The automated V2 installer pipeline handles this end-to-end in GUI workflows (Fetch, HTML, IPK, Batch, Manual source), but this guide remains useful when you need to inspect generated output, reproduce one step manually, or debug parity-sensitive edge cases.
+
+## Current V2 Behavior Notice (Read First)
+
+1. **Intro AMB in automated V2 installs is currently under a temporary mitigation policy.**
+    - Intro AMB attempt logic is intentionally disabled in current V2 runtime behavior.
+    - Silent intro placeholders are expected in affected maps during automated install.
+2. **IPK `videoStartTime` remains approximate in many cases.**
+    - Manual post-install sync refinement is expected for video alignment.
+3. **Runtime dependencies are mandatory for full fidelity.**
+    - FFmpeg/FFprobe is required for media conversion and probing.
+    - vgmstream is required for some X360/XMA2 decode paths.
+    - Missing tools cause fallback behavior, degraded previews, or partial installs.
 
 ---
 
@@ -27,6 +41,18 @@ Before starting, acquire the following original JDU files (via JDHelper or simil
 | **Data IPK** | `*_main_scene_pc.ipk` | Contains timing, choreography, and templates. |
 | **Textures** | `.png.ckd`, `.tga.ckd` | Menu art, coach textures, and pictograms. |
 
+### Runtime Dependencies (V2)
+
+Manual conversion and debugging assumes the same dependency baseline as the installer:
+
+| Tool | Why it matters |
+|------|----------------|
+| **FFmpeg / FFprobe** | WAV/preview conversion, probing, timing-sensitive media transforms. |
+| **vgmstream** | Decode support for specific console-era audio payloads (for example XMA2 paths). |
+| **Playwright Chromium** | Required for Fetch mode in installer workflows (not needed for purely local manual conversion). |
+
+If these are missing, validate environment setup first (`setup.bat` in repository workflow), then retry.
+
 ---
 
 ## 2. Directory Structure
@@ -49,7 +75,7 @@ A complete JD2021 map requires the following structure under `World/MAPS/[MapNam
 │   ├── [MapName].stape          # Sequence tape (BPM/signature data per section)
 │   ├── ConfigMusic.sfi          # Audio format declaration (XML)
 │   └── AMB/
-│       ├── amb_[mapname]_intro.wav  # Intro AMB audio (marker-based duration; see AUDIO_TIMING.md Section 5)
+│       ├── amb_[mapname]_intro.wav  # Optional/manual intro AMB audio (see V2 note in Section 4.3)
 │       ├── amb_[mapname]_intro.ilu  # Sound descriptor
 │       └── amb_[mapname]_intro.tpl  # Sound actor template
 │
@@ -130,7 +156,9 @@ ffmpeg -i input.ogg -ss 2.060 -ar 48000 output.wav
 If the sample rate isn't exactly 48,000Hz, the `.trk` markers will drift, causing massive desync.
 
 ### 4.3 Generate Intro AMB
-Because `videoStartTime < 0` causes the WAV to be delayed, the gap must be covered by an AMB sound actor. The AMB sources audio from the same OGG (making any overlap inaudible) and fades out before or at the handoff point.
+> **V2 Status (April 2026):** Automated intro AMB attempts are temporarily disabled in the current installer mitigation policy. In standard V2 installs, silent intro placeholders are expected.
+
+For manual porting only: because `videoStartTime < 0` causes the WAV to be delayed, the gap can be covered by an AMB sound actor. The AMB sources audio from the same OGG (making any overlap inaudible) and fades out before or at the handoff point.
 
 The automated pipeline calculates duration from marker data (primary) or falls back to `abs(videoStartTime) + 1.355s` (heuristic to cover engine scheduling jitter). For manual porting, use the heuristic fallback:
 
@@ -142,7 +170,7 @@ The automated pipeline calculates duration from marker data (primary) or falls b
 ffmpeg -t 3.500 -i input.ogg -af "afade=t=out:st=3.300:d=0.2" -ar 48000 amb_mapname_intro.wav
 ```
 
-See **[AUDIO_TIMING.md](AUDIO_TIMING.md)** for the full explanation including the marker-based primary formula.
+See **[AUDIO_TIMING.md](../03_media/AUDIO_TIMING.md)** for the full explanation including the marker-based primary formula.
 
 For maps where `videoStartTime = 0`, no intro AMB is needed.
 
@@ -181,7 +209,7 @@ If the extracted IPK has files in an `audio/amb/` folder (e.g., `amb_mapname_int
 
 Then inject a SoundComponent actor into the audio `.isc` for each AMB file.
 
-If no AMB exists in the IPK but the map has `videoStartTime < 0`, create the three intro AMB files from scratch (see step 4.3 above for the WAV generation; the `.tpl` and `.ilu` follow the same structure as any other AMB).
+If no AMB exists in the IPK but the map has `videoStartTime < 0`, you can manually create the three intro AMB files from scratch (see step 4.3). For automated V2 installs, this intro path is currently intentionally suppressed by mitigation logic.
 
 ---
 
@@ -196,7 +224,9 @@ The engine resolves timing in this order:
 ### videoStartTime and Pre-Roll Silence
 The `videoStartTime` is typically negative (e.g., `-2.145`). This value controls both the video start offset AND the WAV audio delay. The engine uses the exact same value for both. **Do not calculate this synthetically**; always extract from the original JDU metadata.
 
-Because the WAV is delayed by `abs(videoStartTime)`, every ported map will have silence during the pre-roll period unless an intro AMB is provided. See **[AUDIO_TIMING.md](AUDIO_TIMING.md)**.
+Because the WAV is delayed by `abs(videoStartTime)`, every ported map will have silence during the pre-roll period unless an intro AMB is provided. See **[AUDIO_TIMING.md](../03_media/AUDIO_TIMING.md)**.
+
+In current automated V2 behavior, that silence can be expected due to temporary intro AMB mitigation, and is not by itself evidence of a failed install.
 
 ### Why the WAV Must Be Trimmed
 The first sample of the WAV corresponds to marker 0 = beat `startBeat`. If `startBeat = -5` and the OGG starts 2.060 seconds before the song's beat -5 content (per marker calculation), then the OGG must be trimmed by `abs(a_offset)` seconds before being used as the WAV, so that sample 0 of the WAV actually corresponds to beat -5 of the music.
@@ -218,22 +248,27 @@ The first sample of the WAV corresponds to marker 0 = beat `startBeat`. If `star
 
 | Issue | Root Cause | Fix |
 |-------|------------|-----|
-| **Silence at map start** | No intro AMB for pre-roll period | Generate `amb_{mapname}_intro.wav` from OGG and add AMB actor to audio ISC |
+| **Silence at map start (automated V2 install)** | Current mitigation disables intro AMB attempt logic | Expected behavior in April 2026 builds; use sync/readjust flow for timing work and monitor release notes for AMB redesign status |
+| **Silence at map start (manual porting)** | No intro AMB for pre-roll period on `videoStartTime < 0` map | Generate `amb_{mapname}_intro.wav` from OGG and add AMB actor to audio ISC |
 | **Crash at Coach Select** | Missing Cinematics chain | Create `_cine.isc` → `_MainSequence.tpl` structure |
 | **Progressive Desync** | Wrong audio sample rate | Re-convert audio with `-ar 48000` |
 | **Audio too late / too early** | Incorrect audio trim offset | Match `-ss` seek value to `abs(a_offset)` (marker-derived, or `abs(videoStartTime)` as fallback) |
 | **Pictos / karaoke appear too early** | `videoStartTime` set to 0 on a pre-roll map | Restore original negative `videoStartTime`; use intro AMB for audio coverage |
+| **Video timing still off after install (IPK maps)** | Source metadata does not always provide exact lead-in | Perform manual video offset tuning in sync/readjust workflow |
 | **Black Video** | Incorrect DASH MPD | Ensure namespace is `urn:mpeg:DASH:schema:MPD:2011` |
 | **Missing Title** | SkuScene Registration | Verify the map entry in `SkuScene_Maps_PC_All.isc` |
 | **Autodance error after Apply** | Sync refinement regenerated empty stub over converted data | Reinstall the map; the pipeline now protects autodance files from overwrite |
 | **Kinect gesture load failure** | ORBIS (PS4) `.gesture` files copied to PC/ | Only use `.gesture` files from DURANGO/SCARLETT (Kinect format); substitute ORBIS-exclusive variants with the base Kinect gesture |
 | **"Can't find gesture resource"** | Missing gesture file in PC/ Moves folder | Ensure PC/ contains the union of `.gesture` (from DURANGO) and `.msm` (from WIIU) files from all platforms |
+| **Preview/decode failures for some maps** | Missing FFmpeg/FFprobe or missing vgmstream runtime | Re-run dependency setup and confirm both toolchains are available before reinstall/readjust |
 
 ---
 
 ## Appendix: Batch Preparation
 
-If you plan to convert many maps, prepare a single parent directory where each child folder contains the two HTML exports (`assets.html` and `nohud.html`) captured from JDHelper. The `the installer` script will scan this directory and process each valid map folder using two-phase execution (download all first, then process all).
+If you plan to convert many maps, prepare a single parent directory where each child folder contains the two HTML exports (`assets.html` and `nohud.html`) captured from JDHelper.
+
+In V2, this source layout is typically consumed through GUI Batch mode (or HTML mode) rather than legacy script-first flow.
 
 ```
 my_maps/
@@ -245,8 +280,10 @@ my_maps/
         nohud.html
 ```
 
-```bash
-python the installer "C:\path\to\my_maps"
-```
+Batch flow in V2:
+1. Launch the installer GUI.
+2. Select **Batch Directory** mode.
+3. Point to the parent folder (`my_maps/`).
+4. Run install, then use sync/readjust for final timing polish as needed.
 
-If the script cannot find your JD installation automatically, pass `--jd-dir "C:\path\to\jd21"` to `the installer pipeline` directly, or ensure `jd21/` is in the project root.
+If the installer cannot detect your JD path, set it explicitly in installer settings and verify write access to the target `jd21` tree.

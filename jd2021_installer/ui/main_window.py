@@ -712,8 +712,6 @@ class MainWindow(QMainWindow):
             )
 
         game_dir_str = str(game_dir)
-        if " " in game_dir_str:
-            warnings.append("Game path contains spaces; some external tools may fail.")
         try:
             game_dir_str.encode("ascii")
         except UnicodeEncodeError:
