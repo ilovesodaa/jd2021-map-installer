@@ -42,14 +42,15 @@ def _add_to_user_path(directory: Path) -> None:
     )
     try:
         try:
-            current, _ = winreg.QueryValueEx(key, "PATH")
+            current, value_type = winreg.QueryValueEx(key, "PATH")
         except FileNotFoundError:
             current = ""
+            value_type = winreg.REG_EXPAND_SZ
 
         entries = [e for e in current.split(";") if e]
         if abs_dir.lower() not in [e.lower() for e in entries]:
             entries.append(abs_dir)
-            winreg.SetValueEx(key, "PATH", 0, winreg.REG_EXPAND_SZ, ";".join(entries))
+            winreg.SetValueEx(key, "PATH", 0, value_type, ";".join(entries))
             logger.info("Added FFmpeg directory to user PATH: %s", abs_dir)
         else:
             logger.debug("FFmpeg directory already in user PATH: %s", abs_dir)
