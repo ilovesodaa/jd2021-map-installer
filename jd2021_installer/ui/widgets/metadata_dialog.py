@@ -34,7 +34,7 @@ class MetadataCorrectionDialog(QDialog):
         self.original_display = QTextEdit(self.original_value)
         self.original_display.setReadOnly(True)
         self.original_display.setMaximumHeight(60)
-        self.original_display.setStyleSheet("background-color: #f0f0f0; color: #555;")
+        self.original_display.setObjectName("metadataOriginalDisplay")
         layout.addWidget(self.original_display)
 
         layout.addWidget(QLabel("Suggested ASCII/Sanitized Replacement:"))

@@ -59,7 +59,7 @@ class SyncRefinementWidget(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(4, 4, 4, 4)
 
         group = QGroupBox("Sync Refinement")
         group_layout = QVBoxLayout(group)
@@ -69,7 +69,9 @@ class SyncRefinementWidget(QWidget):
         offsets_row = QHBoxLayout()
 
         # Audio offset
-        offsets_row.addWidget(QLabel("Audio Offset (ms):"))
+        audio_offset_label = QLabel("Audio Offset (ms):")
+        audio_offset_label.setObjectName("syncOffsetLabel")
+        offsets_row.addWidget(audio_offset_label)
         self._audio_spin = QDoubleSpinBox()
         self._audio_spin.setRange(-50000.0, 50000.0)
         self._audio_spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
@@ -105,6 +107,7 @@ class SyncRefinementWidget(QWidget):
         inc_row_audio = QHBoxLayout()
         inc_row_audio.setSpacing(4)
         audio_label = QLabel("Adj Audio:")
+        audio_label.setObjectName("syncOffsetLabel")
         audio_label.setMinimumWidth(70)
         inc_row_audio.addWidget(audio_label)
         
@@ -121,6 +124,7 @@ class SyncRefinementWidget(QWidget):
         inc_row_video = QHBoxLayout()
         inc_row_video.setSpacing(4)
         video_label = QLabel("Adj Video:")
+        video_label.setObjectName("syncOffsetLabel")
         video_label.setMinimumWidth(70)
         inc_row_video.addWidget(video_label)
         for delta in [-1000.0, -100.0, -10.0, -1.0, 1.0, 10.0, 100.0, 1000.0]:
@@ -137,8 +141,10 @@ class SyncRefinementWidget(QWidget):
 
         # -- Separator -------------------------------------------------------
         sep = QFrame()
+        sep.setObjectName("sectionSeparator")
         sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setFrameShadow(QFrame.Shadow.Sunken)
+        sep.setFrameShadow(QFrame.Shadow.Plain)
+        sep.setLineWidth(1)
         group_layout.addWidget(sep)
 
         # -- Preview frame ---------------------------------------------------
@@ -181,7 +187,7 @@ class SyncRefinementWidget(QWidget):
 
         self._nav_label = QLabel("Map 1 / 1")
         self._nav_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._nav_label.setStyleSheet("font-weight: bold;")
+        self._nav_label.setObjectName("syncNavLabel")
         nav_layout.addWidget(self._nav_label, 1)
 
         self._btn_next = QPushButton("Next Map >")

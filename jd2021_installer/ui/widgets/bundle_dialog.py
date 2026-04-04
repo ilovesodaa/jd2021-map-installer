@@ -33,6 +33,7 @@ class BundleSelectDialog(QDialog):
 
         controls = QHBoxLayout()
         self._select_all = QCheckBox("Select All")
+        self._select_all.setToolTip("Toggle all bundle maps on or off")
         self._select_all.setChecked(True)
         self._select_all.toggled.connect(self._on_select_all_toggled)
         controls.addWidget(self._select_all)
@@ -42,6 +43,7 @@ class BundleSelectDialog(QDialog):
         layout.addLayout(controls)
 
         self.list_widget = QListWidget()
+        self.list_widget.setToolTip("Check the maps you want to install from this bundle")
         self.list_widget.itemChanged.connect(self._on_item_changed)
         for m in maps_found:
             item = QListWidgetItem(m)

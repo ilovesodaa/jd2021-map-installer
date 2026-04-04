@@ -256,13 +256,13 @@ class PreviewWidget(QWidget):
     # ==================================================================
 
     def _set_play_button_icon(self, playing: bool) -> None:
-        tooltip = "Pause/Stop Preview" if playing else "Start Preview"
-        self._btn_play.setText("Stop" if playing else "Preview")
+        tooltip = "Pause Preview" if playing else "Play Preview"
+        self._btn_play.setText("Stop" if playing else "Play")
         self._btn_play.setToolTip(tooltip)
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(4)
         self.setObjectName("previewWidget")
 
@@ -271,6 +271,7 @@ class PreviewWidget(QWidget):
         self._canvas.setObjectName("previewCanvas")
         self._canvas.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._canvas.setMinimumSize(480, 270)
+        self._canvas.setToolTip("Video preview area for sync checking")
         self._canvas.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding,
         )
@@ -278,7 +279,7 @@ class PreviewWidget(QWidget):
 
         # -- Seek bar -------------------------------------------------------
         seek_row = QHBoxLayout()
-        seek_row.setContentsMargins(0, 0, 0, 0)
+        seek_row.setContentsMargins(4, 0, 4, 0)
 
         self._lbl_time = QLabel("0:00")
         self._lbl_time.setObjectName("previewCurrentTimeLabel")
@@ -291,6 +292,7 @@ class PreviewWidget(QWidget):
         self._seek_slider.setRange(0, 1000)
         self._seek_slider.setValue(0)
         self._seek_slider.setTracking(True)
+        self._seek_slider.setToolTip("Drag to seek within the preview timeline")
         self._seek_slider.valueChanged.connect(self._on_seek_value_changed)
         self._seek_slider.sliderPressed.connect(self._on_seek_pressed)
         self._seek_slider.sliderReleased.connect(self._on_seek_released)
@@ -300,13 +302,14 @@ class PreviewWidget(QWidget):
         self._lbl_dur.setObjectName("previewDurationLabel")
         self._lbl_dur.setMinimumWidth(40)
         self._lbl_dur.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self._lbl_dur.setToolTip("Total preview duration")
         seek_row.addWidget(self._lbl_dur)
 
         root.addLayout(seek_row)
 
         # -- Buttons --------------------------------------------------------
         btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setContentsMargins(4, 0, 4, 0)
         btn_row.addStretch()
 
         self._btn_rewind = QPushButton()

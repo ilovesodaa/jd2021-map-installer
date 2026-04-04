@@ -32,6 +32,7 @@ class AppConfig(BaseModel):
     cleanup_behavior: str = Field(default="ask", pattern=r"^(ask|delete|keep)$")
     locked_status_behavior: str = Field(default="ask", pattern=r"^(ask|force3|keep)$")
     show_preflight_success_popup: bool = True
+    show_install_summary_popup: bool = True
     show_quickstart_on_launch: bool = True
     skip_quickstart: bool = False
     log_detail_level: str = Field(default="user", pattern=r"^(quiet|user|detailed|developer)$")
@@ -40,6 +41,7 @@ class AppConfig(BaseModel):
     min_window_width: int = 1000
     min_window_height: int = 920
     show_window_size_overlay: bool = False
+    style_debug_mode: bool = False
     window_size_overlay_timeout_ms: int = 1100
 
     # Download settings

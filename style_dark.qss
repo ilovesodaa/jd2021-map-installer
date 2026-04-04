@@ -1,7 +1,7 @@
 /* Global theme (Phase 1: Centralize & Standardize) */
 
 QWidget {
-	background-color: #181a1f;
+	background-color: #1B1F28;
 	color: #d8dce7;
 	font-family: "Segoe UI", "Noto Sans", "Helvetica Neue", sans-serif;
 	font-size: 10pt;
@@ -181,20 +181,28 @@ QLabel#progressSectionLabel,
 QLabel#actionSectionLabel,
 QLabel#configSectionLabel {
 	font-weight: 700;
+	padding: 2px 4px;
+	margin-bottom: 2px;
 }
 
 QLabel#settingsDialogTitle {
 	font-size: 14px;
 }
 
-QLabel#modeHtmlWarningLabel {
-	color: #f4c46b;
+QLabel#modeFetchWarningLabel,
+QLabel#modeHtmlWarningLabel,
+QLabel#modeIpkWarningLabel,
+QLabel#modeBatchHintLabel,
+QLabel#modeManualWarningLabel {
+	color: #a4adbf;
 	font-weight: 700;
 }
 
-QLabel#modeBatchHintLabel {
-	color: #a4adbf;
-	font-style: italic;
+
+QLabel#syncOffsetLabel {
+	background-color: transparent;
+	color: #b8c0d4;
+	font-weight: 600;
 }
 
 QPlainTextEdit#logConsoleTextEdit {
@@ -218,6 +226,7 @@ QLabel#previewDurationLabel {
 	color: #b8c0d4;
 	font-family: "Cascadia Mono", "Consolas", monospace;
 	font-size: 9pt;
+	padding: 0 3px;
 }
 
 QWidget#mainWindowCentral {

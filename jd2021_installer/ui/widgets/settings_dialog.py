@@ -125,6 +125,14 @@ class SettingsDialog(QDialog):
         )
         layout.addWidget(self.cb_preflight_popup)
 
+        self.cb_install_summary = QCheckBox("Show installation summary popup")
+        self.cb_install_summary.setChecked(getattr(self._config, "show_install_summary_popup", True))
+        self.cb_install_summary.setToolTip(
+            "Shows a checklist-style summary at the end of install with\n"
+            "required/optional files, counts, and warnings."
+        )
+        layout.addWidget(self.cb_install_summary)
+
         # show_quickstart_on_launch
         self.cb_quickstart = QCheckBox("Show quick-start hint on launch")
         self.cb_quickstart.setChecked(self._config.show_quickstart_on_launch)
@@ -211,6 +219,17 @@ class SettingsDialog(QDialog):
         )
         layout.addWidget(self.cb_size_overlay)
 
+        self.cb_style_debug = QCheckBox("Enable Style Debug Mode (outline sections)")
+        self.cb_style_debug.setChecked(
+            getattr(self._config, "style_debug_mode", False)
+        )
+        self.cb_style_debug.setToolTip(
+            "Adds colored outlines and section labels to help map widgets to QSS selectors.\n"
+            "While enabled, stylesheet edits auto-reload as you save.\n"
+            "Use while tuning colors, then disable for normal appearance."
+        )
+        layout.addWidget(self.cb_style_debug)
+
         # video_quality
         quality_row = QHBoxLayout()
         quality_label = QLabel("Default video quality:")
@@ -276,6 +295,7 @@ class SettingsDialog(QDialog):
         self._config.cleanup_behavior = self.combo_cleanup.currentText()
         self._config.locked_status_behavior = self.combo_locked_status.currentText()
         self._config.show_preflight_success_popup = self.cb_preflight_popup.isChecked()
+        self._config.show_install_summary_popup = self.cb_install_summary.isChecked()
         self._config.show_quickstart_on_launch = self.cb_quickstart.isChecked()
         self._config.log_detail_level = self.combo_log_detail.currentText()
         self._config.theme = self.combo_theme.currentText()
@@ -283,6 +303,7 @@ class SettingsDialog(QDialog):
         self._config.min_window_width = self.spin_min_width.value()
         self._config.min_window_height = self.spin_min_height.value()
         self._config.show_window_size_overlay = self.cb_size_overlay.isChecked()
+        self._config.style_debug_mode = self.cb_style_debug.isChecked()
         self._config.video_quality = self.combo_quality.currentText()
         self._config.discord_channel_url = self.txt_discord_url.text().strip()
         

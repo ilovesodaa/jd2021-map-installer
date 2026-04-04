@@ -671,7 +671,7 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
         # Preserve scan order while removing duplicates from merged roots.
         all_media_files = list(dict.fromkeys(all_media_files))
 
-    def _get_best_asset(keyword: str, files: List[Path]) -> Optional[Path]:
+    def _get_best_asset(keyword: str, files: List[Path], allow_optional_fallback: bool = False) -> Optional[Path]:
         candidates = [f for f in files if keyword in f.name.lower()]
         if not candidates:
             return None
@@ -688,11 +688,53 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
                 return path_matches[0]
         
         # Priority 3: First available (fallback)
-        # V1 Parity: Only fall back to first candidate if NO codename scoping was requested.
-        # In bundles, if we found nothing matching the codename, it's safer to return None
-        # than to pick a random map's asset.
-        if codename_low:
+        # V1 Parity: For required assets (covers, coaches), only fall back if NO codename scoping
+        # was requested. In bundles, if we found nothing matching the codename, it's safer to 
+        # return None than to pick a random map's asset.
+        # However, for optional assets (banner_bkg, map_bkg, cover_albumcoach, cover_albumbkg),
+        # allow fallback ONLY if candidates don't contain a DIFFERENT codename. This allows
+        # discovery of generic assets without codename prefixes while preventing cross-map mixing.
+        if codename_low and not allow_optional_fallback:
             return None
+        
+        if codename_low and allow_optional_fallback:
+            # For optional assets, accept the first candidate that either:
+            # 1. Has no codename-like prefix (e.g., "map_bkg.tga"), or
+            # 2. Has a codename prefix that matches ours (already checked above), or
+            # 3. Is in a path that doesn't suggest it belongs to a different map
+            # Reject candidates that have a DIFFERENT code name prefix (e.g., "mapaalbumcoach.tga")
+            
+            for candidate in candidates:
+                # Check if there's a prefix that looks like a code name (e.g., "mapaalbumcoach" or "mapa_banner")
+                # by seeing if the filename starts with codename alternatives
+                candidate_name_lower = candidate.name.lower()
+                
+                # Check various patterns that would indicate this belongs to a different map
+                # Pattern 1: codename_something (but not "map_bkg" or other generics)
+                # Pattern 2: differentcodename_keyword
+                # We only reject if we find a CLEARLY DIFFERENT codename pattern
+                
+                # Find all "_" separators and check prefixes
+                import re
+                parts = candidate_name_lower.split('_')
+                if len(parts) > 1:
+                    first_part = parts[0]
+                    # If first part is a codename-like identifier and it's not ours, reject
+                    if first_part != codename_low and first_part != "map" and len(first_part) >= 3:
+                        # This looks like a different map's asset (e.g., "mapb_banner_bkg.tga")
+                        # Check if this first_part is followed immediately by the asset name
+                        # to determine if it's a map prefix or part of the asset name
+                        rest_of_name = "_".join(parts[1:])
+                        if keyword in rest_of_name:  # keyword comes after the prefix
+                            # This is likely "{different_map}_{keyword}", skip it
+                            continue
+                
+                # This candidate doesn't have a conflicting prefix, so accept it
+                return candidate
+            
+            # If we get here, all candidates have conflicting prefixes, so reject
+            return None
+        
         return candidates[0]
 
     media.cover_generic_path = _get_best_asset("cover_generic", all_media_files)
@@ -706,11 +748,12 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
             if not media.cover_online_path: media.cover_online_path = general_cover
 
     media.banner_path = _get_best_asset("banner", all_media_files)
-    media.banner_bkg_path = _get_best_asset("banner_bkg", all_media_files)
-    media.map_bkg_path = _get_best_asset("map_bkg", all_media_files)
+    # Allow optional_fallback for optional assets (may not have codename prefix)
+    media.banner_bkg_path = _get_best_asset("banner_bkg", all_media_files, allow_optional_fallback=True)
+    media.map_bkg_path = _get_best_asset("map_bkg", all_media_files, allow_optional_fallback=True)
 
-    media.cover_albumbkg_path = _get_best_asset("albumbkg", all_media_files)
-    media.cover_albumcoach_path = _get_best_asset("albumcoach", all_media_files)
+    media.cover_albumbkg_path = _get_best_asset("albumbkg", all_media_files, allow_optional_fallback=True)
+    media.cover_albumcoach_path = _get_best_asset("albumcoach", all_media_files, allow_optional_fallback=True)
     
     # Coaches are a list
     all_coaches = [f for f in all_media_files if "coach_" in f.name.lower()]

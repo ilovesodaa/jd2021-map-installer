@@ -19,7 +19,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -48,7 +48,7 @@ MODE_MANUAL = 4
 
 MODE_LABELS = [
     "Fetch (Codename)",
-    "HTML File",
+    "HTML Files",
     "IPK Archive",
     "Batch (Directory)",
     "Manual (Directory)",
@@ -90,9 +90,11 @@ class FileRowWidget(QWidget):
         self.line_edit = QLineEdit()
         self.line_edit.setReadOnly(True)
         self.line_edit.setPlaceholderText(placeholder)
+        self.line_edit.setToolTip(f"Selected path for {label_text.rstrip(':')}")
         lay.addWidget(self.line_edit)
 
         btn = QPushButton("Browse…")
+        btn.setToolTip(f"Browse and select {label_text.rstrip(':')}")
         btn.clicked.connect(self._browse)
         lay.addWidget(btn)
 
@@ -133,7 +135,7 @@ class ModeSelectorWidget(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(4, 4, 4, 4)
         self.setObjectName("modeSelectorWidget")
 
         # Mode row layout to keep combo box concise
@@ -145,6 +147,7 @@ class ModeSelectorWidget(QWidget):
 
         self._mode_combo = QComboBox()
         self._mode_combo.addItems(MODE_LABELS)
+        self._mode_combo.setToolTip("Choose how map source files are provided to the installer")
         self._mode_combo.currentIndexChanged.connect(self._on_mode_index_changed)
         mode_row.addWidget(self._mode_combo)
         mode_row.addStretch()
@@ -153,7 +156,7 @@ class ModeSelectorWidget(QWidget):
         # Stacked widget for mode-specific inputs
         self._stack = QStackedWidget()
         self._stack.setObjectName("modeSelectorStack")
-        self._stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self._stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         root.addWidget(self._stack)
 
         self._stack.addWidget(self._build_fetch_page())  # 0
@@ -169,17 +172,29 @@ class ModeSelectorWidget(QWidget):
     def _build_fetch_page(self) -> QWidget:
         page = QWidget()
         page.setObjectName("modePage")
-        lay = QHBoxLayout(page)
+        lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 4, 0, 0)
+
+        warn = QLabel(
+            "Fetch automates acquiring the asset and nohud HTML files and downloads. Make sure to set your Discord channel link that can access JDHelper."
+        )
+        warn.setObjectName("modeFetchWarningLabel")
+        warn.setWordWrap(True)
+        lay.addWidget(warn)
+
+        row = QHBoxLayout()
 
         lbl = QLabel("Codename(s):")
         lbl.setMinimumWidth(120)
-        lay.addWidget(lbl)
+        row.addWidget(lbl)
 
         inp = QLineEdit()
         inp.setPlaceholderText("e.g. RainOnMe, DontStartNow")
+        inp.setToolTip("Enter one or more codenames, separated by commas")
         inp.textChanged.connect(lambda t: self.target_selected.emit(t))
-        lay.addWidget(inp)
+        row.addWidget(inp)
+
+        lay.addLayout(row)
 
         self.inputs["fetch"]["codenames"] = inp
         return page
@@ -245,6 +260,13 @@ class ModeSelectorWidget(QWidget):
         lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 4, 0, 0)
 
+        warn = QLabel(
+            "IPK installs .IPK maps that either contain one map or bundles that contain more than one map."
+        )
+        warn.setObjectName("modeIpkWarningLabel")
+        warn.setWordWrap(True)
+        lay.addWidget(warn)
+
         row = FileRowWidget(
             "IPK File:",
             is_dir=False,
@@ -264,8 +286,7 @@ class ModeSelectorWidget(QWidget):
         lay.setContentsMargins(0, 4, 0, 0)
 
         warn = QLabel(
-            "Batch installs from a folder containing map subfolders with asset/nohud HTML files "
-            "or already-downloaded files."
+            "Batch installs from a folder containing map subfolders. Can be used with Fetch/HTML/IPK modes' files, this can be .html, .ipk, or already-extracted map folders."
         )
         warn.setObjectName("modeBatchHintLabel")
         warn.setWordWrap(True)
@@ -286,24 +307,36 @@ class ModeSelectorWidget(QWidget):
         page.setObjectName("modePage")
         lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 4, 0, 0)
-        
+
         # Add scroll area since there are many fields
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         
         scroll_content = QWidget()
+        scroll_content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         scroll_lay = QVBoxLayout(scroll_content)
         scroll_lay.setContentsMargins(0, 0, 0, 0)
+        scroll_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        warn = QLabel(
+            "Manual mode is best for already-extracted map folders or when you need to point the installer at files by hand."
+        )
+        warn.setObjectName("modeManualWarningLabel")
+        warn.setWordWrap(True)
+        scroll_lay.addWidget(warn)
 
         # Source flavor selection (v1 parity)
         source_lay = QHBoxLayout()
         source_lay.addWidget(QLabel("Source Type:"))
         self._manual_source_combo = QComboBox()
-        self._manual_source_combo.addItems(["JDU", "IPK"])
+        self._manual_source_combo.addItems(["JDU", "IPK", "Mixed"])
+        self._manual_source_combo.setToolTip("Set expected source format to improve auto-discovery of files")
         self._manual_source_combo.currentTextChanged.connect(self._on_manual_source_type_changed)
         source_lay.addWidget(self._manual_source_combo)
-        self._manual_source_hint = QLabel("Downloaded assets + nohud HTML")
+        self._manual_source_hint = QLabel("Unpacked JDU Files")
         source_lay.addWidget(self._manual_source_hint)
         source_lay.addStretch()
         scroll_lay.addLayout(source_lay)
@@ -313,6 +346,8 @@ class ModeSelectorWidget(QWidget):
         submode_lay.addWidget(QLabel("Manual Submode:"))
         self._manual_sub_select = QRadioButton("Select Files")
         self._manual_sub_scan = QRadioButton("Scan Directory")
+        self._manual_sub_select.setToolTip("Fill required fields manually using each Browse button")
+        self._manual_sub_scan.setToolTip("Automatically scan the selected root folder and pre-fill matching files")
         self._manual_sub_scan.setChecked(True)
         submode_lay.addWidget(self._manual_sub_select)
         submode_lay.addWidget(self._manual_sub_scan)
@@ -328,6 +363,7 @@ class ModeSelectorWidget(QWidget):
         top_lay.addWidget(root_row, 0, 0, 1, 2)
 
         self._manual_scan_btn = QPushButton("Scan")
+        self._manual_scan_btn.setToolTip("Run another scan on the current root folder to refresh detected paths")
         self._manual_scan_btn.clicked.connect(self._on_manual_scan_clicked)
         top_lay.addWidget(self._manual_scan_btn, 0, 2)
 
@@ -335,6 +371,7 @@ class ModeSelectorWidget(QWidget):
         lbl_code.setMinimumWidth(120)
         top_lay.addWidget(lbl_code, 1, 0)
         inp_code = QLineEdit()
+        inp_code.setToolTip("Codename used for naming outputs and matching map files")
         top_lay.addWidget(inp_code, 1, 1)
 
         scroll_lay.addLayout(top_lay)
@@ -345,7 +382,7 @@ class ModeSelectorWidget(QWidget):
         
         row_audio = FileRowWidget("Audio File:", file_filter="Audio (*.ogg *.wav *.wav.ckd);;All (*.*)")
         row_video = FileRowWidget("Video File:", file_filter="WebM (*.webm);;All (*.*)")
-        row_mtrack = FileRowWidget("Musictrack CKD:", file_filter="CKD (*.ckd);;All (*.*)")
+        row_mtrack = FileRowWidget("Musictrack:", file_filter="Musictrack (*.ckd *.trk);;All (*.*)")
         
         lay_req.addWidget(row_audio)
         lay_req.addWidget(row_video)
@@ -356,10 +393,10 @@ class ModeSelectorWidget(QWidget):
         grp_tapes = QGroupBox("Tapes & Config")
         lay_tapes = QVBoxLayout(grp_tapes)
         
-        row_sdesc = FileRowWidget("Songdesc CKD:", file_filter="CKD (*.ckd);;All (*.*)")
-        row_dtape = FileRowWidget("Dance Tape CKD:", file_filter="CKD (*.ckd);;All (*.*)")
-        row_ktape = FileRowWidget("Karaoke Tape CKD:", file_filter="CKD (*.ckd);;All (*.*)")
-        row_mseq = FileRowWidget("Mainseq Tape CKD:", file_filter="CKD (*.ckd);;All (*.*)")
+        row_sdesc = FileRowWidget("Songdesc", file_filter="CKD (*.ckd);;All (*.*)")
+        row_dtape = FileRowWidget("Dance Tape", file_filter="CKD (*.ckd);;All (*.*)")
+        row_ktape = FileRowWidget("Karaoke Tape", file_filter="CKD (*.ckd);;All (*.*)")
+        row_mseq = FileRowWidget("Mainseq Tape", file_filter="CKD (*.ckd);;All (*.*)")
         
         lay_tapes.addWidget(row_sdesc)
         lay_tapes.addWidget(row_dtape)
@@ -382,11 +419,11 @@ class ModeSelectorWidget(QWidget):
         lay_assets.addWidget(row_amb)
         scroll_lay.addWidget(grp_assets)
         
-        # Add stretch so fields pack tightly at the top
-        scroll_lay.addStretch()
+        # Keep a small bottom buffer so the final field is never flush/clipped.
+        scroll_lay.addSpacing(8)
         
         scroll.setWidget(scroll_content)
-        lay.addWidget(scroll)
+        lay.addWidget(scroll, 1)
         
         self.inputs["manual"].update({
             "root": root_row.line_edit,
@@ -425,7 +462,9 @@ class ModeSelectorWidget(QWidget):
 
         hint = max(64, current.sizeHint().height())
         if self._mode_combo.currentIndex() == MODE_MANUAL:
-            target_height = max(260, min(hint + 8, 420))
+            self._stack.setMinimumHeight(320)
+            self._stack.setMaximumHeight(16777215)
+            return
         else:
             target_height = max(72, min(hint + 8, 200))
 
@@ -454,9 +493,13 @@ class ModeSelectorWidget(QWidget):
         
         # 2. Auto-discover common files
         from jd2021_installer.parsers.normalizer import _find_ckd_files
-        
+
+        if not self.inputs["manual"]["mtrack"].text().strip():
+            mtrack = self._pick_manual_musictrack(scan_root, codename or None, source_type)
+            if mtrack:
+                self.inputs["manual"]["mtrack"].setText(str(mtrack))
+
         mapping = {
-            "mtrack": "*musictrack*.tpl.ckd",
             "sdesc": "*songdesc*.tpl.ckd",
             "dtape": "*_tml_dance.?tape.ckd",
             "ktape": "*_tml_karaoke.?tape.ckd",
@@ -490,9 +533,11 @@ class ModeSelectorWidget(QWidget):
         source_type = text.strip().lower()
         if hasattr(self, "_manual_source_hint"):
             if source_type == "ipk":
-                self._manual_source_hint.setText("Unpacked IPK map files")
+                self._manual_source_hint.setText("Unpacked IPK files")
+            elif source_type == "mixed":
+                self._manual_source_hint.setText("Mixed JDU + IPK sources")
             else:
-                self._manual_source_hint.setText("Downloaded assets + nohud HTML")
+                self._manual_source_hint.setText("Downloaded JDU Files")
 
         self.inputs["manual"]["root"].clear()
         self.inputs["manual"]["codename"].clear()
@@ -556,17 +601,40 @@ class ModeSelectorWidget(QWidget):
             return True
         return lower_codename in [p.lower() for p in path.parts]
 
+    def _manual_source_is_recursive(self, source_type: str) -> bool:
+        return source_type in {"ipk", "mixed"}
+
+    def _pick_manual_musictrack(self, scan_root: Path, codename: Optional[str], source_type: str) -> Optional[Path]:
+        priority = ("*musictrack*.tpl.ckd", "*musictrack*.trk", "*.trk")
+
+        for pattern in priority:
+            top_hits = [p for p in scan_root.glob(pattern) if p.is_file()]
+            if codename:
+                scoped = [p for p in top_hits if self._matches_codename(p, codename)]
+                if scoped:
+                    return scoped[0]
+            elif top_hits:
+                return top_hits[0]
+
+        for pattern in priority:
+            hits = [p for p in scan_root.rglob(pattern) if p.is_file()]
+            if not hits:
+                continue
+            if codename:
+                scoped = [p for p in hits if self._matches_codename(p, codename)]
+                if scoped:
+                    return scoped[0]
+            else:
+                return hits[0]
+
+        return None
+
     def _pick_manual_video(self, scan_root: Path, codename: Optional[str], source_type: str) -> Optional[Path]:
-        if source_type == "ipk":
-            candidates = [
-                p for p in scan_root.rglob("*.webm")
-                if "mappreview" not in p.name.lower() and "videopreview" not in p.name.lower()
-            ]
-        else:
-            candidates = [
-                p for p in scan_root.glob("*.webm")
-                if "mappreview" not in p.name.lower() and "videopreview" not in p.name.lower()
-            ]
+        recursive = self._manual_source_is_recursive(source_type)
+        candidates = [
+            p for p in (scan_root.rglob("*.webm") if recursive else scan_root.glob("*.webm"))
+            if "mappreview" not in p.name.lower() and "videopreview" not in p.name.lower()
+        ]
 
         if not candidates:
             return None
@@ -584,35 +652,27 @@ class ModeSelectorWidget(QWidget):
         return candidates[0]
 
     def _pick_manual_audio(self, scan_root: Path, codename: Optional[str], source_type: str) -> Optional[Path]:
+        recursive = self._manual_source_is_recursive(source_type)
         if source_type == "ipk":
             priority = ("*.wav", "*.wav.ckd", "*.ogg")
         else:
             priority = ("*.ogg", "*.wav", "*.wav.ckd")
 
         for pattern in priority:
-            top_hits = [p for p in scan_root.glob(pattern) if "audiopreview" not in p.name.lower()]
-            if codename:
-                scoped = [p for p in top_hits if self._matches_codename(p, codename)]
-                if scoped:
-                    return scoped[0]
-            elif top_hits:
-                return top_hits[0]
-
-        for pattern in priority:
-            recursive_hits = [p for p in scan_root.rglob(pattern) if "audiopreview" not in p.name.lower()]
-            recursive_hits = [
+            hits = [p for p in (scan_root.rglob(pattern) if recursive else scan_root.glob(pattern)) if "audiopreview" not in p.name.lower()]
+            hits = [
                 p
-                for p in recursive_hits
+                for p in hits
                 if "autodance" not in str(p).lower() and not p.name.lower().startswith("amb_")
             ]
-            if not recursive_hits:
+            if not hits:
                 continue
             if codename:
-                scoped = [p for p in recursive_hits if self._matches_codename(p, codename)]
+                scoped = [p for p in hits if self._matches_codename(p, codename)]
                 if scoped:
                     return scoped[0]
             else:
-                return recursive_hits[0]
+                return hits[0]
 
         return None
 
@@ -648,7 +708,7 @@ class ModeSelectorWidget(QWidget):
 
     def _resolve_scan_root(self, root: Path, source_type: str) -> Path:
         """Prefer codename folder under world/maps for IPK-oriented scans."""
-        if source_type != "ipk":
+        if source_type not in {"ipk", "mixed"}:
             return root
 
         world_maps = root / "world" / "maps"

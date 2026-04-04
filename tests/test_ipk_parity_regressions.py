@@ -64,8 +64,23 @@ def test_manual_ipk_root_missing_required_media_is_fatal(tmp_path: Path) -> None
 
     extractor = ManualExtractor(codename="MapA", source_type="ipk", root_dir=str(root))
 
-    with pytest.raises(DownloadError, match="Musictrack CKD is required"):
+    with pytest.raises(DownloadError, match=r"Musictrack CKD / \.trk is required"):
         extractor.extract(tmp_path / "output")
+
+
+def test_manual_jdu_root_accepts_flexible_html_pair(tmp_path: Path) -> None:
+    root = tmp_path / "manual_jdu_root"
+    root.mkdir(parents=True)
+    (root / "map_asset_export.html").write_text("<html></html>", encoding="utf-8")
+    (root / "map_nohud_export.html").write_text("<html></html>", encoding="utf-8")
+    (root / "MapA.ogg").write_bytes(b"a" * 1024)
+    (root / "MapA_LOW.webm").write_bytes(b"v" * 1024)
+    (root / "MapA_musictrack.tpl.ckd").write_bytes(b"m")
+
+    extractor = ManualExtractor(codename="MapA", source_type="jdu", root_dir=str(root))
+    extracted = extractor.extract(tmp_path / "output")
+
+    assert extracted == root
 
 
 def test_archive_worker_does_not_swallow_unexpected_extraction_errors(tmp_path: Path) -> None:

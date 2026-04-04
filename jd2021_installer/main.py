@@ -56,7 +56,13 @@ def main() -> int:
     app = QApplication([sys.argv[0]])
     app.setApplicationName("JD2021 Map Installer")
     app.setApplicationVersion("2.0.0")
-    app.setStyleSheet(load_theme_stylesheet(startup_config.theme, project_root))
+    app.setStyleSheet(
+        load_theme_stylesheet(
+            startup_config.theme,
+            project_root,
+            getattr(startup_config, "style_debug_mode", False),
+        )
+    )
 
     window = MainWindow()
     window.show()

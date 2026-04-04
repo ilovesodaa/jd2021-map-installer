@@ -695,8 +695,72 @@ class BatchInstallWorker(QObject):
 
     def run(self) -> None:
         try:
+            import shutil
+
             self.status.emit("Scanning for maps in batch directory...")
             progress_value = 0
+
+            def find_html_pair(folder: Path) -> tuple[Optional[Path], Optional[Path]]:
+                asset: Optional[Path] = None
+                nohud: Optional[Path] = None
+                html_files = sorted(
+                    [
+                        p
+                        for p in folder.iterdir()
+                        if p.is_file() and p.suffix.lower() in {".html", ".htm"}
+                    ],
+                    key=lambda p: p.name.lower(),
+                )
+
+                for html in html_files:
+                    lower = html.name.lower()
+                    if "nohud" in lower and nohud is None:
+                        nohud = html
+                    elif "asset" in lower and asset is None:
+                        asset = html
+
+                if len(html_files) >= 2:
+                    if asset is None:
+                        asset = next((h for h in html_files if h != nohud), html_files[0])
+                    if nohud is None:
+                        nohud = next((h for h in html_files if h != asset), html_files[-1])
+
+                return asset, nohud
+
+            def looks_like_prepared_map_dir(folder: Path) -> bool:
+                if not folder.is_dir():
+                    return False
+
+                has_ckd = any(folder.rglob("*.ckd"))
+                if has_ckd:
+                    return True
+
+                has_audio = False
+                for pattern in ("*.ogg", "*.wav", "*.wav.ckd"):
+                    for p in folder.rglob(pattern):
+                        low_name = p.name.lower()
+                        low_path = str(p).lower().replace("\\", "/")
+                        if "audiopreview" in low_name:
+                            continue
+                        if "/amb/" in low_path or "/autodance/" in low_path:
+                            continue
+                        if low_name.startswith("amb_"):
+                            continue
+                        has_audio = True
+                        break
+                    if has_audio:
+                        break
+
+                has_video = any(
+                    p.is_file()
+                    and "mappreview" not in p.name.lower()
+                    and "videopreview" not in p.name.lower()
+                    for p in folder.rglob("*.webm")
+                )
+
+                has_musictrack = any(folder.rglob("*musictrack*.tpl.ckd"))
+
+                return has_audio and has_video and has_musictrack
 
             def emit_progress(value: int) -> None:
                 nonlocal progress_value
@@ -705,22 +769,48 @@ class BatchInstallWorker(QObject):
                     progress_value = clamped
                     self.progress.emit(clamped)
             
-            candidates: list[Path] = []
+            candidates: list[dict[str, object]] = []
             if self._source_dir:
                 if self._source_dir.is_file() and self._source_dir.suffix.lower() == ".ipk":
-                    candidates.append(self._source_dir)
+                    candidates.append({"kind": "ipk", "path": self._source_dir})
                 elif self._source_dir.is_dir():
-                    for path in self._source_dir.iterdir():
+                    root_asset, root_nohud = find_html_pair(self._source_dir)
+                    if root_asset and root_nohud:
+                        candidates.append(
+                            {
+                                "kind": "html",
+                                "path": self._source_dir,
+                                "name": self._source_dir.name,
+                                "asset": root_asset,
+                                "nohud": root_nohud,
+                            }
+                        )
+
+                    for path in sorted(self._source_dir.iterdir(), key=lambda p: p.name.lower()):
                         if path.is_file() and path.suffix.lower() == ".ipk":
-                            candidates.append(path)
+                            candidates.append({"kind": "ipk", "path": path})
                         elif path.is_dir():
-                            has_ckd = any(path.rglob("*.ckd"))
-                            if has_ckd:
-                                candidates.append(path)
+                            if looks_like_prepared_map_dir(path):
+                                candidates.append({"kind": "dir", "path": path})
+                                continue
+
+                            asset_html, nohud_html = find_html_pair(path)
+                            if asset_html and nohud_html:
+                                candidates.append(
+                                    {
+                                        "kind": "html",
+                                        "path": path,
+                                        "name": path.name,
+                                        "asset": asset_html,
+                                        "nohud": nohud_html,
+                                    }
+                                )
             
             total = len(candidates)
             if total == 0:
-                self.error.emit("No valid IPK files or map folders found in the selected batch directory.")
+                self.error.emit(
+                    "No valid IPK files, prepared map folders, or HTML map folders found in the selected batch directory."
+                )
                 self.finished.emit(False)
                 return
 
@@ -729,22 +819,36 @@ class BatchInstallWorker(QObject):
             
             # Emit discovered map names to the UI so it can populate the checklist
             map_names = []
-            for c in candidates:
-                if c.is_file() and c.suffix.lower() == ".ipk":
+            for candidate in candidates:
+                kind = str(candidate["kind"])
+                cpath = Path(candidate["path"])
+                if kind == "ipk":
                     from jd2021_installer.extractors.archive_ipk import inspect_ipk
-                    maps_in_ipk = inspect_ipk(c)
-                    map_names.extend(maps_in_ipk or [c.stem])
+                    maps_in_ipk = inspect_ipk(cpath)
+                    map_names.extend(maps_in_ipk or [cpath.stem])
+                elif kind == "html":
+                    map_names.append(str(candidate.get("name") or cpath.name))
                 else:
-                    map_names.append(c.name)
+                    map_names.append(cpath.name)
+
+            # Merge all discovered map names into one stable list (case-insensitive dedupe).
+            merged_map_names: list[str] = []
+            seen_discovered: set[str] = set()
+            for name in map_names:
+                key = name.lower()
+                if key in seen_discovered:
+                    continue
+                seen_discovered.add(key)
+                merged_map_names.append(name)
 
             selected_lookup = {m.lower() for m in self._selected_maps} if self._selected_maps else None
-            display_map_names = map_names
+            display_map_names = merged_map_names
             if selected_lookup is not None:
-                display_map_names = [name for name in map_names if name.lower() in selected_lookup]
+                display_map_names = [name for name in merged_map_names if name.lower() in selected_lookup]
             self.discovered_maps.emit(display_map_names)
             emit_progress(3)
 
-            planned_maps = len(display_map_names) if display_map_names else len(map_names)
+            planned_maps = len(display_map_names) if display_map_names else len(merged_map_names)
             total_units = max(planned_maps * 3, 1)
             completed_units = 0
 
@@ -755,25 +859,61 @@ class BatchInstallWorker(QObject):
             success_count = 0
             attempted_maps = 0
             installed_maps: list[NormalizedMapData] = []
+            html_prepared: list[tuple[str, Path]] = []
+            installed_codenames: set[str] = set()
             
             # Temporary cache for extracted IPKs
             batch_cache = self._config.cache_directory / "_batch_temp"
             batch_cache.mkdir(parents=True, exist_ok=True)
 
-            for i, candidate in enumerate(candidates):
+            # V1-style parity: prepare all HTML-sourced maps first while links are fresh.
+            html_candidates = [c for c in candidates if str(c["kind"]) == "html"]
+            if html_candidates:
+                self.status.emit("Phase 1/2: Preparing HTML-sourced batch maps...")
+                for idx, candidate in enumerate(html_candidates, start=1):
+                    map_name = str(candidate.get("name") or Path(candidate["path"]).name)
+                    if selected_lookup and map_name.lower() not in selected_lookup:
+                        continue
+                    asset_html = Path(candidate["asset"])
+                    nohud_html = Path(candidate["nohud"])
+
+                    self.status.emit(
+                        f"[{idx}/{len(html_candidates)}] Downloading/Preparing HTML map {map_name}..."
+                    )
+                    try:
+                        from jd2021_installer.extractors.web_playwright import WebPlaywrightExtractor
+
+                        extractor = WebPlaywrightExtractor(
+                            asset_html=str(asset_html),
+                            nohud_html=str(nohud_html),
+                            quality=self._config.video_quality,
+                            config=self._config,
+                        )
+                        prepared_dir = extractor.extract(batch_cache)
+                        html_prepared.append((map_name, prepared_dir))
+                    except Exception as e:
+                        logger.warning("Failed HTML prepare for %s: %s", map_name, e)
+                        self.status.emit(f"Warning: Failed HTML prepare for {map_name} ({str(e)[:40]})")
+
+            process_candidates = [c for c in candidates if str(c["kind"]) != "html"]
+
+            self.status.emit("Phase 2/2: Installing prepared maps...")
+
+            for i, candidate in enumerate(process_candidates):
                 try:
-                    self.status.emit(f"[{i+1}/{total}] Processing {candidate.name}...")
+                    cpath = Path(candidate["path"])
+                    self.status.emit(f"[{i+1}/{len(process_candidates)}] Processing {cpath.name}...")
                     
-                    map_dir = candidate
+                    map_dir = cpath
                     map_names_for_candidate: list[str] = []
-                    is_candidate_ipk = bool(candidate.is_file() and candidate.suffix.lower() == ".ipk")
+                    is_candidate_ipk = str(candidate["kind"]) == "ipk"
                     if is_candidate_ipk:
                         # Extract IPK to temp dir
                         from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor
                         # Try to get codename from IPK name for early status
                         from jd2021_installer.extractors.archive_ipk import inspect_ipk
-                        maps_in_ipk = inspect_ipk(candidate)
-                        ipk_name_hint = maps_in_ipk[0] if maps_in_ipk else candidate.name
+                        maps_in_ipk = inspect_ipk(cpath)
+                        ipk_name_hint = maps_in_ipk[0] if maps_in_ipk else cpath.name
                         
                         self.status.emit(f"[{ipk_name_hint}] Extract map data")
                         desired_codename = None
@@ -783,7 +923,7 @@ class BatchInstallWorker(QObject):
                                     desired_codename = discovered_name
                                     break
 
-                        extractor = ArchiveIPKExtractor(candidate, desired_codename=desired_codename)
+                        extractor = ArchiveIPKExtractor(cpath, desired_codename=desired_codename)
                         import shutil
                         shutil.rmtree(batch_cache, ignore_errors=True)
                         map_dir = extractor.extract(batch_cache)
@@ -797,10 +937,13 @@ class BatchInstallWorker(QObject):
                         else:
                             map_names_for_candidate = [map_dir.name]
 
-                    logger.info("Discovered %d map(s) in %s", len(map_names_for_candidate), candidate.name)
+                    logger.info("Discovered %d map(s) in %s", len(map_names_for_candidate), cpath.name)
 
                     for map_name in map_names_for_candidate:
                         if selected_lookup and map_name.lower() not in selected_lookup:
+                            continue
+                        if map_name.lower() in installed_codenames:
+                            self.status.emit(f"Warning: Duplicate map '{map_name}' detected; skipping duplicate source.")
                             continue
                         attempted_maps += 1
                         emit_map_stage(0)
@@ -809,6 +952,14 @@ class BatchInstallWorker(QObject):
                         from jd2021_installer.parsers.normalizer import normalize
                         map_data = normalize(map_dir, codename=map_name, search_root=map_dir)
                         setattr(map_data, "_is_ipk_source", is_candidate_ipk)
+
+                        canonical_name = (map_data.codename or map_name).strip()
+                        canonical_key = canonical_name.lower()
+                        if canonical_key in installed_codenames:
+                            self.status.emit(
+                                f"Warning: Duplicate map '{canonical_name}' resolved from multiple sources; skipping duplicate install."
+                            )
+                            continue
 
                         status_value = int(getattr(map_data.song_desc, "status", _READY_STATUS_VALUE))
                         if status_value != _READY_STATUS_VALUE:
@@ -850,12 +1001,84 @@ class BatchInstallWorker(QObject):
                         emit_map_stage(2)
                         completed_units += 3
                         success_count += 1
+                        installed_codenames.add(canonical_key)
                         installed_maps.append(map_data)
                         logger.info("Batch installed map: %s", map_data.codename)
                     
                 except Exception as e:
-                    logger.warning("Failed to install map from %s: %s", candidate.name, e)
-                    self.status.emit(f"Warning: Failed {candidate.name} ({str(e)[:30]})")
+                    cpath = Path(candidate["path"])
+                    logger.warning("Failed to install map from %s: %s", cpath.name, e)
+                    self.status.emit(f"Warning: Failed {cpath.name} ({str(e)[:30]})")
+
+            # Process maps prepared from HTML folders in phase 1.
+            for map_name, map_dir in html_prepared:
+                try:
+                    if selected_lookup and map_name.lower() not in selected_lookup:
+                        continue
+                    if map_name.lower() in installed_codenames:
+                        self.status.emit(f"Warning: Duplicate map '{map_name}' detected; skipping duplicate source.")
+                        continue
+                    attempted_maps += 1
+                    emit_map_stage(0)
+
+                    self.status.emit(f"[{map_name}] Parse CKDs & Metadata")
+                    from jd2021_installer.parsers.normalizer import normalize
+                    map_data = normalize(map_dir, codename=map_name, search_root=map_dir)
+                    setattr(map_data, "_is_ipk_source", False)
+
+                    canonical_name = (map_data.codename or map_name).strip()
+                    canonical_key = canonical_name.lower()
+                    if canonical_key in installed_codenames:
+                        self.status.emit(
+                            f"Warning: Duplicate map '{canonical_name}' resolved from multiple sources; skipping duplicate install."
+                        )
+                        continue
+
+                    status_value = int(getattr(map_data.song_desc, "status", _READY_STATUS_VALUE))
+                    if status_value != _READY_STATUS_VALUE:
+                        if self._force_unlock_locked_status:
+                            map_data.song_desc.status = _READY_STATUS_VALUE
+                            self.status.emit(
+                                f"[{map_data.codename}] Non-default status {status_value} detected; forcing Status={_READY_STATUS_VALUE}"
+                            )
+                        else:
+                            self.status.emit(
+                                f"[{map_data.codename}] Non-default status {status_value} detected; preserving original status"
+                            )
+
+                    emit_map_stage(1)
+                    self.status.emit(f"[{map_data.codename}] Normalize assets")
+
+                    map_cache = self._config.cache_directory / map_data.codename
+                    map_cache.mkdir(parents=True, exist_ok=True)
+                    if map_data.media.video_path and map_data.media.video_path.exists():
+                        persisted_video = map_cache / map_data.media.video_path.name
+                        if not persisted_video.exists():
+                            shutil.copy2(map_data.media.video_path, persisted_video)
+                        map_data.media.video_path = persisted_video
+
+                    if map_data.media.map_preview_video and map_data.media.map_preview_video.exists():
+                        persisted_preview = map_cache / map_data.media.map_preview_video.name
+                        if not persisted_preview.exists():
+                            shutil.copy2(map_data.media.map_preview_video, persisted_preview)
+                        map_data.media.map_preview_video = persisted_preview
+                    if map_data.media.audio_path and map_data.media.audio_path.exists():
+                        persisted_audio = map_cache / map_data.media.audio_path.name
+                        if not persisted_audio.exists():
+                            shutil.copy2(map_data.media.audio_path, persisted_audio)
+                        map_data.media.audio_path = persisted_audio
+
+                    self.status.emit(f"[{map_data.codename}] Installing map...")
+                    self._install_map_synchronously(map_data)
+                    emit_map_stage(2)
+                    completed_units += 3
+                    success_count += 1
+                    installed_codenames.add(canonical_key)
+                    installed_maps.append(map_data)
+                    logger.info("Batch installed HTML map: %s", map_data.codename)
+                except Exception as e:
+                    logger.warning("Failed to install HTML map %s: %s", map_name, e)
+                    self.status.emit(f"Warning: Failed {map_name} ({str(e)[:30]})")
 
             import shutil
             shutil.rmtree(batch_cache, ignore_errors=True)
