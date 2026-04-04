@@ -282,9 +282,7 @@ class MainWindow(QMainWindow):
 
         if FFmpegInstallDialog.install(tools_dir, self):
             resolved = self._refresh_media_tool_configuration(persist=True)
-            missing_after_install = [
-                name for name, path in resolved.items() if not path
-            ]
+            missing_after_install = [name for name, path in resolved.items() if not path]
             if missing_after_install:
                 QMessageBox.warning(
                     self,
