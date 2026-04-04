@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -247,6 +248,18 @@ def convert_beats_tape(ckd_path: Path, target_dir: Path, codename: str) -> bool:
     return convert_tape_file(ckd_path, output)
 
 
+def _copy_loose_tape(source_path: Path, output_path: Path, tape_label: str) -> bool:
+    """Copy an already-converted tape file (non-CKD) to target timeline."""
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, output_path)
+        logger.info("Copied %s tape: %s -> %s", tape_label, source_path.name, output_path.name)
+        return True
+    except Exception as e:
+        logger.error("Failed to copy %s tape %s: %s", tape_label, source_path.name, e)
+        return False
+
+
 def auto_convert_tapes(source_dir: Path, target_dir: Path, codename: str) -> int:
     """Auto-detect and convert all tape CKD files in a directory.
 
@@ -273,12 +286,42 @@ def auto_convert_tapes(source_dir: Path, target_dir: Path, codename: str) -> int
     ]
 
     dance_src = _pick_best_tape(dance_candidates, codename, ["tml_dance", "dance"])
-    if dance_src and convert_dance_tape(dance_src, target_dir, codename):
-        converted += 1
+    if dance_src:
+        if convert_dance_tape(dance_src, target_dir, codename):
+            converted += 1
+    else:
+        # Manual/IPK maps can already ship plain .dtape (non-CKD).
+        loose_dance_candidates = [
+            p for p in source_dir.rglob("*dtape*")
+            if p.is_file()
+            and "adtape" not in p.name.lower()
+            and ".ckd" not in p.name.lower()
+        ]
+        loose_dance_src = _pick_best_tape(loose_dance_candidates, codename, ["tml_dance", "dance"])
+        if loose_dance_src and _copy_loose_tape(
+            loose_dance_src,
+            target_dir / "timeline" / f"{codename}_TML_Dance.dtape",
+            "dance",
+        ):
+            converted += 1
 
     karaoke_src = _pick_best_tape(karaoke_candidates, codename, ["tml_karaoke", "karaoke"])
-    if karaoke_src and convert_karaoke_tape(karaoke_src, target_dir, codename):
-        converted += 1
+    if karaoke_src:
+        if convert_karaoke_tape(karaoke_src, target_dir, codename):
+            converted += 1
+    else:
+        # Manual/IPK maps can already ship plain .ktape (non-CKD).
+        loose_karaoke_candidates = [
+            p for p in source_dir.rglob("*ktape*")
+            if p.is_file() and ".ckd" not in p.name.lower()
+        ]
+        loose_karaoke_src = _pick_best_tape(loose_karaoke_candidates, codename, ["tml_karaoke", "karaoke"])
+        if loose_karaoke_src and _copy_loose_tape(
+            loose_karaoke_src,
+            target_dir / "timeline" / f"{codename}_TML_Karaoke.ktape",
+            "karaoke",
+        ):
+            converted += 1
 
     cinematic_src = _pick_best_tape(cinematic_candidates, codename, ["mainsequence"])
     if cinematic_src and convert_cinematic_tape(cinematic_src, target_dir, codename):

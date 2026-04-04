@@ -2454,7 +2454,7 @@ class MainWindow(QMainWindow):
                 
             return ManualExtractor(
                 codename=codename,
-                source_type=str(source_state.get("manual_source_type", "jdu")),
+                source_type=str(source_state.get("manual_source_type", "auto")),
                 root_dir=root_dir,
                 files={
                     "audio": str(manual_fields.get("audio", "")).strip(),
@@ -2464,6 +2464,17 @@ class MainWindow(QMainWindow):
                     "dtape": str(manual_fields.get("dtape", "")).strip(),
                     "ktape": str(manual_fields.get("ktape", "")).strip(),
                     "mseq": str(manual_fields.get("mseq", "")).strip(),
+                    "jdu_menuart_cover_generic": str(manual_fields.get("jdu_menuart_cover_generic", "")).strip(),
+                    "jdu_menuart_cover_online": str(manual_fields.get("jdu_menuart_cover_online", "")).strip(),
+                    "jdu_menuart_banner": str(manual_fields.get("jdu_menuart_banner", "")).strip(),
+                    "jdu_menuart_banner_bkg": str(manual_fields.get("jdu_menuart_banner_bkg", "")).strip(),
+                    "jdu_menuart_map_bkg": str(manual_fields.get("jdu_menuart_map_bkg", "")).strip(),
+                    "jdu_menuart_cover_albumcoach": str(manual_fields.get("jdu_menuart_cover_albumcoach", "")).strip(),
+                    "jdu_menuart_cover_albumbkg": str(manual_fields.get("jdu_menuart_cover_albumbkg", "")).strip(),
+                    "jdu_menuart_coach1": str(manual_fields.get("jdu_menuart_coach1", "")).strip(),
+                    "jdu_menuart_coach2": str(manual_fields.get("jdu_menuart_coach2", "")).strip(),
+                    "jdu_menuart_coach3": str(manual_fields.get("jdu_menuart_coach3", "")).strip(),
+                    "jdu_menuart_coach4": str(manual_fields.get("jdu_menuart_coach4", "")).strip(),
                 },
                 dirs={
                     "moves": str(manual_fields.get("moves", "")).strip(),

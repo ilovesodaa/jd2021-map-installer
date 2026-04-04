@@ -21,6 +21,18 @@ logger = logging.getLogger("jd2021.extractors.manual")
 class ManualExtractor(BaseExtractor):
     """Assembles a map directory from manually specified paths."""
 
+    @staticmethod
+    def _has_ipk_structure(root: Path) -> bool:
+        if (root / "world" / "maps").is_dir():
+            return True
+        world_root = root / "world"
+        if world_root.is_dir():
+            return any(
+                d.is_dir() and d.name.lower().startswith("jd") and d.name[2:].isdigit()
+                for d in world_root.iterdir()
+            )
+        return False
+
     def _warn(self, message: str) -> None:
         self._warnings.append(message)
         logger.warning(message)
@@ -142,7 +154,11 @@ class ManualExtractor(BaseExtractor):
 
     def is_ipk_source(self) -> bool:
         """True when manual mode is operating on unpacked IPK content."""
-        return self._source_type in {"ipk", "mixed"}
+        if self._source_type in {"ipk", "mixed"}:
+            return True
+        if self._source_type == "auto" and self._root_dir and self._root_dir.is_dir():
+            return self._has_ipk_structure(self._root_dir)
+        return False
 
     def _validate_ipk_root(self, root: Path) -> None:
         """Validate codename/root consistency for manual IPK roots."""
@@ -237,22 +253,13 @@ class ManualExtractor(BaseExtractor):
         has_musictrack = self._detect_musictrack(root)
         missing: list[str] = []
 
-        has_ipk_structure = False
-        if (root / "world" / "maps").is_dir():
-            has_ipk_structure = True
-        else:
-            world_root = root / "world"
-            if world_root.is_dir():
-                has_ipk_structure = any(
-                    d.is_dir() and d.name.lower().startswith("jd") and d.name[2:].isdigit()
-                    for d in world_root.iterdir()
-                )
+        has_ipk_structure = self._has_ipk_structure(root)
 
         has_asset, has_nohud = self._find_html_pair(root)
 
-        if self._source_type == "mixed":
+        if self._source_type in {"mixed", "auto"}:
             if not (has_ipk_structure or (has_asset and has_nohud)):
-                missing.append("Mixed manual sources need either world/maps/ or an assets.html + nohud.html pair.")
+                missing.append("Manual source needs either world/maps/ or an assets.html + nohud.html pair.")
         elif self.is_ipk_source():
             if not has_ipk_structure:
                 missing.append("Unpacked IPK folder must contain world/maps/ or world/jd20XX/.")
@@ -273,7 +280,7 @@ class ManualExtractor(BaseExtractor):
     def __init__(
         self,
         codename: str,
-        source_type: str = "jdu",
+        source_type: str = "auto",
         root_dir: Optional[str] = None,
         files: Optional[Dict[str, str]] = None,
         dirs: Optional[Dict[str, str]] = None,
@@ -290,7 +297,7 @@ class ManualExtractor(BaseExtractor):
         if not inferred_codename and root_dir:
             inferred_codename = Path(root_dir).name.strip()
         self._codename = inferred_codename
-        self._source_type = source_type.strip().lower() if source_type else "jdu"
+        self._source_type = source_type.strip().lower() if source_type else "auto"
         self._root_dir = Path(root_dir) if root_dir else None
         self._files = files or {}
         self._dirs = dirs or {}
