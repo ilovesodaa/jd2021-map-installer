@@ -1086,6 +1086,7 @@ class MainWindow(QMainWindow):
 
         btns = QHBoxLayout()
         btn_select_all = QPushButton("Select All")
+        btn_select_all.setToolTip("Check every map in the list")
         
         def _set_all_checked(checked: bool) -> None:
             state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
@@ -1097,6 +1098,7 @@ class MainWindow(QMainWindow):
         btns.addWidget(btn_select_all)
 
         btn_clear = QPushButton("Unselect All")
+        btn_clear.setToolTip("Uncheck every map in the list")
         btn_clear.clicked.connect(lambda: _set_all_checked(False))
         btns.addWidget(btn_clear)
 
@@ -1124,14 +1126,17 @@ class MainWindow(QMainWindow):
                 dialog.accept()
 
         btn_browse = QPushButton("Browse Folder…")
+        btn_browse.setToolTip("Load maps for readjust directly from a folder")
         btn_browse.clicked.connect(_browse_fallback)
         btns.addWidget(btn_browse)
 
         btn_load = QPushButton("Load Selected")
+        btn_load.setToolTip("Load checked maps into Sync Refinement")
         btn_load.clicked.connect(dialog.accept)
         btns.addWidget(btn_load)
 
         btn_cancel = QPushButton("Cancel")
+        btn_cancel.setToolTip("Close this dialog without loading maps")
         btn_cancel.clicked.connect(dialog.reject)
         btns.addWidget(btn_cancel)
 

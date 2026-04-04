@@ -104,12 +104,14 @@ class ActionWidget(QWidget):
         self._btn_install = WrapButton("Install Map")
         self._btn_install.setObjectName("btn_install")
         self._btn_install.setMinimumHeight(38)
+        self._btn_install.setToolTip("Run the full pipeline and install the selected map into your game")
         self._btn_install.clicked.connect(self.install_requested.emit)
         primary.addWidget(self._btn_install)
 
         self._btn_preflight = WrapButton("Pre-flight Check")
         self._btn_preflight.setObjectName("btn_preflight")
         self._btn_preflight.setMinimumHeight(38)
+        self._btn_preflight.setToolTip("Validate selected inputs, paths, and required tools before install")
         self._btn_preflight.clicked.connect(self.preflight_requested.emit)
         primary.addWidget(self._btn_preflight)
 
@@ -131,18 +133,21 @@ class ActionWidget(QWidget):
         self._btn_readjust = WrapButton("Re-adjust Offset")
         self._btn_readjust.setObjectName("btn_readjust")
         self._btn_readjust.setMinimumHeight(38)
+        self._btn_readjust.setToolTip("Open sync refinement to preview and fine-tune installed map timing")
         self._btn_readjust.clicked.connect(self.readjust_offset_requested.emit)
         utils.addWidget(self._btn_readjust)
 
         self._btn_settings = WrapButton("Settings")
         self._btn_settings.setObjectName("btn_settings")
         self._btn_settings.setMinimumHeight(38)
+        self._btn_settings.setToolTip("Open installer settings and behavior preferences")
         self._btn_settings.clicked.connect(self.settings_requested.emit)
         utils.addWidget(self._btn_settings)
 
         self._btn_reset = WrapButton("Reset State")
         self._btn_reset.setObjectName("btn_reset")
         self._btn_reset.setMinimumHeight(38)
+        self._btn_reset.setToolTip("Clear current mode inputs and reset temporary installer state")
         self._btn_reset.clicked.connect(self.reset_state_requested.emit)
         utils.addWidget(self._btn_reset)
 

@@ -52,6 +52,7 @@ RUN.bat
 ### Setup and Usage
 
 - **[Getting Started](docs/01_getting_started/GETTING_STARTED.md)** — Dependencies, setup, and running the installer
+- **[Modes Guide](docs/01_getting_started/MODES_GUIDE.md)** — Complete mode-by-mode instructions (Fetch, HTML, IPK, Batch, Manual)
 - **[GUI Reference](docs/01_getting_started/GUI_REFERENCE.md)** — PyQt6 main window layout, controls, and thread lifecycle
 - **[Asset HTML Files](docs/03_media/ASSETS.md)** — Format and contents of `assets.html` and `nohud.html`
 - **[Video Reference](docs/03_media/VIDEO.md)** — Quality tiers, fallback behavior, and persistence

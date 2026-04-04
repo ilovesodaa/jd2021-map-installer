@@ -19,7 +19,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -90,9 +90,11 @@ class FileRowWidget(QWidget):
         self.line_edit = QLineEdit()
         self.line_edit.setReadOnly(True)
         self.line_edit.setPlaceholderText(placeholder)
+        self.line_edit.setToolTip(f"Selected path for {label_text.rstrip(':')}")
         lay.addWidget(self.line_edit)
 
         btn = QPushButton("Browse…")
+        btn.setToolTip(f"Browse and select {label_text.rstrip(':')}")
         btn.clicked.connect(self._browse)
         lay.addWidget(btn)
 
@@ -145,6 +147,7 @@ class ModeSelectorWidget(QWidget):
 
         self._mode_combo = QComboBox()
         self._mode_combo.addItems(MODE_LABELS)
+        self._mode_combo.setToolTip("Choose how map source files are provided to the installer")
         self._mode_combo.currentIndexChanged.connect(self._on_mode_index_changed)
         mode_row.addWidget(self._mode_combo)
         mode_row.addStretch()
@@ -153,7 +156,7 @@ class ModeSelectorWidget(QWidget):
         # Stacked widget for mode-specific inputs
         self._stack = QStackedWidget()
         self._stack.setObjectName("modeSelectorStack")
-        self._stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self._stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         root.addWidget(self._stack)
 
         self._stack.addWidget(self._build_fetch_page())  # 0
@@ -187,6 +190,7 @@ class ModeSelectorWidget(QWidget):
 
         inp = QLineEdit()
         inp.setPlaceholderText("e.g. RainOnMe, DontStartNow")
+        inp.setToolTip("Enter one or more codenames, separated by commas")
         inp.textChanged.connect(lambda t: self.target_selected.emit(t))
         row.addWidget(inp)
 
@@ -304,27 +308,32 @@ class ModeSelectorWidget(QWidget):
         lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 4, 0, 0)
 
+        # Add scroll area since there are many fields
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        
+        scroll_content = QWidget()
+        scroll_content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        scroll_lay = QVBoxLayout(scroll_content)
+        scroll_lay.setContentsMargins(0, 0, 0, 0)
+        scroll_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+
         warn = QLabel(
             "Manual mode is best for already-extracted map folders or when you need to point the installer at files by hand."
         )
         warn.setObjectName("modeManualWarningLabel")
         warn.setWordWrap(True)
-        lay.addWidget(warn)
-        
-        # Add scroll area since there are many fields
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        
-        scroll_content = QWidget()
-        scroll_lay = QVBoxLayout(scroll_content)
-        scroll_lay.setContentsMargins(0, 0, 0, 0)
+        scroll_lay.addWidget(warn)
 
         # Source flavor selection (v1 parity)
         source_lay = QHBoxLayout()
         source_lay.addWidget(QLabel("Source Type:"))
         self._manual_source_combo = QComboBox()
         self._manual_source_combo.addItems(["JDU", "IPK", "Mixed"])
+        self._manual_source_combo.setToolTip("Set expected source format to improve auto-discovery of files")
         self._manual_source_combo.currentTextChanged.connect(self._on_manual_source_type_changed)
         source_lay.addWidget(self._manual_source_combo)
         self._manual_source_hint = QLabel("Unpacked JDU Files")
@@ -337,6 +346,8 @@ class ModeSelectorWidget(QWidget):
         submode_lay.addWidget(QLabel("Manual Submode:"))
         self._manual_sub_select = QRadioButton("Select Files")
         self._manual_sub_scan = QRadioButton("Scan Directory")
+        self._manual_sub_select.setToolTip("Fill required fields manually using each Browse button")
+        self._manual_sub_scan.setToolTip("Automatically scan the selected root folder and pre-fill matching files")
         self._manual_sub_scan.setChecked(True)
         submode_lay.addWidget(self._manual_sub_select)
         submode_lay.addWidget(self._manual_sub_scan)
@@ -352,6 +363,7 @@ class ModeSelectorWidget(QWidget):
         top_lay.addWidget(root_row, 0, 0, 1, 2)
 
         self._manual_scan_btn = QPushButton("Scan")
+        self._manual_scan_btn.setToolTip("Run another scan on the current root folder to refresh detected paths")
         self._manual_scan_btn.clicked.connect(self._on_manual_scan_clicked)
         top_lay.addWidget(self._manual_scan_btn, 0, 2)
 
@@ -359,6 +371,7 @@ class ModeSelectorWidget(QWidget):
         lbl_code.setMinimumWidth(120)
         top_lay.addWidget(lbl_code, 1, 0)
         inp_code = QLineEdit()
+        inp_code.setToolTip("Codename used for naming outputs and matching map files")
         top_lay.addWidget(inp_code, 1, 1)
 
         scroll_lay.addLayout(top_lay)
@@ -406,11 +419,11 @@ class ModeSelectorWidget(QWidget):
         lay_assets.addWidget(row_amb)
         scroll_lay.addWidget(grp_assets)
         
-        # Add stretch so fields pack tightly at the top
-        scroll_lay.addStretch()
+        # Keep a small bottom buffer so the final field is never flush/clipped.
+        scroll_lay.addSpacing(8)
         
         scroll.setWidget(scroll_content)
-        lay.addWidget(scroll)
+        lay.addWidget(scroll, 1)
         
         self.inputs["manual"].update({
             "root": root_row.line_edit,
@@ -449,7 +462,9 @@ class ModeSelectorWidget(QWidget):
 
         hint = max(64, current.sizeHint().height())
         if self._mode_combo.currentIndex() == MODE_MANUAL:
-            target_height = max(260, min(hint + 8, 420))
+            self._stack.setMinimumHeight(320)
+            self._stack.setMaximumHeight(16777215)
+            return
         else:
             target_height = max(72, min(hint + 8, 200))
 
@@ -518,11 +533,11 @@ class ModeSelectorWidget(QWidget):
         source_type = text.strip().lower()
         if hasattr(self, "_manual_source_hint"):
             if source_type == "ipk":
-                self._manual_source_hint.setText("Unpacked IPK map files")
+                self._manual_source_hint.setText("Unpacked IPK files")
             elif source_type == "mixed":
                 self._manual_source_hint.setText("Mixed JDU + IPK sources")
             else:
-                self._manual_source_hint.setText("Downloaded assets + nohud HTML")
+                self._manual_source_hint.setText("Downloaded JDU Files")
 
         self.inputs["manual"]["root"].clear()
         self.inputs["manual"]["codename"].clear()
