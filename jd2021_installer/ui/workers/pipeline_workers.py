@@ -288,15 +288,20 @@ class ExtractAndNormalizeWorker(QObject):
 
             codename = self._codename or self._extractor.get_codename()
             search_root: Optional[Path] = None
+            normalize_search_root: Optional[Path] = None
             media_errors: list[str] = []
 
             if isinstance(self._extractor, ArchiveIPKExtractor):
                 # V1 parity: IPK mode also probes media alongside the selected .ipk file.
                 search_root = self._extractor.get_source_dir()
                 media_errors.extend(_validate_ipk_media_presence(map_output_dir, codename, search_root))
+                # For normalization, scan the extracted tree so map-local optional assets
+                # (e.g., albumcoach/map_bkg) are discovered before ACT generation.
+                normalize_search_root = map_output_dir
             elif hasattr(self._extractor, "is_ipk_source"):
                 if bool(self._extractor.is_ipk_source()):  # type: ignore[attr-defined]
                     media_errors.extend(_validate_ipk_media_presence(map_output_dir, codename, None))
+                    normalize_search_root = map_output_dir
 
             if media_errors:
                 for error in media_errors:
@@ -314,7 +319,7 @@ class ExtractAndNormalizeWorker(QObject):
             map_data = normalize(
                 map_output_dir,
                 codename,
-                search_root=search_root,
+                search_root=normalize_search_root,
             )
 
             self.progress.emit(100)
