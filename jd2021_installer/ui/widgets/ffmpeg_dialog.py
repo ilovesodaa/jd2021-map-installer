@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
 
 logger = logging.getLogger("jd2021.ui.widgets.ffmpeg_dialog")
 
+
 # Standard FFmpeg build for Windows (gyan.dev)
 FFMPEG_URL_WIN = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 # Placeholder for other platforms if needed
@@ -88,12 +89,16 @@ class DownloadWorker(QObject):
             if temp_zip.exists():
                 temp_zip.unlink()
 
-            if "ffmpeg.exe" in binaries_found:
+            missing_bins = sorted(required_bins - binaries_found)
+            if not missing_bins:
                 self.status.emit("Installation complete!")
                 self.progress.emit(100)
                 self.finished.emit(True)
             else:
-                self.error.emit("Could not find ffmpeg.exe in the downloaded archive.")
+                self.error.emit(
+                    "Downloaded archive is missing required binaries: "
+                    + ", ".join(missing_bins)
+                )
                 self.finished.emit(False)
 
         except Exception as e:
