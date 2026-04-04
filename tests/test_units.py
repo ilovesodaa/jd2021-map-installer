@@ -223,3 +223,49 @@ def test_batch_worker_progress_is_monotonic(tmp_path: Path, monkeypatch):
     assert progress[0] > 0
     assert progress[-1] == 100
     assert all(a <= b for a, b in zip(progress, progress[1:]))
+
+
+def test_batch_worker_accepts_html_map_folder(tmp_path: Path, monkeypatch):
+    from jd2021_installer.extractors import web_playwright
+    from jd2021_installer.parsers import normalizer
+
+    batch_root = tmp_path / "batch"
+    map_folder = batch_root / "MyMap"
+    map_folder.mkdir(parents=True)
+    (map_folder / "assets.html").write_text("<html></html>", encoding="utf-8")
+    (map_folder / "nohud.html").write_text("<html></html>", encoding="utf-8")
+
+    prepared = tmp_path / "prepared" / "MyMap"
+    prepared.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        web_playwright.WebPlaywrightExtractor,
+        "extract",
+        lambda self, _: prepared,
+    )
+    monkeypatch.setattr(
+        normalizer,
+        "normalize",
+        lambda root, codename=None, search_root=None: _build_map(codename or "MyMap"),
+    )
+
+    installed: list[str] = []
+    monkeypatch.setattr(
+        BatchInstallWorker,
+        "_install_map_synchronously",
+        lambda self, map_data: installed.append(map_data.codename),
+    )
+
+    worker = BatchInstallWorker(
+        batch_source_dir=batch_root,
+        target_game_dir=tmp_path / "game",
+        config=AppConfig(cache_directory=tmp_path / "cache"),
+    )
+
+    discovered: list[list[str]] = []
+    worker.discovered_maps.connect(lambda names: discovered.append(names))
+    worker.run()
+
+    assert discovered
+    assert discovered[0] == ["MyMap"]
+    assert installed == ["MyMap"]

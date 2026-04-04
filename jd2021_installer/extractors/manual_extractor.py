@@ -40,6 +40,34 @@ class ManualExtractor(BaseExtractor):
                 return True
         return False
 
+    def _find_html_pair(self, root: Path) -> tuple[bool, bool]:
+        asset = False
+        nohud = False
+        try:
+            html_files = sorted(
+                [
+                    p
+                    for p in root.iterdir()
+                    if p.is_file() and p.suffix.lower() in {".html", ".htm"}
+                ],
+                key=lambda p: p.name.lower(),
+            )
+        except OSError:
+            return False, False
+
+        for html in html_files:
+            lower = html.name.lower()
+            if "nohud" in lower:
+                nohud = True
+            elif "asset" in lower:
+                asset = True
+
+        if len(html_files) >= 2:
+            asset = True
+            nohud = True
+
+        return asset, nohud
+
     def _validate_manual_explicit_inputs(self, root: Optional[Path]) -> None:
         """Validate explicit manual selections before assembling output."""
         provided_files = {k: Path(v) for k, v in self._files.items() if v}
@@ -222,11 +250,8 @@ class ManualExtractor(BaseExtractor):
             if not has_structure:
                 missing.append("Unpacked IPK folder must contain world/maps/ or world/jd20XX/.")
         else:
-            html_paths = [
-                root / "assets.html",
-                root / "nohud.html",
-            ]
-            if not any(p.is_file() for p in html_paths):
+            has_asset, has_nohud = self._find_html_pair(root)
+            if not (has_asset and has_nohud):
                 missing.append("Downloaded assets mode requires assets.html or nohud.html.")
 
         if not has_audio:

@@ -857,6 +857,7 @@ class MainWindow(QMainWindow):
             manual_inputs = fields.get("manual", {}) if isinstance(fields, dict) else {}
             codename = str(manual_inputs.get("codename", "")).strip()
             root_dir = str(manual_inputs.get("root", "")).strip()
+            manual_submode = str(source_state.get("manual_submode", "select")).strip().lower()
             if not codename and not root_dir:
                 issues.append("Manual mode requires a codename or a root directory.")
                 return issues
@@ -864,18 +865,19 @@ class MainWindow(QMainWindow):
             if root_dir and not Path(root_dir).is_dir():
                 issues.append(f"Manual root directory was not found: {root_dir}")
 
-            required_files = [
-                ("audio", "Audio file is required."),
-                ("video", "Video file (.webm) is required."),
-                ("mtrack", "Musictrack CKD is required (fatal for config generation)."),
-            ]
-            for key, missing_msg in required_files:
-                value = str(manual_inputs.get(key, "")).strip()
-                if not value:
-                    issues.append(missing_msg)
-                    continue
-                if not Path(value).is_file():
-                    issues.append(f"Manual {key} file was not found: {value}")
+            if manual_submode != "scan":
+                required_files = [
+                    ("audio", "Audio file is required."),
+                    ("video", "Video file (.webm) is required."),
+                    ("mtrack", "Musictrack CKD is required (fatal for config generation)."),
+                ]
+                for key, missing_msg in required_files:
+                    value = str(manual_inputs.get(key, "")).strip()
+                    if not value:
+                        issues.append(missing_msg)
+                        continue
+                    if not Path(value).is_file():
+                        issues.append(f"Manual {key} file was not found: {value}")
 
             if not issues:
                 self._current_target = root_dir or codename
