@@ -25,7 +25,7 @@ class QuickstartDialog(QDialog):
         layout = QVBoxLayout(self)
 
         title = QLabel("Welcome to JD2021 Map Installer V2!")
-        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #5865F2;")
+        title.setObjectName("quickstartTitleLabel")
         layout.addWidget(title)
 
         guide = QTextBrowser()
@@ -44,7 +44,6 @@ class QuickstartDialog(QDialog):
                 <li><b>Install:</b> Click 'Start Installation'. The tool will extract, normalize, and copy files.</li>
                 <li><b>Sync Refinement:</b> After installation, use the 'Sync Refinement' panel to fine-tune audio/video timing if needed.</li>
             </ol>
-            <p><i>Tip: Use 'Sync Beatgrid' to quickly align audio trim with the video start time.</i></p>
             <hr/>
             <p>For more help, visit the <a href="https://github.com/VenB304/jd2021-map-installer">GitHub Repository</a>.</p>
         """)

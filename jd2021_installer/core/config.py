@@ -41,6 +41,7 @@ class AppConfig(BaseModel):
     min_window_width: int = 1000
     min_window_height: int = 920
     show_window_size_overlay: bool = False
+    style_debug_mode: bool = False
     window_size_overlay_timeout_ms: int = 1100
 
     # Download settings

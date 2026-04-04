@@ -48,7 +48,7 @@ MODE_MANUAL = 4
 
 MODE_LABELS = [
     "Fetch (Codename)",
-    "HTML File",
+    "HTML Files",
     "IPK Archive",
     "Batch (Directory)",
     "Manual (Directory)",
@@ -133,7 +133,7 @@ class ModeSelectorWidget(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(4, 4, 4, 4)
         self.setObjectName("modeSelectorWidget")
 
         # Mode row layout to keep combo box concise
@@ -169,17 +169,28 @@ class ModeSelectorWidget(QWidget):
     def _build_fetch_page(self) -> QWidget:
         page = QWidget()
         page.setObjectName("modePage")
-        lay = QHBoxLayout(page)
+        lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 4, 0, 0)
+
+        warn = QLabel(
+            "Fetch automates acquiring the asset and nohud HTML files and downloads. Make sure to set your Discord channel link that can access JDHelper."
+        )
+        warn.setObjectName("modeFetchWarningLabel")
+        warn.setWordWrap(True)
+        lay.addWidget(warn)
+
+        row = QHBoxLayout()
 
         lbl = QLabel("Codename(s):")
         lbl.setMinimumWidth(120)
-        lay.addWidget(lbl)
+        row.addWidget(lbl)
 
         inp = QLineEdit()
         inp.setPlaceholderText("e.g. RainOnMe, DontStartNow")
         inp.textChanged.connect(lambda t: self.target_selected.emit(t))
-        lay.addWidget(inp)
+        row.addWidget(inp)
+
+        lay.addLayout(row)
 
         self.inputs["fetch"]["codenames"] = inp
         return page
@@ -245,6 +256,13 @@ class ModeSelectorWidget(QWidget):
         lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 4, 0, 0)
 
+        warn = QLabel(
+            "IPK installs .IPK maps that either contain one map or bundles that contain more than one map."
+        )
+        warn.setObjectName("modeIpkWarningLabel")
+        warn.setWordWrap(True)
+        lay.addWidget(warn)
+
         row = FileRowWidget(
             "IPK File:",
             is_dir=False,
@@ -264,8 +282,7 @@ class ModeSelectorWidget(QWidget):
         lay.setContentsMargins(0, 4, 0, 0)
 
         warn = QLabel(
-            "Batch installs from a folder containing map subfolders with asset/nohud HTML files "
-            "or already-downloaded files."
+            "Batch installs from a folder containing map subfolders. Can be used with Fetch/HTML/IPK modes' files, this can be .html, .ipk, or already-extracted map folders."
         )
         warn.setObjectName("modeBatchHintLabel")
         warn.setWordWrap(True)
@@ -286,6 +303,13 @@ class ModeSelectorWidget(QWidget):
         page.setObjectName("modePage")
         lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 4, 0, 0)
+
+        warn = QLabel(
+            "Manual mode is best for already-extracted map folders or when you need to point the installer at files by hand."
+        )
+        warn.setObjectName("modeManualWarningLabel")
+        warn.setWordWrap(True)
+        lay.addWidget(warn)
         
         # Add scroll area since there are many fields
         scroll = QScrollArea()
@@ -303,7 +327,7 @@ class ModeSelectorWidget(QWidget):
         self._manual_source_combo.addItems(["JDU", "IPK", "Mixed"])
         self._manual_source_combo.currentTextChanged.connect(self._on_manual_source_type_changed)
         source_lay.addWidget(self._manual_source_combo)
-        self._manual_source_hint = QLabel("Downloaded assets + nohud HTML")
+        self._manual_source_hint = QLabel("Unpacked JDU Files")
         source_lay.addWidget(self._manual_source_hint)
         source_lay.addStretch()
         scroll_lay.addLayout(source_lay)
@@ -345,7 +369,7 @@ class ModeSelectorWidget(QWidget):
         
         row_audio = FileRowWidget("Audio File:", file_filter="Audio (*.ogg *.wav *.wav.ckd);;All (*.*)")
         row_video = FileRowWidget("Video File:", file_filter="WebM (*.webm);;All (*.*)")
-        row_mtrack = FileRowWidget("Musictrack CKD / .trk:", file_filter="Musictrack (*.ckd *.trk);;All (*.*)")
+        row_mtrack = FileRowWidget("Musictrack:", file_filter="Musictrack (*.ckd *.trk);;All (*.*)")
         
         lay_req.addWidget(row_audio)
         lay_req.addWidget(row_video)
@@ -356,10 +380,10 @@ class ModeSelectorWidget(QWidget):
         grp_tapes = QGroupBox("Tapes & Config")
         lay_tapes = QVBoxLayout(grp_tapes)
         
-        row_sdesc = FileRowWidget("Songdesc CKD:", file_filter="CKD (*.ckd);;All (*.*)")
-        row_dtape = FileRowWidget("Dance Tape CKD:", file_filter="CKD (*.ckd);;All (*.*)")
-        row_ktape = FileRowWidget("Karaoke Tape CKD:", file_filter="CKD (*.ckd);;All (*.*)")
-        row_mseq = FileRowWidget("Mainseq Tape CKD:", file_filter="CKD (*.ckd);;All (*.*)")
+        row_sdesc = FileRowWidget("Songdesc", file_filter="CKD (*.ckd);;All (*.*)")
+        row_dtape = FileRowWidget("Dance Tape", file_filter="CKD (*.ckd);;All (*.*)")
+        row_ktape = FileRowWidget("Karaoke Tape", file_filter="CKD (*.ckd);;All (*.*)")
+        row_mseq = FileRowWidget("Mainseq Tape", file_filter="CKD (*.ckd);;All (*.*)")
         
         lay_tapes.addWidget(row_sdesc)
         lay_tapes.addWidget(row_dtape)

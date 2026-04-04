@@ -91,7 +91,7 @@ class ActionWidget(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(4, 4, 4, 4)
 
         section_label = QLabel("Actions")
         section_label.setObjectName("actionSectionLabel")
@@ -118,8 +118,10 @@ class ActionWidget(QWidget):
 
         # -- Separator ----------------------------------------------------
         sep = QFrame()
+        sep.setObjectName("sectionSeparator")
         sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setFrameShadow(QFrame.Shadow.Sunken)
+        sep.setFrameShadow(QFrame.Shadow.Plain)
+        sep.setLineWidth(1)
         root.addWidget(sep)
 
         # -- Utility row --------------------------------------------------

@@ -56,7 +56,7 @@ from PyQt6.QtWidgets import (
 from jd2021_installer.core.config import AppConfig
 from jd2021_installer.core.logging_config import apply_log_detail, get_file_log_level
 from jd2021_installer.core.install_summary import InstallSummary, build_install_summary, render_install_summary
-from jd2021_installer.core.theme import load_theme_stylesheet
+from jd2021_installer.core.theme import load_theme_stylesheet, resolve_theme_stylesheet_path
 from jd2021_installer.core.models import (
     MapMedia,
     MapSync,
@@ -158,9 +158,17 @@ class MainWindow(QMainWindow):
         self._file_logger_handler: Optional[logging.Handler] = None
         self._preview_audio_warning_shown = False
         self._size_overlay: Optional[QLabel] = None
+        self._preview_hint_label: Optional[QLabel] = None
+        self._sync_hint_label: Optional[QLabel] = None
+        self._log_hint_label: Optional[QLabel] = None
+        self._active_stylesheet_path: Optional[Path] = None
+        self._active_stylesheet_mtime: Optional[float] = None
         self._size_overlay_hide_timer = QTimer(self)
         self._size_overlay_hide_timer.setSingleShot(True)
         self._size_overlay_hide_timer.timeout.connect(self._hide_size_overlay)
+        self._style_reload_timer = QTimer(self)
+        self._style_reload_timer.setInterval(350)
+        self._style_reload_timer.timeout.connect(self._poll_stylesheet_changes)
 
         # Phase 4: Multi-map navigation
         self._nav_maps: list[NormalizedMapData] = []
@@ -252,7 +260,59 @@ class MainWindow(QMainWindow):
             return
 
         project_root = Path(__file__).resolve().parents[2]
-        app.setStyleSheet(load_theme_stylesheet(self._config.theme, project_root))
+        debug_mode = bool(getattr(self._config, "style_debug_mode", False))
+        app.setStyleSheet(
+            load_theme_stylesheet(self._config.theme, project_root, debug_mode)
+        )
+        self._update_stylesheet_watch(debug_mode, project_root)
+        self._set_panel_map_hints_visible(debug_mode)
+
+    def _update_stylesheet_watch(self, enabled: bool, project_root: Path) -> None:
+        if not enabled:
+            self._active_stylesheet_path = None
+            self._active_stylesheet_mtime = None
+            self._style_reload_timer.stop()
+            return
+
+        style_path = resolve_theme_stylesheet_path(self._config.theme, project_root)
+        self._active_stylesheet_path = style_path
+        self._active_stylesheet_mtime = None
+        if style_path.exists():
+            try:
+                self._active_stylesheet_mtime = style_path.stat().st_mtime
+            except OSError:
+                self._active_stylesheet_mtime = None
+        self._style_reload_timer.start()
+
+    def _poll_stylesheet_changes(self) -> None:
+        style_path = self._active_stylesheet_path
+        if style_path is None or not style_path.exists():
+            return
+
+        try:
+            current_mtime = style_path.stat().st_mtime
+        except OSError:
+            return
+
+        if self._active_stylesheet_mtime is None:
+            self._active_stylesheet_mtime = current_mtime
+            return
+
+        if current_mtime <= self._active_stylesheet_mtime:
+            return
+
+        self._active_stylesheet_mtime = current_mtime
+        self._apply_theme()
+        self._set_status("Live style reload applied")
+
+    def _set_panel_map_hints_visible(self, visible: bool) -> None:
+        for label in (
+            self._preview_hint_label,
+            self._sync_hint_label,
+            self._log_hint_label,
+        ):
+            if label is not None:
+                label.setVisible(visible)
 
     def _show_quickstart_if_needed(self) -> None:
         # Check config (we'll need to add a flag to AppConfig or settings)
@@ -633,8 +693,12 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Expanding,
         )
         right_layout = QVBoxLayout(right_col)
-        right_layout.setContentsMargins(4, 0, 0, 0)
+        right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(8)
+
+        self._preview_hint_label = QLabel("Preview Area")
+        self._preview_hint_label.setObjectName("panelMapHintLabel")
+        right_layout.addWidget(self._preview_hint_label)
 
         self._preview_widget = PreviewWidget()
         self._preview_widget.set_tool_paths(
@@ -650,6 +714,10 @@ class MainWindow(QMainWindow):
         )
         right_layout.addWidget(self._preview_widget, stretch=2)
 
+        self._sync_hint_label = QLabel("Sync Controls")
+        self._sync_hint_label.setObjectName("panelMapHintLabel")
+        right_layout.addWidget(self._sync_hint_label)
+
         self._sync_refinement = SyncRefinementWidget()
         self._sync_refinement.setObjectName("mainWindowSyncRefinement")
         self._sync_refinement.setSizePolicy(
@@ -657,6 +725,10 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Minimum,
         )
         right_layout.addWidget(self._sync_refinement, stretch=0)
+
+        self._log_hint_label = QLabel("Log Console")
+        self._log_hint_label.setObjectName("panelMapHintLabel")
+        right_layout.addWidget(self._log_hint_label)
 
         self._log_console = LogConsoleWidget()
         self._log_console.setObjectName("mainWindowLogConsole")
@@ -668,6 +740,8 @@ class MainWindow(QMainWindow):
         # Wire root logger to our console
         logging.getLogger().addHandler(self._log_console.log_handler)
         right_layout.addWidget(self._log_console, stretch=1)
+
+        self._set_panel_map_hints_visible(bool(getattr(self._config, "style_debug_mode", False)))
 
         root_layout.addWidget(right_col, stretch=6)
         root_layout.setStretch(0, 4)

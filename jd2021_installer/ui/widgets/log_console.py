@@ -50,7 +50,8 @@ class LogConsoleWidget(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(4, 4, 4, 4)
+        root.setSpacing(0)
         self.setObjectName("logConsoleWidget")
 
         self._text_edit = QPlainTextEdit()

@@ -256,13 +256,13 @@ class PreviewWidget(QWidget):
     # ==================================================================
 
     def _set_play_button_icon(self, playing: bool) -> None:
-        tooltip = "Pause/Stop Preview" if playing else "Start Preview"
-        self._btn_play.setText("Stop" if playing else "Preview")
+        tooltip = "Pause Preview" if playing else "Play Preview"
+        self._btn_play.setText("Stop" if playing else "Play")
         self._btn_play.setToolTip(tooltip)
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(4)
         self.setObjectName("previewWidget")
 
@@ -278,7 +278,7 @@ class PreviewWidget(QWidget):
 
         # -- Seek bar -------------------------------------------------------
         seek_row = QHBoxLayout()
-        seek_row.setContentsMargins(0, 0, 0, 0)
+        seek_row.setContentsMargins(4, 0, 4, 0)
 
         self._lbl_time = QLabel("0:00")
         self._lbl_time.setObjectName("previewCurrentTimeLabel")
@@ -306,7 +306,7 @@ class PreviewWidget(QWidget):
 
         # -- Buttons --------------------------------------------------------
         btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setContentsMargins(4, 0, 4, 0)
         btn_row.addStretch()
 
         self._btn_rewind = QPushButton()

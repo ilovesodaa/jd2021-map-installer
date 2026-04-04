@@ -46,7 +46,7 @@ class ConfigWidget(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(4, 4, 4, 4)
 
         section_label = QLabel("Configuration")
         section_label.setObjectName("configSectionLabel")
