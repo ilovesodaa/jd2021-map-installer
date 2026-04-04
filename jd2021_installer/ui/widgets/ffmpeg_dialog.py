@@ -27,44 +27,6 @@ from PyQt6.QtWidgets import (
 logger = logging.getLogger("jd2021.ui.widgets.ffmpeg_dialog")
 
 
-def _add_to_user_path(directory: Path) -> None:
-    """Add *directory* to the current user's PATH in the Windows registry."""
-    import winreg
-    import ctypes
-
-    abs_dir = str(directory.resolve())
-
-    key = winreg.OpenKey(
-        winreg.HKEY_CURRENT_USER,
-        "Environment",
-        0,
-        winreg.KEY_READ | winreg.KEY_WRITE,
-    )
-    try:
-        try:
-            current, value_type = winreg.QueryValueEx(key, "PATH")
-        except FileNotFoundError:
-            current = ""
-            value_type = winreg.REG_EXPAND_SZ
-
-        entries = [e for e in current.split(";") if e]
-        if abs_dir.lower() not in [e.lower() for e in entries]:
-            entries.append(abs_dir)
-            winreg.SetValueEx(key, "PATH", 0, value_type, ";".join(entries))
-            logger.info("Added FFmpeg directory to user PATH: %s", abs_dir)
-        else:
-            logger.debug("FFmpeg directory already in user PATH: %s", abs_dir)
-    finally:
-        winreg.CloseKey(key)
-
-    # Notify running processes of the environment change
-    HWND_BROADCAST = 0xFFFF
-    WM_SETTINGCHANGE = 0x001A
-    ctypes.windll.user32.SendMessageTimeoutW(
-        HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment", 0x0002, 5000, None
-    )
-
-
 # Standard FFmpeg build for Windows (gyan.dev)
 FFMPEG_URL_WIN = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 # Placeholder for other platforms if needed
@@ -127,17 +89,16 @@ class DownloadWorker(QObject):
             if temp_zip.exists():
                 temp_zip.unlink()
 
-            if "ffmpeg.exe" in binaries_found:
-                self.status.emit("Adding FFmpeg to user PATH...")
-                try:
-                    _add_to_user_path(self._target_dir)
-                except Exception as path_err:
-                    logger.warning("Could not add FFmpeg to user PATH: %s", path_err)
+            missing_bins = sorted(required_bins - binaries_found)
+            if not missing_bins:
                 self.status.emit("Installation complete!")
                 self.progress.emit(100)
                 self.finished.emit(True)
             else:
-                self.error.emit("Could not find ffmpeg.exe in the downloaded archive.")
+                self.error.emit(
+                    "Downloaded archive is missing required binaries: "
+                    + ", ".join(missing_bins)
+                )
                 self.finished.emit(False)
 
         except Exception as e:
