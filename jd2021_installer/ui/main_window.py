@@ -28,6 +28,7 @@ import sys
 import json
 import subprocess
 import os
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -54,6 +55,7 @@ from PyQt6.QtWidgets import (
 
 from jd2021_installer.core.config import AppConfig
 from jd2021_installer.core.logging_config import apply_log_detail, get_file_log_level
+from jd2021_installer.core.install_summary import InstallSummary, build_install_summary, render_install_summary
 from jd2021_installer.core.theme import load_theme_stylesheet
 from jd2021_installer.core.models import (
     MapMedia,
@@ -165,6 +167,8 @@ class MainWindow(QMainWindow):
         self._nav_index: int = 0
         self._pending_offsets: dict[str, tuple[float, float]] = {}
         self._readjust_pending_updates: list[tuple[str, float, float]] = []
+        self._install_started_at: Optional[float] = None
+        self._completed_install_maps: list[NormalizedMapData] = []
 
         # -- Window setup -----------------------------------------------------
         self.setWindowTitle("JD2021 Map Installer v2")
@@ -1320,6 +1324,8 @@ class MainWindow(QMainWindow):
         self._nav_index = 0
         self._pending_offsets.clear()
         self._readjust_pending_updates.clear()
+        self._install_started_at = None
+        self._completed_install_maps = []
         self._sync_refinement.reset()
         self._preview_widget.reset()
         self._set_preview_controls_ready(False)
@@ -1332,6 +1338,9 @@ class MainWindow(QMainWindow):
 
     def _on_install_requested(self) -> None:
         """Launch the Extract → Normalize → Install pipeline."""
+        self._install_started_at = time.monotonic()
+        self._completed_install_maps = []
+
         game_issues, game_warnings = self._collect_game_dir_checks()
         if game_issues:
             QMessageBox.warning(self, "No Game Dir", "\n".join(game_issues))
@@ -1471,6 +1480,7 @@ class MainWindow(QMainWindow):
             return  # error already handled
 
         self._current_map = map_data
+        self._completed_install_maps = [map_data]
         self._feedback_panel.update_checklist_step("Extract map data", StepStatus.DONE)
         self._feedback_panel.update_checklist_step("Parse CKDs & Metadata", StepStatus.DONE)
         self._feedback_panel.update_checklist_step("Normalize assets", StepStatus.DONE)
@@ -1718,13 +1728,21 @@ class MainWindow(QMainWindow):
                 self._register_map_in_readjust_index(self._current_map)
                 self._set_preview_controls_ready(True)
                 self._on_preview_toggle(True)
+
+        summaries = self._build_install_summaries(success=success)
+        self._log_install_summaries(summaries)
+        self._show_install_summary_popup(summaries)
         self._lock_ui(False)
         self._stop_file_logging()
+        self._install_started_at = None
+        self._completed_install_maps = []
 
     def _on_batch_finished_with_data(self, installed_maps: list[NormalizedMapData]) -> None:
         """Called when a batch install completes with a list of map data."""
         if not installed_maps:
             return
+
+        self._completed_install_maps = list(installed_maps)
 
         for map_data in installed_maps:
             self._register_map_in_readjust_index(map_data)
@@ -1757,6 +1775,57 @@ class MainWindow(QMainWindow):
         self._apply_readjust_profile(self._current_map)
         self._set_preview_controls_ready(True)
         self._on_preview_toggle(True)
+
+    def _compute_install_duration_s(self) -> float:
+        if self._install_started_at is None:
+            return 0.0
+        return max(0.0, time.monotonic() - self._install_started_at)
+
+    def _build_install_summaries(self, success: bool) -> list[InstallSummary]:
+        maps = self._completed_install_maps or ([self._current_map] if self._current_map else [])
+        maps = [m for m in maps if m is not None]
+        if not maps:
+            return []
+
+        duration_total = self._compute_install_duration_s()
+        duration_per_map = duration_total / max(1, len(maps))
+
+        summaries: list[InstallSummary] = []
+        for map_data in maps:
+            try:
+                target_map_dir = self._resolve_target_map_dir(map_data.codename)
+            except Exception as exc:
+                logger.warning("Could not resolve install summary target for '%s': %s", map_data.codename, exc)
+                continue
+
+            summaries.append(
+                build_install_summary(
+                    map_data,
+                    target_map_dir,
+                    source_mode=self._current_mode,
+                    quality=self._config.video_quality,
+                    duration_s=duration_per_map,
+                    success=success,
+                )
+            )
+        return summaries
+
+    def _log_install_summaries(self, summaries: list[InstallSummary]) -> None:
+        if not summaries:
+            return
+        for summary in summaries:
+            logger.info("\n===== Installation Summary =====\n%s\n===============================", render_install_summary(summary))
+
+    def _show_install_summary_popup(self, summaries: list[InstallSummary]) -> None:
+        if not getattr(self._config, "show_install_summary_popup", True):
+            return
+
+        if not summaries:
+            return
+
+        from jd2021_installer.ui.widgets.installation_summary_dialog import InstallationSummaryDialog
+
+        InstallationSummaryDialog.show_summaries(summaries, self)
 
     def _register_map_in_readjust_index(self, map_data: NormalizedMapData) -> None:
         """Upsert one map's source metadata for readjust discovery."""

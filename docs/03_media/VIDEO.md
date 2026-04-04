@@ -16,6 +16,8 @@ These constraints affect video/audio behavior in current v2 builds:
   Intro AMB outputs are currently forced to silent placeholders as a temporary mitigation. This is expected behavior in active v2 builds.
 3. **Runtime dependencies are required for stable media workflows.**
   FFmpeg/FFprobe and vgmstream are required for full decode/preview/convert coverage; missing tools can degrade sync and media validation workflows. Fetch mode also requires Playwright Chromium.
+4. **Dedicated preview assets are optional in current runtime wiring.**
+  Current installs remain playable and preview-capable without `AudioPreview` / `MapPreview` files; preview loop behavior is typically driven by `.trk` marker fields over main media. See [ASSETS.md](ASSETS.md) for exact with/without differences.
 
 ---
 

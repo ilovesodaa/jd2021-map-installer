@@ -125,6 +125,14 @@ class SettingsDialog(QDialog):
         )
         layout.addWidget(self.cb_preflight_popup)
 
+        self.cb_install_summary = QCheckBox("Show installation summary popup")
+        self.cb_install_summary.setChecked(getattr(self._config, "show_install_summary_popup", True))
+        self.cb_install_summary.setToolTip(
+            "Shows a checklist-style summary at the end of install with\n"
+            "required/optional files, counts, and warnings."
+        )
+        layout.addWidget(self.cb_install_summary)
+
         # show_quickstart_on_launch
         self.cb_quickstart = QCheckBox("Show quick-start hint on launch")
         self.cb_quickstart.setChecked(self._config.show_quickstart_on_launch)
@@ -276,6 +284,7 @@ class SettingsDialog(QDialog):
         self._config.cleanup_behavior = self.combo_cleanup.currentText()
         self._config.locked_status_behavior = self.combo_locked_status.currentText()
         self._config.show_preflight_success_popup = self.cb_preflight_popup.isChecked()
+        self._config.show_install_summary_popup = self.cb_install_summary.isChecked()
         self._config.show_quickstart_on_launch = self.cb_quickstart.isChecked()
         self._config.log_detail_level = self.combo_log_detail.currentText()
         self._config.theme = self.combo_theme.currentText()
