@@ -111,5 +111,36 @@ class TestMenuArt(unittest.TestCase):
         # Verify banner_bkg remains optional
         self.assertFalse((tex_dir / "TestMap_banner_bkg.tga").exists())
 
+    def test_optional_assets_discovered_without_codename_prefix(self):
+        """
+        Test that optional assets (banner_bkg, map_bkg, cover_albumcoach, cover_albumbkg)
+        are discovered even when they don't have codename prefix in filename.
+        This is a regression test for V2 issue where optional .act files were missing.
+        """
+        # Setup: Create optional assets WITHOUT codename prefix (as some map makers do)
+        self._create_dummy_image(self.test_dir / "albumcoach.tga")
+        self._create_dummy_image(self.test_dir / "map_bkg.tga")
+        self._create_dummy_image(self.test_dir / "banner_bkg.tga")
+        self._create_dummy_image(self.test_dir / "albumbkg.tga")  # cover_albumbkg keyword
+        
+        # Also create required assets with codename prefix (as they should be)
+        self._create_dummy_image(self.test_dir / "TestMap_cover_generic.tga")
+        
+        # Discover with explicit codename (simulating normal installation flow)
+        media = _discover_media(self.test_dir, "testmap")
+        
+        # Verify required assets are found
+        self.assertIsNotNone(media.cover_generic_path)
+        
+        # Verify optional assets are discovered even without codename prefix
+        self.assertIsNotNone(media.cover_albumcoach_path, 
+                           "Optional cover_albumcoach should be discovered without codename prefix")
+        self.assertIsNotNone(media.map_bkg_path,
+                           "Optional map_bkg should be discovered without codename prefix")
+        self.assertIsNotNone(media.banner_bkg_path,
+                           "Optional banner_bkg should be discovered without codename prefix")
+        self.assertIsNotNone(media.cover_albumbkg_path,
+                           "Optional cover_albumbkg should be discovered without codename prefix")
+
 if __name__ == "__main__":
     unittest.main()

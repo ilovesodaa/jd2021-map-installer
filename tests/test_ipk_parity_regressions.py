@@ -64,7 +64,7 @@ def test_manual_ipk_root_missing_required_media_is_fatal(tmp_path: Path) -> None
 
     extractor = ManualExtractor(codename="MapA", source_type="ipk", root_dir=str(root))
 
-    with pytest.raises(DownloadError, match="Musictrack CKD is required"):
+    with pytest.raises(DownloadError, match=r"Musictrack CKD / \.trk is required"):
         extractor.extract(tmp_path / "output")
 
 

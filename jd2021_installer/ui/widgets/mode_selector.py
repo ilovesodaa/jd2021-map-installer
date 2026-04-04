@@ -300,7 +300,7 @@ class ModeSelectorWidget(QWidget):
         source_lay = QHBoxLayout()
         source_lay.addWidget(QLabel("Source Type:"))
         self._manual_source_combo = QComboBox()
-        self._manual_source_combo.addItems(["JDU", "IPK"])
+        self._manual_source_combo.addItems(["JDU", "IPK", "Mixed"])
         self._manual_source_combo.currentTextChanged.connect(self._on_manual_source_type_changed)
         source_lay.addWidget(self._manual_source_combo)
         self._manual_source_hint = QLabel("Downloaded assets + nohud HTML")
@@ -345,7 +345,7 @@ class ModeSelectorWidget(QWidget):
         
         row_audio = FileRowWidget("Audio File:", file_filter="Audio (*.ogg *.wav *.wav.ckd);;All (*.*)")
         row_video = FileRowWidget("Video File:", file_filter="WebM (*.webm);;All (*.*)")
-        row_mtrack = FileRowWidget("Musictrack CKD:", file_filter="CKD (*.ckd);;All (*.*)")
+        row_mtrack = FileRowWidget("Musictrack CKD / .trk:", file_filter="Musictrack (*.ckd *.trk);;All (*.*)")
         
         lay_req.addWidget(row_audio)
         lay_req.addWidget(row_video)
@@ -454,9 +454,13 @@ class ModeSelectorWidget(QWidget):
         
         # 2. Auto-discover common files
         from jd2021_installer.parsers.normalizer import _find_ckd_files
-        
+
+        if not self.inputs["manual"]["mtrack"].text().strip():
+            mtrack = self._pick_manual_musictrack(scan_root, codename or None, source_type)
+            if mtrack:
+                self.inputs["manual"]["mtrack"].setText(str(mtrack))
+
         mapping = {
-            "mtrack": "*musictrack*.tpl.ckd",
             "sdesc": "*songdesc*.tpl.ckd",
             "dtape": "*_tml_dance.?tape.ckd",
             "ktape": "*_tml_karaoke.?tape.ckd",
@@ -491,6 +495,8 @@ class ModeSelectorWidget(QWidget):
         if hasattr(self, "_manual_source_hint"):
             if source_type == "ipk":
                 self._manual_source_hint.setText("Unpacked IPK map files")
+            elif source_type == "mixed":
+                self._manual_source_hint.setText("Mixed JDU + IPK sources")
             else:
                 self._manual_source_hint.setText("Downloaded assets + nohud HTML")
 
@@ -556,17 +562,40 @@ class ModeSelectorWidget(QWidget):
             return True
         return lower_codename in [p.lower() for p in path.parts]
 
+    def _manual_source_is_recursive(self, source_type: str) -> bool:
+        return source_type in {"ipk", "mixed"}
+
+    def _pick_manual_musictrack(self, scan_root: Path, codename: Optional[str], source_type: str) -> Optional[Path]:
+        priority = ("*musictrack*.tpl.ckd", "*musictrack*.trk", "*.trk")
+
+        for pattern in priority:
+            top_hits = [p for p in scan_root.glob(pattern) if p.is_file()]
+            if codename:
+                scoped = [p for p in top_hits if self._matches_codename(p, codename)]
+                if scoped:
+                    return scoped[0]
+            elif top_hits:
+                return top_hits[0]
+
+        for pattern in priority:
+            hits = [p for p in scan_root.rglob(pattern) if p.is_file()]
+            if not hits:
+                continue
+            if codename:
+                scoped = [p for p in hits if self._matches_codename(p, codename)]
+                if scoped:
+                    return scoped[0]
+            else:
+                return hits[0]
+
+        return None
+
     def _pick_manual_video(self, scan_root: Path, codename: Optional[str], source_type: str) -> Optional[Path]:
-        if source_type == "ipk":
-            candidates = [
-                p for p in scan_root.rglob("*.webm")
-                if "mappreview" not in p.name.lower() and "videopreview" not in p.name.lower()
-            ]
-        else:
-            candidates = [
-                p for p in scan_root.glob("*.webm")
-                if "mappreview" not in p.name.lower() and "videopreview" not in p.name.lower()
-            ]
+        recursive = self._manual_source_is_recursive(source_type)
+        candidates = [
+            p for p in (scan_root.rglob("*.webm") if recursive else scan_root.glob("*.webm"))
+            if "mappreview" not in p.name.lower() and "videopreview" not in p.name.lower()
+        ]
 
         if not candidates:
             return None
@@ -584,35 +613,27 @@ class ModeSelectorWidget(QWidget):
         return candidates[0]
 
     def _pick_manual_audio(self, scan_root: Path, codename: Optional[str], source_type: str) -> Optional[Path]:
+        recursive = self._manual_source_is_recursive(source_type)
         if source_type == "ipk":
             priority = ("*.wav", "*.wav.ckd", "*.ogg")
         else:
             priority = ("*.ogg", "*.wav", "*.wav.ckd")
 
         for pattern in priority:
-            top_hits = [p for p in scan_root.glob(pattern) if "audiopreview" not in p.name.lower()]
-            if codename:
-                scoped = [p for p in top_hits if self._matches_codename(p, codename)]
-                if scoped:
-                    return scoped[0]
-            elif top_hits:
-                return top_hits[0]
-
-        for pattern in priority:
-            recursive_hits = [p for p in scan_root.rglob(pattern) if "audiopreview" not in p.name.lower()]
-            recursive_hits = [
+            hits = [p for p in (scan_root.rglob(pattern) if recursive else scan_root.glob(pattern)) if "audiopreview" not in p.name.lower()]
+            hits = [
                 p
-                for p in recursive_hits
+                for p in hits
                 if "autodance" not in str(p).lower() and not p.name.lower().startswith("amb_")
             ]
-            if not recursive_hits:
+            if not hits:
                 continue
             if codename:
-                scoped = [p for p in recursive_hits if self._matches_codename(p, codename)]
+                scoped = [p for p in hits if self._matches_codename(p, codename)]
                 if scoped:
                     return scoped[0]
             else:
-                return recursive_hits[0]
+                return hits[0]
 
         return None
 
@@ -648,7 +669,7 @@ class ModeSelectorWidget(QWidget):
 
     def _resolve_scan_root(self, root: Path, source_type: str) -> Path:
         """Prefer codename folder under world/maps for IPK-oriented scans."""
-        if source_type != "ipk":
+        if source_type not in {"ipk", "mixed"}:
             return root
 
         world_maps = root / "world" / "maps"

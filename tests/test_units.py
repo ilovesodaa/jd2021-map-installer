@@ -177,7 +177,12 @@ def test_batch_worker_discovered_maps_respect_selection(tmp_path: Path, monkeypa
     monkeypatch.setattr(archive_ipk, "inspect_ipk", lambda _: ["MapA", "MapB"])
     monkeypatch.setattr(archive_ipk.ArchiveIPKExtractor, "extract", lambda self, _: extracted.parent.parent)
     monkeypatch.setattr(normalizer, "normalize", lambda root, codename=None, search_root=None: _build_map(codename or "MapA"))
-    monkeypatch.setattr(BatchInstallWorker, "_install_map_synchronously", lambda self, map_data: None)
+    installed: list[str] = []
+    monkeypatch.setattr(
+        BatchInstallWorker,
+        "_install_map_synchronously",
+        lambda self, map_data: installed.append(map_data.codename),
+    )
 
     worker = BatchInstallWorker(
         batch_source_dir=ipk,
@@ -190,6 +195,7 @@ def test_batch_worker_discovered_maps_respect_selection(tmp_path: Path, monkeypa
     worker.run()
     assert discovered
     assert discovered[0] == ["MapB"]
+    assert installed == ["MapB"]
 
 
 def test_batch_worker_progress_is_monotonic(tmp_path: Path, monkeypatch):
@@ -269,3 +275,58 @@ def test_batch_worker_accepts_html_map_folder(tmp_path: Path, monkeypatch):
     assert discovered
     assert discovered[0] == ["MyMap"]
     assert installed == ["MyMap"]
+
+
+def test_batch_worker_merges_bundle_map_list_and_skips_duplicates(tmp_path: Path, monkeypatch):
+    from jd2021_installer.extractors import archive_ipk
+    from jd2021_installer.parsers import normalizer
+
+    ipk_a = tmp_path / "bundle_a.ipk"
+    ipk_b = tmp_path / "bundle_b.ipk"
+    ipk_a.touch()
+    ipk_b.touch()
+
+    extracted_root = tmp_path / "extracted" / "world" / "maps"
+    (extracted_root / "MapA").mkdir(parents=True)
+    (extracted_root / "MapB").mkdir(parents=True)
+    (extracted_root / "MapC").mkdir(parents=True)
+
+    def _inspect(path: Path):
+        if path.name == "bundle_a.ipk":
+            return ["MapA", "MapB"]
+        if path.name == "bundle_b.ipk":
+            return ["MapB", "MapC"]
+        return []
+
+    monkeypatch.setattr(archive_ipk, "inspect_ipk", _inspect)
+    monkeypatch.setattr(
+        archive_ipk.ArchiveIPKExtractor,
+        "extract",
+        lambda self, _: extracted_root.parent.parent,
+    )
+    monkeypatch.setattr(
+        normalizer,
+        "normalize",
+        lambda root, codename=None, search_root=None: _build_map(codename or "MapA"),
+    )
+
+    installed: list[str] = []
+    monkeypatch.setattr(
+        BatchInstallWorker,
+        "_install_map_synchronously",
+        lambda self, map_data: installed.append(map_data.codename),
+    )
+
+    worker = BatchInstallWorker(
+        batch_source_dir=tmp_path,
+        target_game_dir=tmp_path / "game",
+        config=AppConfig(cache_directory=tmp_path / "cache"),
+    )
+
+    discovered: list[list[str]] = []
+    worker.discovered_maps.connect(lambda names: discovered.append(names))
+    worker.run()
+
+    assert discovered
+    assert discovered[0] == ["MapA", "MapB", "MapC"]
+    assert installed == ["MapA", "MapB", "MapC"]

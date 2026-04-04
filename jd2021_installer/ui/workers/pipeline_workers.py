@@ -727,6 +727,41 @@ class BatchInstallWorker(QObject):
 
                 return asset, nohud
 
+            def looks_like_prepared_map_dir(folder: Path) -> bool:
+                if not folder.is_dir():
+                    return False
+
+                has_ckd = any(folder.rglob("*.ckd"))
+                if has_ckd:
+                    return True
+
+                has_audio = False
+                for pattern in ("*.ogg", "*.wav", "*.wav.ckd"):
+                    for p in folder.rglob(pattern):
+                        low_name = p.name.lower()
+                        low_path = str(p).lower().replace("\\", "/")
+                        if "audiopreview" in low_name:
+                            continue
+                        if "/amb/" in low_path or "/autodance/" in low_path:
+                            continue
+                        if low_name.startswith("amb_"):
+                            continue
+                        has_audio = True
+                        break
+                    if has_audio:
+                        break
+
+                has_video = any(
+                    p.is_file()
+                    and "mappreview" not in p.name.lower()
+                    and "videopreview" not in p.name.lower()
+                    for p in folder.rglob("*.webm")
+                )
+
+                has_musictrack = any(folder.rglob("*musictrack*.tpl.ckd"))
+
+                return has_audio and has_video and has_musictrack
+
             def emit_progress(value: int) -> None:
                 nonlocal progress_value
                 clamped = max(0, min(100, value))
@@ -751,12 +786,11 @@ class BatchInstallWorker(QObject):
                             }
                         )
 
-                    for path in self._source_dir.iterdir():
+                    for path in sorted(self._source_dir.iterdir(), key=lambda p: p.name.lower()):
                         if path.is_file() and path.suffix.lower() == ".ipk":
                             candidates.append({"kind": "ipk", "path": path})
                         elif path.is_dir():
-                            has_ckd = any(path.rglob("*.ckd"))
-                            if has_ckd:
+                            if looks_like_prepared_map_dir(path):
                                 candidates.append({"kind": "dir", "path": path})
                                 continue
 
@@ -797,14 +831,24 @@ class BatchInstallWorker(QObject):
                 else:
                     map_names.append(cpath.name)
 
+            # Merge all discovered map names into one stable list (case-insensitive dedupe).
+            merged_map_names: list[str] = []
+            seen_discovered: set[str] = set()
+            for name in map_names:
+                key = name.lower()
+                if key in seen_discovered:
+                    continue
+                seen_discovered.add(key)
+                merged_map_names.append(name)
+
             selected_lookup = {m.lower() for m in self._selected_maps} if self._selected_maps else None
-            display_map_names = map_names
+            display_map_names = merged_map_names
             if selected_lookup is not None:
-                display_map_names = [name for name in map_names if name.lower() in selected_lookup]
+                display_map_names = [name for name in merged_map_names if name.lower() in selected_lookup]
             self.discovered_maps.emit(display_map_names)
             emit_progress(3)
 
-            planned_maps = len(display_map_names) if display_map_names else len(map_names)
+            planned_maps = len(display_map_names) if display_map_names else len(merged_map_names)
             total_units = max(planned_maps * 3, 1)
             completed_units = 0
 
@@ -816,6 +860,7 @@ class BatchInstallWorker(QObject):
             attempted_maps = 0
             installed_maps: list[NormalizedMapData] = []
             html_prepared: list[tuple[str, Path]] = []
+            installed_codenames: set[str] = set()
             
             # Temporary cache for extracted IPKs
             batch_cache = self._config.cache_directory / "_batch_temp"
@@ -892,10 +937,13 @@ class BatchInstallWorker(QObject):
                         else:
                             map_names_for_candidate = [map_dir.name]
 
-                    logger.info("Discovered %d map(s) in %s", len(map_names_for_candidate), candidate.name)
+                    logger.info("Discovered %d map(s) in %s", len(map_names_for_candidate), cpath.name)
 
                     for map_name in map_names_for_candidate:
                         if selected_lookup and map_name.lower() not in selected_lookup:
+                            continue
+                        if map_name.lower() in installed_codenames:
+                            self.status.emit(f"Warning: Duplicate map '{map_name}' detected; skipping duplicate source.")
                             continue
                         attempted_maps += 1
                         emit_map_stage(0)
@@ -904,6 +952,14 @@ class BatchInstallWorker(QObject):
                         from jd2021_installer.parsers.normalizer import normalize
                         map_data = normalize(map_dir, codename=map_name, search_root=map_dir)
                         setattr(map_data, "_is_ipk_source", is_candidate_ipk)
+
+                        canonical_name = (map_data.codename or map_name).strip()
+                        canonical_key = canonical_name.lower()
+                        if canonical_key in installed_codenames:
+                            self.status.emit(
+                                f"Warning: Duplicate map '{canonical_name}' resolved from multiple sources; skipping duplicate install."
+                            )
+                            continue
 
                         status_value = int(getattr(map_data.song_desc, "status", _READY_STATUS_VALUE))
                         if status_value != _READY_STATUS_VALUE:
@@ -945,6 +1001,7 @@ class BatchInstallWorker(QObject):
                         emit_map_stage(2)
                         completed_units += 3
                         success_count += 1
+                        installed_codenames.add(canonical_key)
                         installed_maps.append(map_data)
                         logger.info("Batch installed map: %s", map_data.codename)
                     
@@ -958,6 +1015,9 @@ class BatchInstallWorker(QObject):
                 try:
                     if selected_lookup and map_name.lower() not in selected_lookup:
                         continue
+                    if map_name.lower() in installed_codenames:
+                        self.status.emit(f"Warning: Duplicate map '{map_name}' detected; skipping duplicate source.")
+                        continue
                     attempted_maps += 1
                     emit_map_stage(0)
 
@@ -965,6 +1025,14 @@ class BatchInstallWorker(QObject):
                     from jd2021_installer.parsers.normalizer import normalize
                     map_data = normalize(map_dir, codename=map_name, search_root=map_dir)
                     setattr(map_data, "_is_ipk_source", False)
+
+                    canonical_name = (map_data.codename or map_name).strip()
+                    canonical_key = canonical_name.lower()
+                    if canonical_key in installed_codenames:
+                        self.status.emit(
+                            f"Warning: Duplicate map '{canonical_name}' resolved from multiple sources; skipping duplicate install."
+                        )
+                        continue
 
                     status_value = int(getattr(map_data.song_desc, "status", _READY_STATUS_VALUE))
                     if status_value != _READY_STATUS_VALUE:
@@ -1005,6 +1073,7 @@ class BatchInstallWorker(QObject):
                     emit_map_stage(2)
                     completed_units += 3
                     success_count += 1
+                    installed_codenames.add(canonical_key)
                     installed_maps.append(map_data)
                     logger.info("Batch installed HTML map: %s", map_data.codename)
                 except Exception as e:

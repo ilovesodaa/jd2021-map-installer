@@ -869,7 +869,7 @@ class MainWindow(QMainWindow):
                 required_files = [
                     ("audio", "Audio file is required."),
                     ("video", "Video file (.webm) is required."),
-                    ("mtrack", "Musictrack CKD is required (fatal for config generation)."),
+                    ("mtrack", "Musictrack CKD / .trk is required (fatal for config generation)."),
                 ]
                 for key, missing_msg in required_files:
                     value = str(manual_inputs.get(key, "")).strip()
