@@ -281,11 +281,18 @@ class MainWindow(QMainWindow):
         tools_dir.mkdir(parents=True, exist_ok=True)
 
         if FFmpegInstallDialog.install(tools_dir, self):
-            ffmpeg_exe = tools_dir / ("ffmpeg.exe" if sys.platform == "win32" else "ffmpeg")
-            ffprobe_exe = tools_dir / ("ffprobe.exe" if sys.platform == "win32" else "ffprobe")
-            self._config.ffmpeg_path = str(ffmpeg_exe)
-            self._config.ffprobe_path = str(ffprobe_exe)
-            self._save_settings()
+            resolved = self._refresh_media_tool_configuration(persist=True)
+            missing_after_install = [
+                name for name, path in resolved.items() if not path
+            ]
+            if missing_after_install:
+                QMessageBox.warning(
+                    self,
+                    "Install Incomplete",
+                    "FFmpeg auto-install completed, but required tools are still missing: "
+                    + ", ".join(missing_after_install),
+                )
+                return False
             QMessageBox.information(
                 self,
                 "Success",
@@ -439,20 +446,63 @@ class MainWindow(QMainWindow):
 
     def _collect_missing_media_binaries(self) -> list[str]:
         """Return missing media binaries required by install/preview flows."""
-        missing: list[str] = []
-        ffmpeg_ok = bool(shutil.which(self._config.ffmpeg_path))
-        ffprobe_ok = bool(shutil.which(self._config.ffprobe_path))
-        ffplay_ok = bool(shutil.which("ffplay")) or bool(
-            shutil.which(self._config.ffmpeg_path.replace("ffmpeg", "ffplay"))
-        )
+        resolved = self._refresh_media_tool_configuration(persist=True)
+        return [name for name, path in resolved.items() if not path]
 
-        if not ffmpeg_ok:
-            missing.append("ffmpeg")
-        if not ffprobe_ok:
-            missing.append("ffprobe")
-        if not ffplay_ok:
-            missing.append("ffplay")
-        return missing
+    def _resolve_media_binary(
+        self,
+        binary_name: str,
+        configured_path: Optional[str] = None,
+    ) -> Optional[str]:
+        """Resolve media tools with system-first policy, then local fallback."""
+        system_path = shutil.which(binary_name)
+        if system_path:
+            return system_path
+
+        exe_name = f"{binary_name}.exe" if sys.platform == "win32" else binary_name
+        local_candidate = (Path("tools/ffmpeg") / exe_name).resolve()
+        if local_candidate.exists() and local_candidate.is_file():
+            return str(local_candidate)
+
+        if configured_path:
+            configured_candidate = Path(configured_path)
+            if configured_candidate.exists() and configured_candidate.is_file():
+                return str(configured_candidate.resolve())
+            configured_found = shutil.which(configured_path)
+            if configured_found:
+                return configured_found
+
+        return None
+
+    def _refresh_media_tool_configuration(self, persist: bool = False) -> dict[str, Optional[str]]:
+        """Resolve ffmpeg tool paths and propagate them to preview/runtime state."""
+        resolved_ffmpeg = self._resolve_media_binary("ffmpeg", self._config.ffmpeg_path)
+        resolved_ffprobe = self._resolve_media_binary("ffprobe", self._config.ffprobe_path)
+        resolved_ffplay = self._resolve_media_binary("ffplay")
+
+        updated = False
+        if resolved_ffmpeg and self._config.ffmpeg_path != resolved_ffmpeg:
+            self._config.ffmpeg_path = resolved_ffmpeg
+            updated = True
+        if resolved_ffprobe and self._config.ffprobe_path != resolved_ffprobe:
+            self._config.ffprobe_path = resolved_ffprobe
+            updated = True
+
+        if hasattr(self, "_preview_widget"):
+            self._preview_widget.set_tool_paths(
+                ffmpeg_path=resolved_ffmpeg or self._config.ffmpeg_path,
+                ffprobe_path=resolved_ffprobe or self._config.ffprobe_path,
+                ffplay_path=resolved_ffplay or "ffplay",
+            )
+
+        if persist and updated:
+            self._save_settings()
+
+        return {
+            "ffmpeg": resolved_ffmpeg,
+            "ffprobe": resolved_ffprobe,
+            "ffplay": resolved_ffplay,
+        }
 
     def _ensure_runtime_dependencies(self, include_fetch_checks: bool) -> bool:
         """Comprehensive guard rail for Python packages + toolchain dependencies."""
@@ -585,6 +635,11 @@ class MainWindow(QMainWindow):
         right_layout.setSpacing(8)
 
         self._preview_widget = PreviewWidget()
+        self._preview_widget.set_tool_paths(
+            ffmpeg_path=self._config.ffmpeg_path,
+            ffprobe_path=self._config.ffprobe_path,
+            ffplay_path="ffplay",
+        )
         self._preview_widget.setObjectName("mainWindowPreviewWidget")
         self._preview_widget.setMinimumHeight(300)
         self._preview_widget.setSizePolicy(

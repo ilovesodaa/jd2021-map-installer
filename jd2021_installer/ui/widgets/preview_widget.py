@@ -245,6 +245,9 @@ class PreviewWidget(QWidget):
         self._loop_end: float = 0.0
         self._stop_requested: bool = False
         self._ffplay_warned: bool = False
+        self._ffmpeg_path: str = "ffmpeg"
+        self._ffprobe_path: str = "ffprobe"
+        self._ffplay_path: str = "ffplay"
 
         self._build_ui()
 
@@ -339,6 +342,12 @@ class PreviewWidget(QWidget):
     # PUBLIC API
     # ==================================================================
 
+    def set_tool_paths(self, ffmpeg_path: str, ffprobe_path: str, ffplay_path: str) -> None:
+        """Update ffmpeg tool paths used by preview subprocesses."""
+        self._ffmpeg_path = ffmpeg_path or "ffmpeg"
+        self._ffprobe_path = ffprobe_path or "ffprobe"
+        self._ffplay_path = ffplay_path or "ffplay"
+
     def launch(
         self,
         video_path: str,
@@ -382,7 +391,13 @@ class PreviewWidget(QWidget):
 
         # Probe duration (best effort)
         if start_time == 0.0:
-            self._duration = self._probe_duration(video_path, resolved_audio_path, v_override, a_offset)
+            self._duration = self._probe_duration(
+                video_path,
+                resolved_audio_path,
+                v_override,
+                a_offset,
+                ffprobe_path=self._ffprobe_path,
+            )
             self._lbl_dur.setText(self._fmt(self._duration))
 
         # Canvas dimensions
@@ -408,7 +423,7 @@ class PreviewWidget(QWidget):
             f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black"
         )
 
-        ffmpeg_cmd: list[str] = ["ffmpeg", "-loglevel", "error"]
+        ffmpeg_cmd: list[str] = [self._ffmpeg_path, "-loglevel", "error"]
         if vid_seek > 0:
             ffmpeg_cmd += ["-ss", f"{vid_seek:.6f}"]
         ffmpeg_cmd += [
@@ -421,7 +436,7 @@ class PreviewWidget(QWidget):
         ]
 
         ffplay_cmd: list[str] = [
-            "ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet",
+            self._ffplay_path, "-nodisp", "-autoexit", "-loglevel", "quiet",
         ]
         if aud_seek > 0:
             ffplay_cmd += ["-ss", f"{aud_seek:.6f}"]
@@ -689,11 +704,12 @@ class PreviewWidget(QWidget):
     def _probe_duration(
         video_path: str, audio_path: str,
         v_override: float, a_offset: float,
+        ffprobe_path: str = "ffprobe",
     ) -> float:
         """Estimate playable preview duration via ffprobe."""
         def _ffprobe_duration(path: str) -> float:
             cmd = [
-                "ffprobe", "-v", "error", "-show_entries",
+                ffprobe_path, "-v", "error", "-show_entries",
                 "format=duration", "-of", "default=nw=1:nk=1",
                 path,
             ]
