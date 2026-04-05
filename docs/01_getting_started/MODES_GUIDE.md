@@ -188,9 +188,12 @@ It is also a good fallback if Fetch mode cannot complete for a map.
 5. Click **Install Map** and wait for completion.
 
    ![Screenshot Template - HTML Step 5: Start Install](../../assets/images/html/05-start-install.png)
-6. Test in game, then use **Re-adjust Offset** only if timing is off.
+6. Check preview and adjust offset if needed.
 
-   ![Screenshot Template - HTML Step 6: Verify Install and Adjust Sync](../../assets/images/html/06-verify-and-readjust.png)
+   ![Screenshot Template - HTML Step 6: Check Preview](../../assets/images/html/06-check-preview.png)
+7. Test in game, then use **Re-adjust Offset** only if timing is off.
+
+   ![Screenshot Template - HTML Step 7: Verify Install and Adjust Sync](../../assets/images/html/07-verify-and-readjust.png)
 
 ### Quick troubleshooting
 
@@ -230,16 +233,22 @@ IPK works for both:
 ### Quick steps
 
 1. Select **IPK Archive** mode.
+
    ![Screenshot Template - IPK Step 1: Select IPK Mode](../../assets/images/ipk/01-select-mode.png)
 2. Choose your `.ipk` file.
+
    ![Screenshot Template - IPK Step 2: Choose IPK File](../../assets/images/ipk/02-choose-ipk-file.png)
 3. If it is a **single-map IPK**: run **Pre-flight Check**, then click **Install Map**.
+
    ![Screenshot Template - IPK Step 3A: Single Map Install](../../assets/images/ipk/03a-single-map-install.png)
 4. If it is a **bundle IPK**: when the bundle selection dialog appears, check the map(s) you want, then continue install.
+
    ![Screenshot Template - IPK Step 3B: Bundle Map Selection](../../assets/images/ipk/03b-bundle-map-selection.png)
 5. Wait for extraction and conversion to complete, then test in game.
+
    ![Screenshot Template - IPK Step 4: Install Complete](../../assets/images/ipk/04-install-complete.png)
 6. If timing is off, open **Re-adjust Offset** and tune video sync.
+
    ![Screenshot Template - IPK Step 5: Re-adjust Offset](../../assets/images/ipk/05-readjust-offset.png)
 
 ### Quick troubleshooting
@@ -272,19 +281,19 @@ Use Batch mode when you want to process many install candidates from a single ro
 ### Quick steps
 
 1. Select **Batch (Directory)** mode.
-   ![Screenshot Template - Batch Step 1: Select Batch Mode](../../assets/images/batch/01-select-mode.png)
+
 2. Choose the root folder containing maps.
-   ![Screenshot Template - Batch Step 2: Choose Root Folder](../../assets/images/batch/02-choose-root-folder.png)
+
 3. Confirm the folder contains valid candidates before starting.
-   ![Screenshot Template - Batch Step 3: Review Candidates](../../assets/images/batch/03-review-candidates.png)
+
 4. Run **Pre-flight Check**.
-   ![Screenshot Template - Batch Step 4: Run Pre-flight](../../assets/images/batch/04-preflight.png)
+
 5. Start install.
-   ![Screenshot Template - Batch Step 5: Start Batch Install](../../assets/images/batch/05-start-install.png)
+
 6. Monitor logs for per-item success/failure.
-   ![Screenshot Template - Batch Step 6: Monitor Batch Progress](../../assets/images/batch/06-monitor-progress.png)
+
 7. Re-run failed entries one-by-one using the most suitable mode.
-   ![Screenshot Template - Batch Step 7: Re-run Failed Entries](../../assets/images/batch/07-rerun-failures.png)
+
 
 ### Quick troubleshooting
 
@@ -312,17 +321,16 @@ Use Manual mode for advanced cases where you provide source files directly from 
 ### Quick steps
 
 1. Select **Manual (Directory)** mode.
-   ![Screenshot Template - Manual Step 1: Select Manual Mode](../../assets/images/manual/01-select-mode.png)
+
 2. Choose your prepared source folder.
-   ![Screenshot Template - Manual Step 2: Choose Source Folder](../../assets/images/manual/02-choose-source-folder.png)
+
 3. Run **Pre-flight Check**.
-   ![Screenshot Template - Manual Step 3: Run Pre-flight](../../assets/images/manual/03-preflight.png)
+
 4. Click **Install Map**.
-   ![Screenshot Template - Manual Step 4: Start Install](../../assets/images/manual/04-start-install.png)
+
 5. Inspect logs closely for missing components.
-   ![Screenshot Template - Manual Step 5: Review Logs](../../assets/images/manual/05-review-logs.png)
+
 6. Adjust source files and retry until normalization succeeds.
-   ![Screenshot Template - Manual Step 6: Retry After Fixes](../../assets/images/manual/06-retry-after-fixes.png)
 
 ### Quick troubleshooting
 
