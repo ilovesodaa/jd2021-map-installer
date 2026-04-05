@@ -177,7 +177,12 @@ def test_batch_worker_discovered_maps_respect_selection(tmp_path: Path, monkeypa
     monkeypatch.setattr(archive_ipk, "inspect_ipk", lambda _: ["MapA", "MapB"])
     monkeypatch.setattr(archive_ipk.ArchiveIPKExtractor, "extract", lambda self, _: extracted.parent.parent)
     monkeypatch.setattr(normalizer, "normalize", lambda root, codename=None, search_root=None: _build_map(codename or "MapA"))
-    monkeypatch.setattr(BatchInstallWorker, "_install_map_synchronously", lambda self, map_data: None)
+    installed: list[str] = []
+    monkeypatch.setattr(
+        BatchInstallWorker,
+        "_install_map_synchronously",
+        lambda self, map_data: installed.append(map_data.codename),
+    )
 
     worker = BatchInstallWorker(
         batch_source_dir=ipk,
@@ -190,6 +195,7 @@ def test_batch_worker_discovered_maps_respect_selection(tmp_path: Path, monkeypa
     worker.run()
     assert discovered
     assert discovered[0] == ["MapB"]
+    assert installed == ["MapB"]
 
 
 def test_batch_worker_progress_is_monotonic(tmp_path: Path, monkeypatch):
@@ -223,3 +229,200 @@ def test_batch_worker_progress_is_monotonic(tmp_path: Path, monkeypatch):
     assert progress[0] > 0
     assert progress[-1] == 100
     assert all(a <= b for a, b in zip(progress, progress[1:]))
+
+
+def test_batch_worker_accepts_html_map_folder(tmp_path: Path, monkeypatch):
+    from jd2021_installer.extractors import web_playwright
+    from jd2021_installer.parsers import normalizer
+
+    batch_root = tmp_path / "batch"
+    map_folder = batch_root / "MyMap"
+    map_folder.mkdir(parents=True)
+    (map_folder / "assets.html").write_text("<html></html>", encoding="utf-8")
+    (map_folder / "nohud.html").write_text("<html></html>", encoding="utf-8")
+
+    prepared = tmp_path / "prepared" / "MyMap"
+    prepared.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        web_playwright.WebPlaywrightExtractor,
+        "extract",
+        lambda self, _: prepared,
+    )
+    monkeypatch.setattr(
+        normalizer,
+        "normalize",
+        lambda root, codename=None, search_root=None: _build_map(codename or "MyMap"),
+    )
+
+    installed: list[str] = []
+    monkeypatch.setattr(
+        BatchInstallWorker,
+        "_install_map_synchronously",
+        lambda self, map_data: installed.append(map_data.codename),
+    )
+
+    worker = BatchInstallWorker(
+        batch_source_dir=batch_root,
+        target_game_dir=tmp_path / "game",
+        config=AppConfig(cache_directory=tmp_path / "cache"),
+    )
+
+    discovered: list[list[str]] = []
+    worker.discovered_maps.connect(lambda names: discovered.append(names))
+    worker.run()
+
+    assert discovered
+    assert discovered[0] == ["MyMap"]
+    assert installed == ["MyMap"]
+
+
+def test_batch_worker_fetch_codenames_use_multi_map_flow(tmp_path: Path, monkeypatch):
+    from jd2021_installer.extractors import web_playwright
+    from jd2021_installer.parsers import normalizer
+
+    prepared_root = tmp_path / "prepared"
+    prepared_root.mkdir(parents=True)
+
+    def _extract(self, output_dir):
+        codename = self._codenames[0]
+        target = prepared_root / codename
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+
+    monkeypatch.setattr(web_playwright.WebPlaywrightExtractor, "extract", _extract)
+    monkeypatch.setattr(
+        normalizer,
+        "normalize",
+        lambda root, codename=None, search_root=None: _build_map(codename or Path(root).name),
+    )
+
+    installed: list[str] = []
+    monkeypatch.setattr(
+        BatchInstallWorker,
+        "_install_map_synchronously",
+        lambda self, map_data: installed.append(map_data.codename),
+    )
+
+    worker = BatchInstallWorker(
+        batch_source_dir=tmp_path,
+        target_game_dir=tmp_path / "game",
+        config=AppConfig(cache_directory=tmp_path / "cache"),
+        selected_maps={"MapB"},
+        fetch_codenames=["MapA", "MapB"],
+    )
+
+    discovered: list[list[str]] = []
+    worker.discovered_maps.connect(lambda names: discovered.append(names))
+    worker.run()
+
+    assert discovered
+    assert discovered[0] == ["MapB"]
+    assert installed == ["MapB"]
+
+
+def test_batch_worker_fetch_codenames_ignore_local_batch_scan(tmp_path: Path, monkeypatch):
+    from jd2021_installer.extractors import archive_ipk, web_playwright
+    from jd2021_installer.parsers import normalizer
+
+    # If directory scanning ran, this IPK would be discovered and installed too.
+    stray_ipk = tmp_path / "StrayBundle.ipk"
+    stray_ipk.touch()
+
+    inspect_calls = {"count": 0}
+
+    def _inspect(_):
+        inspect_calls["count"] += 1
+        return ["StrayMap"]
+
+    monkeypatch.setattr(archive_ipk, "inspect_ipk", _inspect)
+
+    prepared_root = tmp_path / "prepared"
+    prepared_root.mkdir(parents=True)
+
+    def _extract(self, output_dir):
+        codename = self._codenames[0]
+        target = prepared_root / codename
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+
+    monkeypatch.setattr(web_playwright.WebPlaywrightExtractor, "extract", _extract)
+    monkeypatch.setattr(
+        normalizer,
+        "normalize",
+        lambda root, codename=None, search_root=None: _build_map(codename or Path(root).name),
+    )
+
+    installed: list[str] = []
+    monkeypatch.setattr(
+        BatchInstallWorker,
+        "_install_map_synchronously",
+        lambda self, map_data: installed.append(map_data.codename),
+    )
+
+    worker = BatchInstallWorker(
+        batch_source_dir=tmp_path,
+        target_game_dir=tmp_path / "game",
+        config=AppConfig(cache_directory=tmp_path / "cache"),
+        fetch_codenames=["Koi", "Starships"],
+    )
+
+    worker.run()
+
+    assert inspect_calls["count"] == 0
+    assert installed == ["Koi", "Starships"]
+
+
+def test_batch_worker_merges_bundle_map_list_and_skips_duplicates(tmp_path: Path, monkeypatch):
+    from jd2021_installer.extractors import archive_ipk
+    from jd2021_installer.parsers import normalizer
+
+    ipk_a = tmp_path / "bundle_a.ipk"
+    ipk_b = tmp_path / "bundle_b.ipk"
+    ipk_a.touch()
+    ipk_b.touch()
+
+    extracted_root = tmp_path / "extracted" / "world" / "maps"
+    (extracted_root / "MapA").mkdir(parents=True)
+    (extracted_root / "MapB").mkdir(parents=True)
+    (extracted_root / "MapC").mkdir(parents=True)
+
+    def _inspect(path: Path):
+        if path.name == "bundle_a.ipk":
+            return ["MapA", "MapB"]
+        if path.name == "bundle_b.ipk":
+            return ["MapB", "MapC"]
+        return []
+
+    monkeypatch.setattr(archive_ipk, "inspect_ipk", _inspect)
+    monkeypatch.setattr(
+        archive_ipk.ArchiveIPKExtractor,
+        "extract",
+        lambda self, _: extracted_root.parent.parent,
+    )
+    monkeypatch.setattr(
+        normalizer,
+        "normalize",
+        lambda root, codename=None, search_root=None: _build_map(codename or "MapA"),
+    )
+
+    installed: list[str] = []
+    monkeypatch.setattr(
+        BatchInstallWorker,
+        "_install_map_synchronously",
+        lambda self, map_data: installed.append(map_data.codename),
+    )
+
+    worker = BatchInstallWorker(
+        batch_source_dir=tmp_path,
+        target_game_dir=tmp_path / "game",
+        config=AppConfig(cache_directory=tmp_path / "cache"),
+    )
+
+    discovered: list[list[str]] = []
+    worker.discovered_maps.connect(lambda names: discovered.append(names))
+    worker.run()
+
+    assert discovered
+    assert discovered[0] == ["MapA", "MapB", "MapC"]
+    assert installed == ["MapA", "MapB", "MapC"]

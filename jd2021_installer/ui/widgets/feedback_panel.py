@@ -61,7 +61,7 @@ class ProgressLogWidget(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(4, 4, 4, 4)
 
         section_label = QLabel("Progress")
         section_label.setObjectName("progressSectionLabel")
@@ -73,6 +73,7 @@ class ProgressLogWidget(QWidget):
         self._checklist.setAlternatingRowColors(False)
         self._checklist.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         self._checklist.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._checklist.setToolTip("Live checklist of install steps and their current status")
         root.addWidget(self._checklist)
 
         # -- Progress bar ----------------------------------------------------
@@ -80,6 +81,7 @@ class ProgressLogWidget(QWidget):
         self._progress.setObjectName("progressMainBar")
         self._progress.setValue(0)
         self._progress.setTextVisible(True)
+        self._progress.setToolTip("Overall install progress from 0% to 100%")
         root.addWidget(self._progress)
 
     # ------------------------------------------------------------------

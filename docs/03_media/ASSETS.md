@@ -55,9 +55,29 @@ https://jd-s3.cdn.ubi.com/public/map/{MapName}/{platform}/{Filename}/{hash}.{ext
 | Main Scene ZIP | Selected by platform preference: **DURANGO** → NX → SCARLETT → any available. Extracted and installed into the game directory. |
 | Coach textures (`.ckd`) | Downloaded to the map's download directory and installed. |
 | Cover/background images (`.ckd`, `.jpg`, `.png`) | Downloaded and installed. |
-| Video/audio preview files | Skipped — preview WebMs and `AudioPreview.ogg` are not used by the installer. |
+| Video/audio preview files | Partially used. Preview WebM may be copied as optional media when discovered in source files, but current generated runtime preview config still targets main NOHUD media. `AudioPreview.ogg` is not used as install audio. |
 
 The parser collects all `href` URLs from the file, filters out Discord CDN proxy URLs (`discordapp.net`), then categorizes them by extension and filename pattern.
+
+### Preview Integration Status (Current v2)
+
+Dedicated preview assets in `assets.html` are **not required** for functional installs.
+
+- Main gameplay still uses NOHUD video + NOHUD audio.
+- In-game preview timing is primarily driven by `.trk` preview fields (`previewEntry`, `previewLoopStart`, `previewLoopEnd`) over main media.
+- `AudioPreview.ogg` is not selected as gameplay audio.
+
+#### Installed-output difference today
+
+| Scenario | Installed files/config effect |
+|---|---|
+| No dedicated preview assets | Install is still valid. Preview uses main media + `.trk` markers. |
+| Dedicated preview video exists | `<codename>_MapPreview.webm` may be copied into `VideosCoach/` as optional payload. |
+| Dedicated preview audio exists | No install-path change in current v2; it is not wired into generated game config. |
+
+#### Important implementation note
+
+Current generated preview actor config (`video_player_map_preview.act`) still references main video/MPD paths by default. This means dedicated preview payloads are optional in practice unless future runtime wiring is added.
 
 ---
 

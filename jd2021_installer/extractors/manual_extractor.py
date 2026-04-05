@@ -21,6 +21,18 @@ logger = logging.getLogger("jd2021.extractors.manual")
 class ManualExtractor(BaseExtractor):
     """Assembles a map directory from manually specified paths."""
 
+    @staticmethod
+    def _has_ipk_structure(root: Path) -> bool:
+        if (root / "world" / "maps").is_dir():
+            return True
+        world_root = root / "world"
+        if world_root.is_dir():
+            return any(
+                d.is_dir() and d.name.lower().startswith("jd") and d.name[2:].isdigit()
+                for d in world_root.iterdir()
+            )
+        return False
+
     def _warn(self, message: str) -> None:
         self._warnings.append(message)
         logger.warning(message)
@@ -30,15 +42,44 @@ class ManualExtractor(BaseExtractor):
 
     def _detect_musictrack(self, root: Path) -> bool:
         codename_lower = self._codename.lower() if self._codename else ""
-        for p in root.rglob("*musictrack*.tpl.ckd"):
-            if not p.is_file():
-                continue
-            if not codename_lower:
-                return True
-            parts_lower = [part.lower() for part in p.parts]
-            if codename_lower in parts_lower or p.name.lower().startswith(codename_lower):
-                return True
+        for pattern in ("*musictrack*.tpl.ckd", "*musictrack*.trk", "*.trk"):
+            for p in root.rglob(pattern):
+                if not p.is_file():
+                    continue
+                if not codename_lower:
+                    return True
+                parts_lower = [part.lower() for part in p.parts]
+                if codename_lower in parts_lower or p.name.lower().startswith(codename_lower):
+                    return True
         return False
+
+    def _find_html_pair(self, root: Path) -> tuple[bool, bool]:
+        asset = False
+        nohud = False
+        try:
+            html_files = sorted(
+                [
+                    p
+                    for p in root.iterdir()
+                    if p.is_file() and p.suffix.lower() in {".html", ".htm"}
+                ],
+                key=lambda p: p.name.lower(),
+            )
+        except OSError:
+            return False, False
+
+        for html in html_files:
+            lower = html.name.lower()
+            if "nohud" in lower:
+                nohud = True
+            elif "asset" in lower:
+                asset = True
+
+        if len(html_files) >= 2:
+            asset = True
+            nohud = True
+
+        return asset, nohud
 
     def _validate_manual_explicit_inputs(self, root: Optional[Path]) -> None:
         """Validate explicit manual selections before assembling output."""
@@ -52,7 +93,7 @@ class ManualExtractor(BaseExtractor):
         required_labels = {
             "audio": "Audio file",
             "video": "Video (.webm)",
-            "mtrack": "Musictrack CKD",
+            "mtrack": "Musictrack CKD / .trk",
         }
         missing_required: list[str] = []
 
@@ -113,7 +154,11 @@ class ManualExtractor(BaseExtractor):
 
     def is_ipk_source(self) -> bool:
         """True when manual mode is operating on unpacked IPK content."""
-        return self._source_type == "ipk"
+        if self._source_type in {"ipk", "mixed"}:
+            return True
+        if self._source_type == "auto" and self._root_dir and self._root_dir.is_dir():
+            return self._has_ipk_structure(self._root_dir)
+        return False
 
     def _validate_ipk_root(self, root: Path) -> None:
         """Validate codename/root consistency for manual IPK roots."""
@@ -208,25 +253,18 @@ class ManualExtractor(BaseExtractor):
         has_musictrack = self._detect_musictrack(root)
         missing: list[str] = []
 
-        if self.is_ipk_source():
-            has_structure = False
-            if (root / "world" / "maps").is_dir():
-                has_structure = True
-            else:
-                world_root = root / "world"
-                if world_root.is_dir():
-                    has_structure = any(
-                        d.is_dir() and d.name.lower().startswith("jd") and d.name[2:].isdigit()
-                        for d in world_root.iterdir()
-                    )
-            if not has_structure:
+        has_ipk_structure = self._has_ipk_structure(root)
+
+        has_asset, has_nohud = self._find_html_pair(root)
+
+        if self._source_type in {"mixed", "auto"}:
+            if not (has_ipk_structure or (has_asset and has_nohud)):
+                missing.append("Manual source needs either world/maps/ or an assets.html + nohud.html pair.")
+        elif self.is_ipk_source():
+            if not has_ipk_structure:
                 missing.append("Unpacked IPK folder must contain world/maps/ or world/jd20XX/.")
         else:
-            html_paths = [
-                root / "assets.html",
-                root / "nohud.html",
-            ]
-            if not any(p.is_file() for p in html_paths):
+            if not (has_asset and has_nohud):
                 missing.append("Downloaded assets mode requires assets.html or nohud.html.")
 
         if not has_audio:
@@ -234,7 +272,7 @@ class ManualExtractor(BaseExtractor):
         if not has_video:
             missing.append("Gameplay video (.webm) not found in source folder.")
         if not has_musictrack:
-            missing.append("Musictrack CKD is required (fatal for config generation).")
+            missing.append("Musictrack CKD / .trk is required (fatal for config generation).")
 
         if missing:
             raise DownloadError(" ".join(missing))
@@ -242,7 +280,7 @@ class ManualExtractor(BaseExtractor):
     def __init__(
         self,
         codename: str,
-        source_type: str = "jdu",
+        source_type: str = "auto",
         root_dir: Optional[str] = None,
         files: Optional[Dict[str, str]] = None,
         dirs: Optional[Dict[str, str]] = None,
@@ -259,7 +297,7 @@ class ManualExtractor(BaseExtractor):
         if not inferred_codename and root_dir:
             inferred_codename = Path(root_dir).name.strip()
         self._codename = inferred_codename
-        self._source_type = source_type.strip().lower() if source_type else "jdu"
+        self._source_type = source_type.strip().lower() if source_type else "auto"
         self._root_dir = Path(root_dir) if root_dir else None
         self._files = files or {}
         self._dirs = dirs or {}

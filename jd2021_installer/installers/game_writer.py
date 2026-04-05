@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -955,16 +956,51 @@ def write_game_files(
     sd = map_data.song_desc
     vst = map_data.effective_video_start_time
 
+    # Check if source has a valid non-zero videoStartTime (e.g., JDNext/IPK maps).
+    # Only synthesize as a last-resort fallback for Xbox 360 rips with 0.0.
+    # This preserves the original sync for maps like JDNext that have already-correct offsets.
+    if vst == 0.0 and map_data.source_dir and map_data.source_dir.exists():
+        try:
+            audio_dir = map_data.source_dir / "Audio"
+            if audio_dir.exists():
+                # Find .trk files for this map (case-insensitive search)
+                trk_found = False
+                for trk_path in audio_dir.glob("*.trk"):
+                    if name.lower() in trk_path.stem.lower() or trk_path.stem.lower() == name.lower():
+                        try:
+                            content = trk_path.read_text(encoding="utf-8")
+                            match = re.search(r"videoStartTime\s*=\s*([-+]?\d*\.?\d+)", content)
+                            if match:
+                                source_vst = float(match.group(1))
+                                # Auto-fix if ticks were accidentally written previously
+                                if abs(source_vst) > 1000:
+                                    source_vst /= 48000.0
+                                # If source has a valid non-zero value, preserve it
+                                if abs(source_vst) > 0.0001:
+                                    vst = source_vst
+                                    logger.info(
+                                        "Source .trk contains valid videoStartTime=%.6f; "
+                                        "preserving for JDNext/IPK map '%s' (will not synthesize)",
+                                        vst, name
+                                    )
+                                    trk_found = True
+                                    break
+                        except (OSError, ValueError):
+                            continue
+        except Exception as e:
+            logger.debug("Failed to check source .trk for videoStartTime: %s", e)
+
     # Safety check from V1: if videoStartTime is 0.0 but startBeat < 0,
     # the game engine will assert "adding a brick in the past".
     # Auto-synthesize from markers as a last-resort fallback.
+    # This only applies when the source doesn't have a valid offset (e.g., Xbox 360 rips).
     if vst == 0.0 and mt.start_beat < 0:
         idx = abs(mt.start_beat)
         if mt.markers and idx < len(mt.markers):
             vst = -(mt.markers[idx] / 48.0 / 1000.0)
             logger.warning(
                 "videoStartTime was 0.0 with startBeat=%d; "
-                "auto-synthesized %.5f from markers",
+                "auto-synthesized %.5f from markers (source had no valid offset)",
                 mt.start_beat, vst,
             )
         else:

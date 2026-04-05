@@ -159,14 +159,13 @@ QLabel#settingsDialogTitle {
 	font-size: 14px;
 }
 
-QLabel#modeHtmlWarningLabel {
-	color: #f4c46b;
-	font-weight: 700;
-}
-
-QLabel#modeBatchHintLabel {
+QLabel#modeFetchWarningLabel,
+QLabel#modeHtmlWarningLabel,
+QLabel#modeIpkWarningLabel,
+QLabel#modeBatchHintLabel,
+QLabel#modeManualWarningLabel {
 	color: #a4adbf;
-	font-style: italic;
+	font-weight: 700;
 }
 
 QPlainTextEdit#logConsoleTextEdit {

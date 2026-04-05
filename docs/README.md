@@ -15,7 +15,9 @@ This is the central navigation page for JD2021 Map Installer documentation.
 
 ## Start Here
 
+- [Usage Guide](01_getting_started/USAGE_GUIDE.md) - Beginner walkthrough with UI, settings, and mode-by-mode usage
 - [Getting Started](01_getting_started/GETTING_STARTED.md) - Setup, dependencies, first run
+- [Modes Guide](01_getting_started/MODES_GUIDE.md) - Complete instructions for all installer modes
 - [GUI Reference](01_getting_started/GUI_REFERENCE.md) - Main window controls and workflow
 - [Troubleshooting](01_getting_started/TROUBLESHOOTING.md) - Common problems and fixes
 
