@@ -142,5 +142,46 @@ class TestBundleParity(unittest.TestCase):
         copied = game_root / "data" / "world" / "maps" / "MapA" / "menuart" / "textures" / "MapA_cover_generic.png"
         self.assertTrue(copied.exists())
 
+    def test_install_preserves_main_video_and_only_processes_preview_video(self):
+        source_dir = self.test_dir / "source"
+        source_dir.mkdir(parents=True)
+
+        gameplay_video = source_dir / "MapA_ULTRA.webm"
+        preview_video = source_dir / "MapA_MapPreview.webm"
+        gameplay_video.write_bytes(b"gameplay-video-bytes")
+        preview_video.write_bytes(b"preview-video-bytes")
+
+        game_root = self.test_dir / "game"
+        game_root.mkdir(parents=True)
+
+        map_data = NormalizedMapData(
+            codename="MapA",
+            song_desc=SongDescription(map_name="MapA", title="MapA", artist="Artist"),
+            music_track=MusicTrackStructure(markers=[0, 2400, 4800], start_beat=0, end_beat=2),
+            media=MapMedia(video_path=gameplay_video, map_preview_video=preview_video),
+            sync=MapSync(audio_ms=0.0, video_ms=0.0),
+            source_dir=source_dir,
+        )
+        config = AppConfig(game_directory=game_root, cache_directory=self.test_dir / "cache")
+
+        with patch("jd2021_installer.ui.workers.pipeline_workers.pre_install_cleanup"), \
+             patch("jd2021_installer.ui.workers.pipeline_workers.reprocess_audio"), \
+             patch("jd2021_installer.installers.tape_converter.auto_convert_tapes"), \
+             patch("jd2021_installer.installers.ambient_processor.process_ambient_directory"), \
+             patch("jd2021_installer.installers.texture_decoder.decode_menuart_textures"), \
+             patch("jd2021_installer.installers.texture_decoder.decode_pictograms"), \
+             patch("jd2021_installer.installers.media_processor.process_menu_art"), \
+             patch("jd2021_installer.installers.sku_scene.register_map"), \
+             patch("jd2021_installer.installers.autodance_processor.process_stape_file"), \
+             patch("jd2021_installer.ui.workers.pipeline_workers.shutil.copy2") as mock_copy2, \
+             patch("jd2021_installer.installers.media_processor.copy_video") as mock_copy_video:
+            install_map_to_game(map_data, game_root, config)
+
+        expected_main_dst = game_root / "data" / "world" / "maps" / "MapA" / "videoscoach" / "MapA.webm"
+        expected_preview_dst = game_root / "data" / "world" / "maps" / "MapA" / "videoscoach" / "MapA_MapPreview.webm"
+
+        mock_copy2.assert_any_call(gameplay_video, expected_main_dst)
+        mock_copy_video.assert_called_once_with(preview_video, expected_preview_dst, config=config)
+
 if __name__ == "__main__":
     unittest.main()

@@ -80,7 +80,16 @@ def run_ffmpeg(
     Raises MediaProcessingError on failure.
     """
     cfg = config or AppConfig()
-    cmd = [cfg.ffmpeg_path] + args
+    ffmpeg_args = list(args)
+    if (
+        getattr(cfg, "ffmpeg_hwaccel", "auto") == "auto"
+        and "-hwaccel" not in ffmpeg_args
+        and "-i" in ffmpeg_args
+    ):
+        i_index = ffmpeg_args.index("-i")
+        ffmpeg_args = ffmpeg_args[:i_index] + ["-hwaccel", "auto"] + ffmpeg_args[i_index:]
+
+    cmd = [cfg.ffmpeg_path] + ffmpeg_args
     logger.debug("FFmpeg: %s", " ".join(cmd))
 
     try:
@@ -199,13 +208,12 @@ def copy_video(
                     "-y",
                     "-i", str(src),
                     "-an",
-                    "-c:v", "libvpx-vp9",
+                    # Prefer fast VP8 WebM output for JDU/X360-like compatibility.
+                    "-c:v", "libvpx",
                     "-pix_fmt", "yuv420p",
-                    "-row-mt", "1",
-                    "-cpu-used", "4",
-                    "-deadline", "good",
-                    "-b:v", "0",
-                    "-crf", "33",
+                    "-deadline", "realtime",
+                    "-cpu-used", "8",
+                    "-b:v", "2500k",
                     str(dst),
                 ],
                 config=config,

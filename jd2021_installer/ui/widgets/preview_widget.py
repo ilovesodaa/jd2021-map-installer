@@ -251,6 +251,8 @@ class PreviewWidget(QWidget):
         self._ffmpeg_path: str = "ffmpeg"
         self._ffprobe_path: str = "ffprobe"
         self._ffplay_path: str = "ffplay"
+        self._ffmpeg_hwaccel: str = "auto"
+        self._preview_video_mode: str = "proxy_low"
         self._preview_proxy_cache: dict[str, str] = {}
 
         self._build_ui()
@@ -349,11 +351,20 @@ class PreviewWidget(QWidget):
     # PUBLIC API
     # ==================================================================
 
-    def set_tool_paths(self, ffmpeg_path: str, ffprobe_path: str, ffplay_path: str) -> None:
+    def set_tool_paths(
+        self,
+        ffmpeg_path: str,
+        ffprobe_path: str,
+        ffplay_path: str,
+        ffmpeg_hwaccel: str = "auto",
+        preview_video_mode: str = "proxy_low",
+    ) -> None:
         """Update ffmpeg tool paths used by preview subprocesses."""
         self._ffmpeg_path = ffmpeg_path or "ffmpeg"
         self._ffprobe_path = ffprobe_path or "ffprobe"
         self._ffplay_path = ffplay_path or "ffplay"
+        self._ffmpeg_hwaccel = ffmpeg_hwaccel or "auto"
+        self._preview_video_mode = preview_video_mode or "proxy_low"
 
     def launch(
         self,
@@ -435,6 +446,8 @@ class PreviewWidget(QWidget):
             vf_chain = f"tpad=start_duration={video_delay_s:.6f}," + vf_chain
 
         ffmpeg_cmd: list[str] = [self._ffmpeg_path, "-loglevel", "error"]
+        if self._ffmpeg_hwaccel == "auto":
+            ffmpeg_cmd += ["-hwaccel", "auto"]
         if vid_seek > 0:
             # Fast seek keeps scrubbing responsive for frequent preview jumps.
             ffmpeg_cmd += ["-ss", f"{vid_seek:.6f}"]
@@ -715,6 +728,8 @@ class PreviewWidget(QWidget):
         path = Path(video_path)
         if path.suffix.lower() != ".webm":
             return video_path
+        if self._preview_video_mode == "original":
+            return video_path
 
         try:
             stat = path.stat()
@@ -741,6 +756,10 @@ class PreviewWidget(QWidget):
             "-y",
             "-v",
             "error",
+        ]
+        if self._ffmpeg_hwaccel == "auto":
+            cmd += ["-hwaccel", "auto"]
+        cmd += [
             "-i",
             str(path),
             "-vf",
@@ -748,12 +767,11 @@ class PreviewWidget(QWidget):
             "-an",
             "-pix_fmt",
             "yuv420p",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "ultrafast",
-            "-crf",
-            "33",
+            # Keep proxy generation fast and game-like (WebM/VP8 style).
+            "-c:v", "libvpx",
+            "-deadline", "realtime",
+            "-cpu-used", "8",
+            "-b:v", "900k",
             str(proxy_path),
         ]
 

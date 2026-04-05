@@ -555,6 +555,8 @@ class MainWindow(QMainWindow):
                 ffmpeg_path=resolved_ffmpeg or self._config.ffmpeg_path,
                 ffprobe_path=resolved_ffprobe or self._config.ffprobe_path,
                 ffplay_path=resolved_ffplay or "ffplay",
+                ffmpeg_hwaccel=getattr(self._config, "ffmpeg_hwaccel", "auto"),
+                preview_video_mode=getattr(self._config, "preview_video_mode", "proxy_low"),
             )
 
         if persist and updated:
@@ -705,6 +707,8 @@ class MainWindow(QMainWindow):
             ffmpeg_path=self._config.ffmpeg_path,
             ffprobe_path=self._config.ffprobe_path,
             ffplay_path="ffplay",
+            ffmpeg_hwaccel=getattr(self._config, "ffmpeg_hwaccel", "auto"),
+            preview_video_mode=getattr(self._config, "preview_video_mode", "proxy_low"),
         )
         self._preview_widget.setObjectName("mainWindowPreviewWidget")
         self._preview_widget.setMinimumHeight(300)
@@ -1056,6 +1060,7 @@ class MainWindow(QMainWindow):
             self._config.log_detail_level = apply_log_detail(self._config.log_detail_level)
             self._apply_window_size_config()
             self._apply_theme()
+            self._refresh_media_tool_configuration(persist=False)
             self._save_settings()
             if not getattr(self._config, "show_window_size_overlay", True):
                 self._hide_size_overlay()

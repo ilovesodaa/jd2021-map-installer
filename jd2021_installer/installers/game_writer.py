@@ -123,6 +123,30 @@ def _write_musictrack_trk(target: Path, name: str, mt: MusicTrackStructure, vst:
         pls = midpoint
         ple = float(mt.end_beat)
 
+    # Runtime safety: enforce monotonic preview ordering without hard clamping.
+    # Some JDNext maps ship with previewLoopEnd=0 while previewEntry is valid.
+    # That can trigger JD UI conductor assertions ("adding a brick in the past").
+    original = (pe, pls, ple)
+    if pls < pe:
+        pls = pe
+
+    if ple <= pls:
+        # Prefer the authored song end when available.
+        if mt.end_beat > pls:
+            ple = float(mt.end_beat)
+        else:
+            # Last-resort minimal forward loop to keep conductor progression valid.
+            ple = pls + 1.0
+
+    if (pe, pls, ple) != original:
+        logger.warning(
+            "Adjusted preview loop for '%s' to monotonic range: entry=%.1f start=%.1f end=%.1f",
+            name,
+            pe,
+            pls,
+            ple,
+        )
+
     content = (
         f"structure = {{ MusicTrackStructure = {{ markers = {{ {markers} }}, "
         f"signatures = {{ {sigs} }}, sections = {{ {sects} }}, "

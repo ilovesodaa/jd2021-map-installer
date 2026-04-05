@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import struct
 from pathlib import Path
 from typing import Callable, Optional
@@ -1248,7 +1249,9 @@ def install_map_to_game(
         if progress_callback: progress_callback(50)
         from jd2021_installer.installers.media_processor import copy_video
         video_dst = map_target / "videoscoach" / f"{codename}.webm"
-        copy_video(media.video_path, video_dst, config=config, force_reencode=True)
+        # Preserve the gameplay video exactly as downloaded/extracted.
+        # Hardware acceleration / transcoding is reserved for preview-only flows.
+        shutil.copy2(media.video_path, video_dst)
         if media.map_preview_video and media.map_preview_video.exists():
             preview_dst = map_target / "videoscoach" / f"{codename}_MapPreview.webm"
             copy_video(media.map_preview_video, preview_dst, config=config)
@@ -1256,7 +1259,6 @@ def install_map_to_game(
     # 3. Copy/Rename MenuArt assets (Cover, Banner, Coach, etc.)
     textures_dir = map_target / "menuart" / "textures"
     textures_dir.mkdir(parents=True, exist_ok=True)
-    import shutil
     
     # Map of MapMedia fields to V1 canonical art suffixes
     art_map = {

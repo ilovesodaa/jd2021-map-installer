@@ -245,6 +245,38 @@ class SettingsDialog(QDialog):
         quality_row.addStretch()
         layout.addLayout(quality_row)
 
+        # ffmpeg_hwaccel
+        hw_row = QHBoxLayout()
+        hw_label = QLabel("FFmpeg acceleration:")
+        hw_row.addWidget(hw_label)
+
+        self.combo_hwaccel = QComboBox()
+        self.combo_hwaccel.addItems(["auto", "none"])
+        self.combo_hwaccel.setCurrentText(getattr(self._config, "ffmpeg_hwaccel", "auto"))
+        self.combo_hwaccel.setToolTip(
+            "auto: let FFmpeg pick available hardware decoding acceleration\n"
+            "none: disable hardware acceleration"
+        )
+        hw_row.addWidget(self.combo_hwaccel)
+        hw_row.addStretch()
+        layout.addLayout(hw_row)
+
+        # preview_video_mode
+        preview_row = QHBoxLayout()
+        preview_label = QLabel("Preview video mode:")
+        preview_row.addWidget(preview_label)
+
+        self.combo_preview_mode = QComboBox()
+        self.combo_preview_mode.addItems(["proxy_low", "original"])
+        self.combo_preview_mode.setCurrentText(getattr(self._config, "preview_video_mode", "proxy_low"))
+        self.combo_preview_mode.setToolTip(
+            "proxy_low: create and use a low-resolution proxy for smoother preview seeking\n"
+            "original: use the original video file for preview"
+        )
+        preview_row.addWidget(self.combo_preview_mode)
+        preview_row.addStretch()
+        layout.addLayout(preview_row)
+
         # discord_channel_url
         discord_row = QHBoxLayout()
         discord_label = QLabel("Discord Channel URL:")
@@ -305,6 +337,8 @@ class SettingsDialog(QDialog):
         self._config.show_window_size_overlay = self.cb_size_overlay.isChecked()
         self._config.style_debug_mode = self.cb_style_debug.isChecked()
         self._config.video_quality = self.combo_quality.currentText()
+        self._config.ffmpeg_hwaccel = self.combo_hwaccel.currentText()
+        self._config.preview_video_mode = self.combo_preview_mode.currentText()
         self._config.discord_channel_url = self.txt_discord_url.text().strip()
         
         self.accept()

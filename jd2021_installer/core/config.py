@@ -71,6 +71,8 @@ class AppConfig(BaseModel):
     # FFmpeg configuration
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
+    ffmpeg_hwaccel: str = Field(default="auto", pattern=r"^(auto|none)$")
+    preview_video_mode: str = Field(default="proxy_low", pattern=r"^(proxy_low|original)$")
 
     class Config:
         env_prefix = "JD2021_"
