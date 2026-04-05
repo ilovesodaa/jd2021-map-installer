@@ -19,7 +19,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QSignalBlocker, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -29,7 +29,6 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
-    QRadioButton,
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
@@ -98,6 +97,11 @@ class FileRowWidget(QWidget):
         btn.clicked.connect(self._browse)
         lay.addWidget(btn)
 
+        btn_clear = QPushButton("Clear")
+        btn_clear.setToolTip(f"Clear selected path for {label_text.rstrip(':')}")
+        btn_clear.clicked.connect(self._clear)
+        lay.addWidget(btn_clear)
+
     def _browse(self) -> None:
         if self.is_dir:
             path = QFileDialog.getExistingDirectory(self, "Select Directory")
@@ -109,6 +113,11 @@ class FileRowWidget(QWidget):
         if path:
             self.line_edit.setText(path)
             self.path_changed.emit(path)
+
+    def _clear(self) -> None:
+        with QSignalBlocker(self.line_edit):
+            self.line_edit.clear()
+        self.path_changed.emit("")
 
 
 class ModeSelectorWidget(QWidget):
@@ -328,31 +337,22 @@ class ModeSelectorWidget(QWidget):
         warn.setWordWrap(True)
         scroll_lay.addWidget(warn)
 
-        # Source flavor selection (v1 parity)
         source_lay = QHBoxLayout()
         source_lay.addWidget(QLabel("Source Type:"))
         self._manual_source_combo = QComboBox()
-        self._manual_source_combo.addItems(["JDU", "IPK", "Mixed"])
-        self._manual_source_combo.setToolTip("Set expected source format to improve auto-discovery of files")
-        self._manual_source_combo.currentTextChanged.connect(self._on_manual_source_type_changed)
+        self._manual_source_combo.addItem("JDU", "jdu")
+        self._manual_source_combo.addItem("IPK", "ipk")
+        self._manual_source_combo.addItem("Mixed", "mixed")
+        self._manual_source_combo.setCurrentIndex(2)
+        self._manual_source_combo.setToolTip(
+            "Choose how to interpret Manual fields. Detection is still shown as a hint."
+        )
+        self._manual_source_combo.currentIndexChanged.connect(
+            lambda _idx: self._on_manual_source_type_changed()
+        )
         source_lay.addWidget(self._manual_source_combo)
-        self._manual_source_hint = QLabel("Unpacked JDU Files")
-        source_lay.addWidget(self._manual_source_hint)
         source_lay.addStretch()
         scroll_lay.addLayout(source_lay)
-
-        # Submode Selection
-        submode_lay = QHBoxLayout()
-        submode_lay.addWidget(QLabel("Manual Submode:"))
-        self._manual_sub_select = QRadioButton("Select Files")
-        self._manual_sub_scan = QRadioButton("Scan Directory")
-        self._manual_sub_select.setToolTip("Fill required fields manually using each Browse button")
-        self._manual_sub_scan.setToolTip("Automatically scan the selected root folder and pre-fill matching files")
-        self._manual_sub_scan.setChecked(True)
-        submode_lay.addWidget(self._manual_sub_select)
-        submode_lay.addWidget(self._manual_sub_scan)
-        submode_lay.addStretch()
-        scroll_lay.addLayout(submode_lay)
 
         # Top generic entries
         top_lay = QGridLayout()
@@ -377,8 +377,8 @@ class ModeSelectorWidget(QWidget):
         scroll_lay.addLayout(top_lay)
 
         # Required Files Group
-        grp_req = QGroupBox("Required Files")
-        lay_req = QVBoxLayout(grp_req)
+        self._manual_required_group = QGroupBox("Required Files")
+        lay_req = QVBoxLayout(self._manual_required_group)
         
         row_audio = FileRowWidget("Audio File:", file_filter="Audio (*.ogg *.wav *.wav.ckd);;All (*.*)")
         row_video = FileRowWidget("Video File:", file_filter="WebM (*.webm);;All (*.*)")
@@ -387,37 +387,97 @@ class ModeSelectorWidget(QWidget):
         lay_req.addWidget(row_audio)
         lay_req.addWidget(row_video)
         lay_req.addWidget(row_mtrack)
-        scroll_lay.addWidget(grp_req)
+        scroll_lay.addWidget(self._manual_required_group)
 
         # Optional Tapes Group
-        grp_tapes = QGroupBox("Tapes & Config")
-        lay_tapes = QVBoxLayout(grp_tapes)
+        self._manual_tapes_group = QGroupBox("Tapes & Config")
+        lay_tapes = QVBoxLayout(self._manual_tapes_group)
         
         row_sdesc = FileRowWidget("Songdesc", file_filter="CKD (*.ckd);;All (*.*)")
-        row_dtape = FileRowWidget("Dance Tape", file_filter="CKD (*.ckd);;All (*.*)")
-        row_ktape = FileRowWidget("Karaoke Tape", file_filter="CKD (*.ckd);;All (*.*)")
+        row_dtape = FileRowWidget("Dance Tape", file_filter="Tape Files (*.dtape *.dtape.ckd *.ckd);;All (*.*)")
+        row_ktape = FileRowWidget("Karaoke Tape", file_filter="Tape Files (*.ktape *.ktape.ckd *.ckd);;All (*.*)")
         row_mseq = FileRowWidget("Mainseq Tape", file_filter="CKD (*.ckd);;All (*.*)")
         
         lay_tapes.addWidget(row_sdesc)
         lay_tapes.addWidget(row_dtape)
         lay_tapes.addWidget(row_ktape)
         lay_tapes.addWidget(row_mseq)
-        scroll_lay.addWidget(grp_tapes)
+        scroll_lay.addWidget(self._manual_tapes_group)
 
         # Optional Assets Group
-        grp_assets = QGroupBox("Asset Folders")
-        lay_assets = QVBoxLayout(grp_assets)
+        self._manual_assets_group = QGroupBox("Asset Folders")
+        lay_assets = QVBoxLayout(self._manual_assets_group)
         
-        row_moves = FileRowWidget("Moves Folder:", is_dir=True)
-        row_pictos = FileRowWidget("Pictos Folder:", is_dir=True)
-        row_menuart = FileRowWidget("MenuArt Folder:", is_dir=True)
-        row_amb = FileRowWidget("AMB Folder:", is_dir=True)
+        self._manual_row_moves = FileRowWidget("Moves Folder:", is_dir=True)
+        self._manual_row_pictos = FileRowWidget("Pictos Folder:", is_dir=True)
+        self._manual_row_menuart = FileRowWidget("MenuArt Folder:", is_dir=True)
+        self._manual_row_amb = FileRowWidget("AMB Folder:", is_dir=True)
         
-        lay_assets.addWidget(row_moves)
-        lay_assets.addWidget(row_pictos)
-        lay_assets.addWidget(row_menuart)
-        lay_assets.addWidget(row_amb)
-        scroll_lay.addWidget(grp_assets)
+        lay_assets.addWidget(self._manual_row_moves)
+        lay_assets.addWidget(self._manual_row_pictos)
+        lay_assets.addWidget(self._manual_row_menuart)
+        lay_assets.addWidget(self._manual_row_amb)
+        scroll_lay.addWidget(self._manual_assets_group)
+
+        self._manual_menuart_group = QGroupBox("MenuArt")
+        lay_menuart = QVBoxLayout(self._manual_menuart_group)
+        menuart_note = QLabel(
+            "MenuArt fields are shown only when they exist in the source."
+        )
+        menuart_note.setWordWrap(True)
+        lay_menuart.addWidget(menuart_note)
+        self._manual_jdu_menuart_rows: dict[str, FileRowWidget] = {}
+
+        row_jdu_cover_generic = FileRowWidget(
+            "Cover Generic:", file_filter="Images (*.png *.tga *.jpg *.jpeg *.dds *.ckd);;All (*.*)"
+        )
+        row_jdu_cover_online = FileRowWidget(
+            "Cover Online:", file_filter="Images (*.png *.tga *.jpg *.jpeg *.dds *.ckd);;All (*.*)"
+        )
+        row_jdu_banner = FileRowWidget(
+            "Banner:", file_filter="Images (*.png *.tga *.jpg *.jpeg *.dds *.ckd);;All (*.*)"
+        )
+        row_jdu_banner_bkg = FileRowWidget(
+            "Banner Bkg:", file_filter="Images (*.png *.tga *.jpg *.jpeg *.dds *.ckd);;All (*.*)"
+        )
+        row_jdu_map_bkg = FileRowWidget(
+            "Map Bkg:", file_filter="Images (*.png *.tga *.jpg *.jpeg *.dds *.ckd);;All (*.*)"
+        )
+        row_jdu_cover_albumcoach = FileRowWidget(
+            "Cover AlbumCoach:", file_filter="Images (*.png *.tga *.jpg *.jpeg *.dds *.ckd);;All (*.*)"
+        )
+        row_jdu_cover_albumbkg = FileRowWidget(
+            "Cover AlbumBkg:", file_filter="Images (*.png *.tga *.jpg *.jpeg *.dds *.ckd);;All (*.*)"
+        )
+        row_jdu_coach1 = FileRowWidget(
+            "Coach 1 Art:", file_filter="Images (*.png *.tga *.jpg *.jpeg *.dds *.ckd);;All (*.*)"
+        )
+        row_jdu_coach2 = FileRowWidget(
+            "Coach 2 Art:", file_filter="Images (*.png *.tga *.jpg *.jpeg *.dds *.ckd);;All (*.*)"
+        )
+        row_jdu_coach3 = FileRowWidget(
+            "Coach 3 Art:", file_filter="Images (*.png *.tga *.jpg *.jpeg *.dds *.ckd);;All (*.*)"
+        )
+        row_jdu_coach4 = FileRowWidget(
+            "Coach 4 Art:", file_filter="Images (*.png *.tga *.jpg *.jpeg *.dds *.ckd);;All (*.*)"
+        )
+
+        self._manual_jdu_menuart_rows = {
+            "jdu_menuart_cover_generic": row_jdu_cover_generic,
+            "jdu_menuart_cover_online": row_jdu_cover_online,
+            "jdu_menuart_banner": row_jdu_banner,
+            "jdu_menuart_banner_bkg": row_jdu_banner_bkg,
+            "jdu_menuart_map_bkg": row_jdu_map_bkg,
+            "jdu_menuart_cover_albumcoach": row_jdu_cover_albumcoach,
+            "jdu_menuart_cover_albumbkg": row_jdu_cover_albumbkg,
+            "jdu_menuart_coach1": row_jdu_coach1,
+            "jdu_menuart_coach2": row_jdu_coach2,
+            "jdu_menuart_coach3": row_jdu_coach3,
+            "jdu_menuart_coach4": row_jdu_coach4,
+        }
+        for row in self._manual_jdu_menuart_rows.values():
+            lay_menuart.addWidget(row)
+        scroll_lay.addWidget(self._manual_menuart_group)
         
         # Keep a small bottom buffer so the final field is never flush/clipped.
         scroll_lay.addSpacing(8)
@@ -435,11 +495,24 @@ class ModeSelectorWidget(QWidget):
             "dtape": row_dtape.line_edit,
             "ktape": row_ktape.line_edit,
             "mseq": row_mseq.line_edit,
-            "moves": row_moves.line_edit,
-            "pictos": row_pictos.line_edit,
-            "menuart": row_menuart.line_edit,
-            "amb": row_amb.line_edit,
+            "moves": self._manual_row_moves.line_edit,
+            "pictos": self._manual_row_pictos.line_edit,
+            "menuart": self._manual_row_menuart.line_edit,
+            "amb": self._manual_row_amb.line_edit,
+            "jdu_menuart_cover_generic": row_jdu_cover_generic.line_edit,
+            "jdu_menuart_cover_online": row_jdu_cover_online.line_edit,
+            "jdu_menuart_banner": row_jdu_banner.line_edit,
+            "jdu_menuart_banner_bkg": row_jdu_banner_bkg.line_edit,
+            "jdu_menuart_map_bkg": row_jdu_map_bkg.line_edit,
+            "jdu_menuart_cover_albumcoach": row_jdu_cover_albumcoach.line_edit,
+            "jdu_menuart_cover_albumbkg": row_jdu_cover_albumbkg.line_edit,
+            "jdu_menuart_coach1": row_jdu_coach1.line_edit,
+            "jdu_menuart_coach2": row_jdu_coach2.line_edit,
+            "jdu_menuart_coach3": row_jdu_coach3.line_edit,
+            "jdu_menuart_coach4": row_jdu_coach4.line_edit,
         })
+
+        self._apply_manual_layout_sections("unknown")
         
         return page
 
@@ -473,10 +546,13 @@ class ModeSelectorWidget(QWidget):
 
     def _on_manual_root_changed(self, path: str) -> None:
         """Triggered when root folder in manual mode is changed."""
-        self.target_selected.emit(path)
-        if not self._manual_sub_scan.isChecked():
+        if not path.strip():
+            self._reset_manual_inputs(keep_root=False)
             return
-            
+
+        self.target_selected.emit(path)
+        self._reset_manual_inputs(keep_root=True)
+
         # Scan and auto-fill
         root = Path(path)
         if not root.is_dir():
@@ -484,12 +560,17 @@ class ModeSelectorWidget(QWidget):
 
         source_type = self.manual_source_type
         scan_root = self._resolve_scan_root(root, source_type)
+        layout = self._detect_manual_layout(root)
+        self._apply_manual_layout_sections(layout)
         codename = self.inputs["manual"]["codename"].text().strip()
         
-        # 1. Infer codename from directory name
+        # 1. Infer codename from structure/file hints before falling back to folder name.
         if not codename:
-            self.inputs["manual"]["codename"].setText(scan_root.name)
-            codename = scan_root.name
+            inferred = self._infer_manual_codename(root)
+            if not inferred:
+                inferred = scan_root.name
+            self.inputs["manual"]["codename"].setText(inferred)
+            codename = inferred
         
         # 2. Auto-discover common files
         from jd2021_installer.parsers.normalizer import _find_ckd_files
@@ -501,8 +582,6 @@ class ModeSelectorWidget(QWidget):
 
         mapping = {
             "sdesc": "*songdesc*.tpl.ckd",
-            "dtape": "*_tml_dance.?tape.ckd",
-            "ktape": "*_tml_karaoke.?tape.ckd",
             "mseq": "*mainsequence*.tape.ckd",
         }
         
@@ -510,6 +589,16 @@ class ModeSelectorWidget(QWidget):
             found = _find_ckd_files(str(scan_root), pattern, codename=codename or None)
             if found and not self.inputs["manual"][key].text().strip():
                 self.inputs["manual"][key].setText(found[0])
+
+        if not self.inputs["manual"]["dtape"].text().strip():
+            dtape = self._pick_manual_tape(scan_root, codename or None, source_type, tape_kind="dance")
+            if dtape:
+                self.inputs["manual"]["dtape"].setText(str(dtape))
+
+        if not self.inputs["manual"]["ktape"].text().strip():
+            ktape = self._pick_manual_tape(scan_root, codename or None, source_type, tape_kind="karaoke")
+            if ktape:
+                self.inputs["manual"]["ktape"].setText(str(ktape))
                 
         # Audio/Video
         if not self.inputs["manual"]["video"].text().strip():
@@ -528,52 +617,159 @@ class ModeSelectorWidget(QWidget):
             if folder and not self.inputs["manual"][key].text().strip():
                 self.inputs["manual"][key].setText(str(folder))
 
-    def _on_manual_source_type_changed(self, text: str) -> None:
-        """Mirror V1 behavior: clear manual state when source type changes."""
-        source_type = text.strip().lower()
-        if hasattr(self, "_manual_source_hint"):
-            if source_type == "ipk":
-                self._manual_source_hint.setText("Unpacked IPK files")
-            elif source_type == "mixed":
-                self._manual_source_hint.setText("Mixed JDU + IPK sources")
-            else:
-                self._manual_source_hint.setText("Downloaded JDU Files")
+        menuart_assets = self._find_jdu_menuart_assets(root, codename or None)
+        for key, asset_path in menuart_assets.items():
+            if asset_path and not self.inputs["manual"][key].text().strip():
+                self.inputs["manual"][key].setText(str(asset_path))
+        self._apply_jdu_menuart_visibility(menuart_assets)
 
-        self.inputs["manual"]["root"].clear()
-        self.inputs["manual"]["codename"].clear()
-        for key in (
-            "audio",
-            "video",
-            "mtrack",
-            "sdesc",
-            "dtape",
-            "ktape",
-            "mseq",
-            "moves",
-            "pictos",
-            "menuart",
-            "amb",
-        ):
-            self.inputs["manual"][key].clear()
+    def _detect_manual_layout(self, root: Path) -> str:
+        """Detect likely source layout: jdu, ipk, mixed, or unknown."""
+        if not root.exists() or not root.is_dir():
+            return "unknown"
+
+        has_ipk_struct = (root / "world" / "maps").is_dir() or any(
+            d.is_dir() and d.name.lower().startswith("jd") and d.name[2:].isdigit()
+            for d in (root / "world").iterdir()
+        ) if (root / "world").is_dir() else False
+
+        has_asset_html, has_nohud_html = self._find_html_pair(root)
+        has_html_pair = bool(has_asset_html and has_nohud_html)
+
+        if has_ipk_struct and has_html_pair:
+            return "mixed"
+        if has_ipk_struct:
+            return "ipk"
+        if has_html_pair:
+            return "jdu"
+        return "unknown"
+
+    def _apply_manual_layout_sections(self, layout: str) -> None:
+        source_type = self.manual_source_type
+        show_jdu = source_type in {"jdu", "mixed"}
+
+        if hasattr(self, "_manual_required_group"):
+            self._manual_required_group.setVisible(True)
+        if hasattr(self, "_manual_tapes_group"):
+            self._manual_tapes_group.setVisible(source_type in {"ipk", "mixed"})
+        if hasattr(self, "_manual_assets_group"):
+            self._manual_assets_group.setVisible(True)
+
+        # JDU maps typically do not use AMB folders and use file-based menuart assets.
+        if hasattr(self, "_manual_row_amb"):
+            self._manual_row_amb.setVisible(source_type in {"ipk", "mixed"})
+        if hasattr(self, "_manual_row_menuart"):
+            self._manual_row_menuart.setVisible(source_type in {"ipk", "mixed"})
+        if hasattr(self, "_manual_menuart_group"):
+            self._manual_menuart_group.setVisible(show_jdu or source_type == "mixed")
+        if hasattr(self, "_manual_jdu_menuart_rows"):
+            for row in self._manual_jdu_menuart_rows.values():
+                row.setVisible(show_jdu)
+
+    def _on_manual_source_type_changed(self) -> None:
+        root_path = self.inputs["manual"]["root"].text().strip()
+        layout = self._detect_manual_layout(Path(root_path)) if root_path else "unknown"
+        self._apply_manual_layout_sections(layout)
+        if root_path:
+            codename = self.inputs["manual"]["codename"].text().strip() or None
+            self._apply_jdu_menuart_visibility(self._find_jdu_menuart_assets(Path(root_path), codename))
         self._emit_state_changed()
+
+    def _reset_manual_inputs(self, keep_root: bool = False) -> None:
+        manual_fields = self.inputs.get("manual", {})
+        blocked = []
+        for key, line_edit in manual_fields.items():
+            if keep_root and key == "root" and line_edit.text().strip():
+                continue
+            blocked.append(QSignalBlocker(line_edit))
+            line_edit.clear()
+
+        # Keep blockers alive until all clears finish.
+        del blocked
+
+        if hasattr(self, "_manual_jdu_menuart_rows"):
+            for row in self._manual_jdu_menuart_rows.values():
+                row.setVisible(False)
+        if hasattr(self, "_manual_menuart_group"):
+            self._manual_menuart_group.setVisible(False)
+        if hasattr(self, "_manual_row_amb"):
+            self._manual_row_amb.setVisible(False)
+        if hasattr(self, "_manual_row_menuart"):
+            self._manual_row_menuart.setVisible(False)
+
+    def _find_jdu_menuart_assets(
+        self, root: Path, codename: Optional[str]
+    ) -> dict[str, Optional[Path]]:
+        result: dict[str, Optional[Path]] = {
+            "jdu_menuart_cover_generic": None,
+            "jdu_menuart_cover_online": None,
+            "jdu_menuart_banner": None,
+            "jdu_menuart_banner_bkg": None,
+            "jdu_menuart_map_bkg": None,
+            "jdu_menuart_cover_albumcoach": None,
+            "jdu_menuart_cover_albumbkg": None,
+            "jdu_menuart_coach1": None,
+            "jdu_menuart_coach2": None,
+            "jdu_menuart_coach3": None,
+            "jdu_menuart_coach4": None,
+        }
+        if not root.exists() or not root.is_dir():
+            return result
+
+        image_suffixes = (".png", ".tga", ".jpg", ".jpeg", ".dds", ".ckd")
+        files = [p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in image_suffixes]
+        if codename:
+            scoped = [p for p in files if self._matches_codename(p, codename)]
+            if scoped:
+                files = scoped
+
+        sorted_files = sorted(files, key=lambda p: p.as_posix().lower())
+
+        def find_first(tokens: tuple[str, ...]) -> Optional[Path]:
+            for p in sorted_files:
+                name = p.name.lower()
+                if all(tok in name for tok in tokens):
+                    return p
+            return None
+
+        result["jdu_menuart_cover_generic"] = find_first(("cover_generic",)) or find_first(("cover", "generic"))
+        result["jdu_menuart_cover_online"] = find_first(("cover_online",)) or find_first(("cover", "online"))
+        result["jdu_menuart_banner_bkg"] = find_first(("banner_bkg",)) or find_first(("banner", "bkg"))
+        result["jdu_menuart_banner"] = find_first(("banner",))
+        result["jdu_menuart_map_bkg"] = find_first(("map_bkg",)) or find_first(("map", "bkg"))
+        result["jdu_menuart_cover_albumcoach"] = find_first(("albumcoach",)) or find_first(("album", "coach"))
+        result["jdu_menuart_cover_albumbkg"] = find_first(("albumbkg",)) or find_first(("album", "bkg"))
+
+        for idx in range(1, 5):
+            key = f"jdu_menuart_coach{idx}"
+            result[key] = (
+                find_first((f"coach_{idx}",))
+                or find_first(("coach", str(idx)))
+                or find_first((f"c{idx}",))
+                or find_first((f"_0{idx}",))
+            )
+
+        return result
+
+    def _apply_jdu_menuart_visibility(self, detected: dict[str, Optional[Path]]) -> None:
+        source_type = self.manual_source_type
+        if not hasattr(self, "_manual_jdu_menuart_rows"):
+            return
+
+        for key, row in self._manual_jdu_menuart_rows.items():
+            if source_type != "jdu":
+                row.setVisible(source_type == "mixed")
+                continue
+            row.setVisible(bool(detected.get(key)))
 
     def _wire_state_signals(self) -> None:
         """Emit a normalized source-state payload whenever inputs change."""
         for mode_inputs in self.inputs.values():
             for line_edit in mode_inputs.values():
                 line_edit.textChanged.connect(lambda _text: self._emit_state_changed())
-
         if hasattr(self, "_manual_source_combo"):
-            self._manual_source_combo.currentTextChanged.connect(
-                lambda _text: self._emit_state_changed()
-            )
-        if hasattr(self, "_manual_sub_select"):
-            self._manual_sub_select.toggled.connect(
-                lambda _checked: self._emit_state_changed()
-            )
-        if hasattr(self, "_manual_sub_scan"):
-            self._manual_sub_scan.toggled.connect(
-                lambda _checked: self._emit_state_changed()
+            self._manual_source_combo.currentIndexChanged.connect(
+                lambda _index: self._emit_state_changed()
             )
 
     def _emit_state_changed(self) -> None:
@@ -602,7 +798,55 @@ class ModeSelectorWidget(QWidget):
         return lower_codename in [p.lower() for p in path.parts]
 
     def _manual_source_is_recursive(self, source_type: str) -> bool:
-        return source_type in {"ipk", "mixed"}
+        return True
+
+    def _infer_manual_codename(self, root: Path) -> Optional[str]:
+        """Infer codename from common map structures and filenames.
+
+        Handles non-standard layouts where root is above the actual map folder
+        (for example, a folder containing both top-level files and world/maps/<codename>/).
+        """
+        world_maps = root / "world" / "maps"
+        if world_maps.is_dir():
+            candidates = sorted([d for d in world_maps.iterdir() if d.is_dir()], key=lambda p: p.name.lower())
+            if len(candidates) == 1:
+                return candidates[0].name
+
+        main_scene_candidates = sorted(
+            [p for p in root.rglob("*_MAIN_SCENE.isc") if p.is_file()],
+            key=lambda p: p.as_posix().lower(),
+        )
+        if main_scene_candidates:
+            stem = main_scene_candidates[0].stem
+            if stem.lower().endswith("_main_scene"):
+                return stem[:-11]
+
+        for pattern in ("*musictrack*", "*songdesc*"):
+            files = sorted(
+                [p for p in root.rglob(pattern) if p.is_file()],
+                key=lambda p: p.as_posix().lower(),
+            )
+            if files:
+                name = files[0].stem
+                if name:
+                    return name.split("_")[0]
+
+        return None
+
+    def _pick_preferred_dir(self, candidates: list[Path], codename: Optional[str]) -> Optional[Path]:
+        """Pick the most relevant directory for a map, preferring codename-scoped paths."""
+        if not candidates:
+            return None
+
+        candidates = sorted(candidates, key=lambda p: p.as_posix().lower())
+        if codename:
+            scoped = [p for p in candidates if self._matches_codename(p, codename)]
+            if scoped:
+                scoped.sort(key=lambda p: len(p.parts))
+                return scoped[0]
+
+        candidates.sort(key=lambda p: len(p.parts))
+        return candidates[0]
 
     def _pick_manual_musictrack(self, scan_root: Path, codename: Optional[str], source_type: str) -> Optional[Path]:
         priority = ("*musictrack*.tpl.ckd", "*musictrack*.trk", "*.trk")
@@ -629,6 +873,61 @@ class ModeSelectorWidget(QWidget):
 
         return None
 
+    def _pick_manual_tape(
+        self,
+        scan_root: Path,
+        codename: Optional[str],
+        source_type: str,
+        tape_kind: str,
+    ) -> Optional[Path]:
+        recursive = self._manual_source_is_recursive(source_type)
+        searcher = scan_root.rglob if recursive else scan_root.glob
+
+        if tape_kind == "dance":
+            patterns = (
+                "*_tml_dance.dtape",
+                "*_tml_dance.dtape.ckd",
+                "*dance*.dtape",
+                "*dance*.dtape.ckd",
+            )
+        else:
+            patterns = (
+                "*_tml_karaoke.ktape",
+                "*_tml_karaoke.ktape.ckd",
+                "*karaoke*.ktape",
+                "*karaoke*.ktape.ckd",
+            )
+
+        for pattern in patterns:
+            hits = [p for p in searcher(pattern) if p.is_file()]
+            if tape_kind == "dance":
+                hits = [p for p in hits if "adtape" not in p.name.lower()]
+            if not hits:
+                continue
+            if codename:
+                scoped = [p for p in hits if self._matches_codename(p, codename)]
+                if scoped:
+                    return sorted(scoped, key=lambda p: p.as_posix().lower())[0]
+            else:
+                return sorted(hits, key=lambda p: p.as_posix().lower())[0]
+
+        # Broad fallback for atypical filenames while still matching extension type.
+        ext = ".dtape" if tape_kind == "dance" else ".ktape"
+        candidates = [
+            p for p in searcher(f"*{ext}*")
+            if p.is_file() and p.name.lower().endswith((ext, f"{ext}.ckd"))
+        ]
+        if tape_kind == "dance":
+            candidates = [p for p in candidates if "adtape" not in p.name.lower()]
+        if not candidates:
+            return None
+
+        if codename:
+            scoped = [p for p in candidates if self._matches_codename(p, codename)]
+            if scoped:
+                return sorted(scoped, key=lambda p: p.as_posix().lower())[0]
+        return sorted(candidates, key=lambda p: p.as_posix().lower())[0]
+
     def _pick_manual_video(self, scan_root: Path, codename: Optional[str], source_type: str) -> Optional[Path]:
         recursive = self._manual_source_is_recursive(source_type)
         candidates = [
@@ -653,10 +952,7 @@ class ModeSelectorWidget(QWidget):
 
     def _pick_manual_audio(self, scan_root: Path, codename: Optional[str], source_type: str) -> Optional[Path]:
         recursive = self._manual_source_is_recursive(source_type)
-        if source_type == "ipk":
-            priority = ("*.wav", "*.wav.ckd", "*.ogg")
-        else:
-            priority = ("*.ogg", "*.wav", "*.wav.ckd")
+        priority = ("*.ogg", "*.wav", "*.wav.ckd")
 
         for pattern in priority:
             hits = [p for p in (scan_root.rglob(pattern) if recursive else scan_root.glob(pattern)) if "audiopreview" not in p.name.lower()]
@@ -677,45 +973,40 @@ class ModeSelectorWidget(QWidget):
         return None
 
     def _discover_manual_folders(self, scan_root: Path) -> dict[str, Optional[Path]]:
-        menuart_textures = next(
-            (
-                p
-                for p in scan_root.rglob("textures")
-                if p.is_dir() and p.parent.name.lower() == "menuart"
-            ),
-            None,
-        )
-        menuart = menuart_textures or next(
-            (p for p in scan_root.rglob("menuart") if p.is_dir()),
-            None,
-        )
+        codename = self.inputs["manual"]["codename"].text().strip() or None
 
-        amb = next(
-            (
-                p
-                for p in scan_root.rglob("amb")
-                if p.is_dir() and p.parent.name.lower() == "audio"
-            ),
-            None,
-        )
+        menuart_texture_candidates = [
+            p
+            for p in scan_root.rglob("textures")
+            if p.is_dir() and p.parent.name.lower() == "menuart"
+        ]
+        menuart_dir_candidates = [p for p in scan_root.rglob("menuart") if p.is_dir()]
+        amb_candidates = [
+            p
+            for p in scan_root.rglob("amb")
+            if p.is_dir() and p.parent.name.lower() == "audio"
+        ]
+        moves_candidates = [p for p in scan_root.rglob("moves") if p.is_dir()]
+        picto_candidates = [p for p in scan_root.rglob("pictos") if p.is_dir()]
+
+        menuart = self._pick_preferred_dir(menuart_texture_candidates, codename)
+        if menuart is None:
+            menuart = self._pick_preferred_dir(menuart_dir_candidates, codename)
+
+        amb = self._pick_preferred_dir(amb_candidates, codename)
 
         return {
-            "moves": next((p for p in scan_root.rglob("moves") if p.is_dir()), None),
-            "pictos": next((p for p in scan_root.rglob("pictos") if p.is_dir()), None),
+            "moves": self._pick_preferred_dir(moves_candidates, codename),
+            "pictos": self._pick_preferred_dir(picto_candidates, codename),
             "menuart": menuart,
             "amb": amb,
         }
 
     def _resolve_scan_root(self, root: Path, source_type: str) -> Path:
-        """Prefer codename folder under world/maps for IPK-oriented scans."""
-        if source_type not in {"ipk", "mixed"}:
-            return root
+        """Use the provided root and let recursive scanners find best matches.
 
-        world_maps = root / "world" / "maps"
-        if world_maps.is_dir():
-            candidates = [d for d in world_maps.iterdir() if d.is_dir()]
-            if candidates:
-                return sorted(candidates, key=lambda p: p.name.lower())[0]
+        This avoids losing top-level files in mixed/non-standard layouts.
+        """
         return root
 
     def _on_manual_scan_clicked(self) -> None:
@@ -770,9 +1061,11 @@ class ModeSelectorWidget(QWidget):
 
     @property
     def manual_source_type(self) -> str:
-        if not hasattr(self, "_manual_source_combo"):
-            return "jdu"
-        return self._manual_source_combo.currentText().strip().lower()
+        if hasattr(self, "_manual_source_combo"):
+            selected = self._manual_source_combo.currentData()
+            if isinstance(selected, str) and selected.strip():
+                return selected.strip().lower()
+        return "mixed"
 
     def set_fetch_codenames(self, raw_value: str) -> None:
         """Public setter used by MainWindow (avoid direct child-input access)."""
@@ -790,13 +1083,12 @@ class ModeSelectorWidget(QWidget):
                 for name, line_edit in mode_inputs.items()
             }
 
-        manual_submode = "scan" if getattr(self, "_manual_sub_scan", None) and self._manual_sub_scan.isChecked() else "select"
         return {
             "mode_index": mode_index,
             "mode_label": MODE_LABELS[mode_index],
             "mode_key": mode_key,
             "manual_source_type": self.manual_source_type,
-            "manual_submode": manual_submode,
+            "manual_submode": "scan",
             "target": self._resolve_target_for_state(mode_key, fields.get(mode_key, {})),
             "fields": fields,
         }

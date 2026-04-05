@@ -136,6 +136,53 @@ def test_ipk_media_validation_accepts_sidecar_audio_search_root(tmp_path: Path) 
     _validate_ipk_media_presence(extract_root, "MapA", source_root)
 
 
+def test_archive_worker_uses_extraction_root_for_normalize_search_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ipk_file = tmp_path / "canttameher_x360.ipk"
+    ipk_file.write_bytes(b"\x50\xEC\x12\xBA" + b"\x00" * 64)
+
+    extraction_root = tmp_path / "temp_extraction"
+    extraction_root.mkdir(parents=True, exist_ok=True)
+
+    extractor = ArchiveIPKExtractor(ipk_file)
+    extractor.extract = lambda _output_dir: extraction_root  # type: ignore[method-assign]
+    extractor.get_codename = lambda: "canttameher"  # type: ignore[method-assign]
+
+    monkeypatch.setattr(
+        "jd2021_installer.ui.workers.pipeline_workers._validate_ipk_media_presence",
+        lambda *_args, **_kwargs: [],
+    )
+
+    captured: dict[str, Path | str | None] = {}
+
+    def _fake_normalize(directory, codename, search_root=None):  # type: ignore[no-untyped-def]
+        captured["directory"] = Path(directory)
+        captured["codename"] = codename
+        captured["search_root"] = Path(search_root) if search_root else None
+        return object()
+
+    monkeypatch.setattr(
+        "jd2021_installer.ui.workers.pipeline_workers.normalize",
+        _fake_normalize,
+    )
+
+    worker = ExtractAndNormalizeWorker(extractor=extractor, output_dir=tmp_path / "work")
+    errors: list[str] = []
+    finished_payloads: list[object] = []
+
+    worker.error.connect(lambda _stage, msg: errors.append(msg))
+    worker.finished.connect(finished_payloads.append)
+    worker.run()
+
+    assert not errors
+    assert finished_payloads and finished_payloads[0] is not None
+    assert captured["directory"] == extraction_root
+    assert captured["codename"] == "canttameher"
+    assert captured["search_root"] == extraction_root
+
+
 def test_reprocess_audio_recovers_missing_ipk_audio_from_source_tree(
     tmp_path: Path,
     sample_normalized_data,

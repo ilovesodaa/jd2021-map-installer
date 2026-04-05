@@ -282,6 +282,42 @@ def decode_pictograms(picto_dir: Path, output_dir: Path) -> int:
         if decode_ckd_texture(ckd, out_path):
             success += 1
 
+    # Manual/IPK maps can ship already-decoded pictos (png/tga/jpg).
+    # Keep them usable by copying/converting into timeline/pictos as PNG.
+    for src in picto_dir.rglob("*"):
+        if not src.is_file():
+            continue
+        ext = src.suffix.lower()
+        if ext not in (".png", ".tga", ".jpg", ".jpeg"):
+            continue
+
+        out_name = src.stem + ".png"
+        out_path = output_dir / out_name
+
+        # Avoid self-copy when input and output directories are the same.
+        if ext == ".png" and src.resolve() == out_path.resolve():
+            success += 1
+            continue
+
+        try:
+            if ext == ".png":
+                shutil.copy2(src, out_path)
+                success += 1
+                continue
+
+            # Convert TGA/JPG to PNG when Pillow is available.
+            try:
+                from PIL import Image
+            except ImportError:
+                logger.warning("Pillow missing; skipping non-PNG picto %s", src.name)
+                continue
+
+            with Image.open(src) as img:
+                img.save(out_path)
+            success += 1
+        except Exception as e:
+            logger.warning("Failed to process loose picto %s: %s", src.name, e)
+
     logger.info("Decoded %d pictogram textures from %s", success, picto_dir)
     return success
 

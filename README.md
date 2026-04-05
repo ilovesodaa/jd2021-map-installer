@@ -1,6 +1,7 @@
 # JD2021 Map Installer v2
 
-A Windows-first, pure Python GUI application built on **PyQt6** for extracting, building, and installing JDU (Just Dance Unlimited) maps into Just Dance 2021 PC. Supports multi-mode ingestion: codename fetch, HTML exports, Xbox 360 IPK archives, batch folders, and manual source folders.
+![Screenshot](./assets/images/tool-screenshot.png)
+A Windows-first, pure Python GUI application built on **PyQt6** for extracting, building, and installing Just Dance maps into Just Dance 2021 PC. Supports multi-mode ingestion: codename fetch, HTML exports, IPK archives, batch installs, and manual source folders.
 
 ## Current Behavior Notes (Important)
 
@@ -52,6 +53,7 @@ RUN.bat
 ### Setup and Usage
 
 - **[Getting Started](docs/01_getting_started/GETTING_STARTED.md)** — Dependencies, setup, and running the installer
+- **[Usage Guide](docs/01_getting_started/USAGE_GUIDE.md)** — One-page beginner guide to setup, GUI options, settings, and modes
 - **[Modes Guide](docs/01_getting_started/MODES_GUIDE.md)** — Complete mode-by-mode instructions (Fetch, HTML, IPK, Batch, Manual)
 - **[GUI Reference](docs/01_getting_started/GUI_REFERENCE.md)** — PyQt6 main window layout, controls, and thread lifecycle
 - **[Asset HTML Files](docs/03_media/ASSETS.md)** — Format and contents of `assets.html` and `nohud.html`

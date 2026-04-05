@@ -288,15 +288,20 @@ class ExtractAndNormalizeWorker(QObject):
 
             codename = self._codename or self._extractor.get_codename()
             search_root: Optional[Path] = None
+            normalize_search_root: Optional[Path] = None
             media_errors: list[str] = []
 
             if isinstance(self._extractor, ArchiveIPKExtractor):
                 # V1 parity: IPK mode also probes media alongside the selected .ipk file.
                 search_root = self._extractor.get_source_dir()
                 media_errors.extend(_validate_ipk_media_presence(map_output_dir, codename, search_root))
+                # For normalization, scan the extracted tree so map-local optional assets
+                # (e.g., albumcoach/map_bkg) are discovered before ACT generation.
+                normalize_search_root = map_output_dir
             elif hasattr(self._extractor, "is_ipk_source"):
                 if bool(self._extractor.is_ipk_source()):  # type: ignore[attr-defined]
                     media_errors.extend(_validate_ipk_media_presence(map_output_dir, codename, None))
+                    normalize_search_root = map_output_dir
 
             if media_errors:
                 for error in media_errors:
@@ -314,7 +319,7 @@ class ExtractAndNormalizeWorker(QObject):
             map_data = normalize(
                 map_output_dir,
                 codename,
-                search_root=search_root,
+                search_root=normalize_search_root,
             )
 
             self.progress.emit(100)
@@ -683,6 +688,7 @@ class BatchInstallWorker(QObject):
         target_game_dir: Path,
         config: AppConfig,
         selected_maps: Optional[set[str]] = None,
+        fetch_codenames: Optional[list[str]] = None,
         force_unlock_locked_status: bool = False,
         parent: Optional[QObject] = None,
     ) -> None:
@@ -691,6 +697,7 @@ class BatchInstallWorker(QObject):
         self._target_dir = target_game_dir
         self._config = config
         self._selected_maps = selected_maps
+        self._fetch_codenames = [c.strip() for c in (fetch_codenames or []) if c and c.strip()]
         self._force_unlock_locked_status = force_unlock_locked_status
 
     def run(self) -> None:
@@ -770,7 +777,12 @@ class BatchInstallWorker(QObject):
                     self.progress.emit(clamped)
             
             candidates: list[dict[str, object]] = []
-            if self._source_dir:
+            if self._fetch_codenames:
+                for codename in self._fetch_codenames:
+                    candidates.append({"kind": "fetch", "name": codename, "path": self._source_dir})
+
+            # When explicit fetch codenames are provided, treat this as a pure fetch batch.
+            if self._source_dir and not self._fetch_codenames:
                 if self._source_dir.is_file() and self._source_dir.suffix.lower() == ".ipk":
                     candidates.append({"kind": "ipk", "path": self._source_dir})
                 elif self._source_dir.is_dir():
@@ -822,7 +834,9 @@ class BatchInstallWorker(QObject):
             for candidate in candidates:
                 kind = str(candidate["kind"])
                 cpath = Path(candidate["path"])
-                if kind == "ipk":
+                if kind == "fetch":
+                    map_names.append(str(candidate.get("name") or cpath.name))
+                elif kind == "ipk":
                     from jd2021_installer.extractors.archive_ipk import inspect_ipk
                     maps_in_ipk = inspect_ipk(cpath)
                     map_names.extend(maps_in_ipk or [cpath.stem])
@@ -902,12 +916,30 @@ class BatchInstallWorker(QObject):
             for i, candidate in enumerate(process_candidates):
                 try:
                     cpath = Path(candidate["path"])
-                    self.status.emit(f"[{i+1}/{len(process_candidates)}] Processing {cpath.name}...")
+                    display_name = str(candidate.get("name") or cpath.name)
+                    self.status.emit(f"[{i+1}/{len(process_candidates)}] Processing {display_name}...")
                     
                     map_dir = cpath
                     map_names_for_candidate: list[str] = []
                     is_candidate_ipk = str(candidate["kind"]) == "ipk"
-                    if is_candidate_ipk:
+                    is_candidate_fetch = str(candidate["kind"]) == "fetch"
+                    if is_candidate_fetch:
+                        from jd2021_installer.extractors.web_playwright import WebPlaywrightExtractor
+
+                        map_name = str(candidate.get("name") or "").strip()
+                        if selected_lookup and map_name.lower() not in selected_lookup:
+                            continue
+
+                        self.status.emit(f"[{map_name}] Fetch map data")
+                        extractor = WebPlaywrightExtractor(
+                            codenames=[map_name],
+                            quality=self._config.video_quality,
+                            config=self._config,
+                        )
+                        map_dir = extractor.extract(batch_cache)
+                        resolved_name = (extractor.get_codename() or map_name).strip()
+                        map_names_for_candidate = [resolved_name or map_name]
+                    elif is_candidate_ipk:
                         # Extract IPK to temp dir
                         from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor
                         # Try to get codename from IPK name for early status

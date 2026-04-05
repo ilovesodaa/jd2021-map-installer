@@ -1481,6 +1481,21 @@ class MainWindow(QMainWindow):
             self._start_batch_install()
             return
 
+        # Multi-codename Fetch should use the same multi-map review/apply flow as Batch/IPK bundle.
+        from jd2021_installer.ui.widgets.mode_selector import MODE_FETCH
+        if mode_index == MODE_FETCH:
+            fetch_fields = source_fields.get("fetch", {}) if isinstance(source_fields, dict) else {}
+            raw_fetch = str(fetch_fields.get("codenames", "")).strip()
+            fetch_codenames = [c.strip() for c in raw_fetch.split(",") if c.strip()]
+            if len(fetch_codenames) > 1:
+                self._sync_refinement.set_ipk_mode(is_ipk=False)
+                self._start_batch_install(
+                    selected_maps=set(fetch_codenames),
+                    map_names=fetch_codenames,
+                    fetch_codenames=fetch_codenames,
+                )
+                return
+
         # Bundle IPK support
         from jd2021_installer.ui.widgets.mode_selector import MODE_IPK
         if mode_index == MODE_IPK and Path(self._current_target).is_file():
@@ -2454,7 +2469,7 @@ class MainWindow(QMainWindow):
                 
             return ManualExtractor(
                 codename=codename,
-                source_type=str(source_state.get("manual_source_type", "jdu")),
+                source_type=str(source_state.get("manual_source_type", "auto")),
                 root_dir=root_dir,
                 files={
                     "audio": str(manual_fields.get("audio", "")).strip(),
@@ -2464,6 +2479,17 @@ class MainWindow(QMainWindow):
                     "dtape": str(manual_fields.get("dtape", "")).strip(),
                     "ktape": str(manual_fields.get("ktape", "")).strip(),
                     "mseq": str(manual_fields.get("mseq", "")).strip(),
+                    "jdu_menuart_cover_generic": str(manual_fields.get("jdu_menuart_cover_generic", "")).strip(),
+                    "jdu_menuart_cover_online": str(manual_fields.get("jdu_menuart_cover_online", "")).strip(),
+                    "jdu_menuart_banner": str(manual_fields.get("jdu_menuart_banner", "")).strip(),
+                    "jdu_menuart_banner_bkg": str(manual_fields.get("jdu_menuart_banner_bkg", "")).strip(),
+                    "jdu_menuart_map_bkg": str(manual_fields.get("jdu_menuart_map_bkg", "")).strip(),
+                    "jdu_menuart_cover_albumcoach": str(manual_fields.get("jdu_menuart_cover_albumcoach", "")).strip(),
+                    "jdu_menuart_cover_albumbkg": str(manual_fields.get("jdu_menuart_cover_albumbkg", "")).strip(),
+                    "jdu_menuart_coach1": str(manual_fields.get("jdu_menuart_coach1", "")).strip(),
+                    "jdu_menuart_coach2": str(manual_fields.get("jdu_menuart_coach2", "")).strip(),
+                    "jdu_menuart_coach3": str(manual_fields.get("jdu_menuart_coach3", "")).strip(),
+                    "jdu_menuart_coach4": str(manual_fields.get("jdu_menuart_coach4", "")).strip(),
                 },
                 dirs={
                     "moves": str(manual_fields.get("moves", "")).strip(),
@@ -2481,7 +2507,12 @@ class MainWindow(QMainWindow):
         )
         return None
 
-    def _start_batch_install(self, selected_maps: set[str] | None = None, map_names: list[str] | None = None) -> None:
+    def _start_batch_install(
+        self,
+        selected_maps: set[str] | None = None,
+        map_names: list[str] | None = None,
+        fetch_codenames: list[str] | None = None,
+    ) -> None:
         """Launches the dedicated Batch mode worker."""
         if not self._current_target:
             return
@@ -2507,6 +2538,7 @@ class MainWindow(QMainWindow):
             target_game_dir=self._config.game_directory, # type: ignore[arg-type]
             config=self._config,
             selected_maps=selected_maps,
+            fetch_codenames=fetch_codenames,
             force_unlock_locked_status=force_unlock_locked_status,
         )
         thread = QThread()
