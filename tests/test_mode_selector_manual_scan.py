@@ -1,6 +1,10 @@
 from pathlib import Path
 
-from jd2021_installer.ui.widgets.mode_selector import FileRowWidget, ModeSelectorWidget
+from jd2021_installer.ui.widgets.mode_selector import (
+    FileRowWidget,
+    ModeSelectorWidget,
+    MODE_JDNEXT,
+)
 
 
 def test_pick_manual_tape_accepts_uncooked_dtape_and_ktape(qtbot, tmp_path: Path):
@@ -187,3 +191,24 @@ def test_file_row_clear_button_clears_value_and_emits_empty(qtbot):
 
     assert row.line_edit.text() == ""
     assert emitted and emitted[-1] == ""
+
+
+def test_jdnext_mode_reports_codenames_as_target(qtbot):
+    widget = ModeSelectorWidget()
+    qtbot.addWidget(widget)
+
+    widget._mode_combo.setCurrentIndex(MODE_JDNEXT)
+    widget.inputs["jdnext"]["codenames"].setText("TelephoneALT,MapB")
+
+    state = widget.get_current_state()
+    assert state["mode_key"] == "jdnext"
+    assert state["target"] == "TelephoneALT,MapB"
+
+
+def test_set_mode_codenames_updates_jdnext_input(qtbot):
+    widget = ModeSelectorWidget()
+    qtbot.addWidget(widget)
+
+    widget.set_mode_codenames("jdnext", "TelephoneALT")
+
+    assert widget.inputs["jdnext"]["codenames"].text() == "TelephoneALT"

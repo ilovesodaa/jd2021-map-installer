@@ -9,6 +9,7 @@ from jd2021_installer.core.exceptions import WebExtractionError
 from jd2021_installer.extractors.web_playwright import (
     WebPlaywrightExtractor,
     _classify_urls,
+    _has_valid_cdn_links,
     download_files,
 )
 
@@ -308,3 +309,30 @@ def test_download_files_retries_when_nohud_webm_is_corrupt(tmp_path, monkeypatch
     assert "TestMap_ULTRA.hd.webm" in downloaded
     assert fake_session.calls == 2
     assert (tmp_path / "TestMap_ULTRA.hd.webm").read_bytes().startswith(b"\x1a\x45\xdf\xa3")
+
+
+def test_classify_urls_supports_jdnext_mappackage_opus_and_private_video():
+    urls = [
+        "https://jd-s3.cdn.ubi.com/public/jdnext/maps/uuid123/audioPreview.opus/hashpreview.opus",
+        "https://cdn-jdhelper.ramaprojects.ru/private/jdnext/maps/uuid123/video_ULTRA.hd.webm/hashvideo.webm?auth=abc",
+        "https://cdn-jdhelper.ramaprojects.ru/private/jdnext/maps/uuid123/audio.opus/hashaudio.opus?auth=abc",
+        "https://cdn-jdhelper.ramaprojects.ru/private/jdnext/maps/uuid123/nx/mapPackage/hashmap_v0.bundle?auth=abc",
+        "https://jd-s3.cdn.ubi.com/public/jdnext/maps/uuid123/nx/cover/hashcover_v0.bundle",
+    ]
+
+    classified = _classify_urls(urls, "ULTRA_HD")
+
+    assert classified["video"] is not None
+    assert "video_ULTRA.hd.webm" in str(classified["video"])
+    assert classified["audio"] is not None
+    assert "audio.opus" in str(classified["audio"])
+    assert classified["mainscene"] is not None
+    assert "mapPackage" in str(classified["mainscene"])
+    assert any("cover" in u for u in classified["others"])
+
+
+def test_has_valid_cdn_links_accepts_jdnext_maps_path():
+    html = (
+        '<a href="https://jd-s3.cdn.ubi.com/public/jdnext/maps/uuid123/nx/mapPackage/hash_v0.bundle">Link</a>'
+    )
+    assert _has_valid_cdn_links(html)

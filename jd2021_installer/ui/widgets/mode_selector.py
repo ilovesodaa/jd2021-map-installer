@@ -44,6 +44,7 @@ MODE_HTML = 1
 MODE_IPK = 2
 MODE_BATCH = 3
 MODE_MANUAL = 4
+MODE_JDNEXT = 5
 
 MODE_LABELS = [
     "Fetch (Codename)",
@@ -51,6 +52,7 @@ MODE_LABELS = [
     "IPK Archive",
     "Batch (Directory)",
     "Manual (Directory)",
+    "Fetch JDNext (Codename)",
 ]
 
 MODE_KEYS = [
@@ -59,6 +61,7 @@ MODE_KEYS = [
     "ipk",
     "batch",
     "manual",
+    "jdnext",
 ]
 
 
@@ -135,6 +138,7 @@ class ModeSelectorWidget(QWidget):
             "ipk": {},
             "batch": {},
             "manual": {},
+            "jdnext": {},
         }
         self._build_ui()
 
@@ -173,20 +177,25 @@ class ModeSelectorWidget(QWidget):
         self._stack.addWidget(self._build_ipk_page())  # 2
         self._stack.addWidget(self._build_batch_page())  # 3
         self._stack.addWidget(self._build_manual_page())  # 4
+        self._stack.addWidget(self._build_jdnext_page())  # 5
         self._wire_state_signals()
         self._fit_current_page_height()
 
     # -- Mode Pages ---------------------------------------------------------
 
-    def _build_fetch_page(self) -> QWidget:
+    def _build_codename_fetch_page(
+        self,
+        *,
+        input_key: str,
+        warning_text: str,
+        placeholder: str,
+    ) -> QWidget:
         page = QWidget()
         page.setObjectName("modePage")
         lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 4, 0, 0)
 
-        warn = QLabel(
-            "Fetch automates acquiring the asset and nohud HTML files and downloads. Make sure to set your Discord channel link that can access JDHelper."
-        )
+        warn = QLabel(warning_text)
         warn.setObjectName("modeFetchWarningLabel")
         warn.setWordWrap(True)
         lay.addWidget(warn)
@@ -198,15 +207,35 @@ class ModeSelectorWidget(QWidget):
         row.addWidget(lbl)
 
         inp = QLineEdit()
-        inp.setPlaceholderText("e.g. RainOnMe, DontStartNow")
+        inp.setPlaceholderText(placeholder)
         inp.setToolTip("Enter one or more codenames, separated by commas")
         inp.textChanged.connect(lambda t: self.target_selected.emit(t))
         row.addWidget(inp)
 
         lay.addLayout(row)
 
-        self.inputs["fetch"]["codenames"] = inp
+        self.inputs[input_key]["codenames"] = inp
         return page
+
+    def _build_fetch_page(self) -> QWidget:
+        return self._build_codename_fetch_page(
+            input_key="fetch",
+            warning_text=(
+                "Fetch automates acquiring the asset and nohud HTML files and downloads. "
+                "Make sure to set your Discord channel link that can access JDHelper."
+            ),
+            placeholder="e.g. RainOnMe, DontStartNow",
+        )
+
+    def _build_jdnext_page(self) -> QWidget:
+        return self._build_codename_fetch_page(
+            input_key="jdnext",
+            warning_text=(
+                "JDNext Fetch runs the JDHelper /asset flow with server:jdnext. "
+                "This mode currently uses a single asset HTML response per codename."
+            ),
+            placeholder="e.g. TelephoneALT",
+        )
 
     def _build_html_page(self) -> QWidget:
         page = QWidget()
@@ -778,6 +807,8 @@ class ModeSelectorWidget(QWidget):
     def _resolve_target_for_state(self, mode_key: str, fields: dict[str, str]) -> str:
         if mode_key == "fetch":
             return fields.get("codenames", "").strip()
+        if mode_key == "jdnext":
+            return fields.get("codenames", "").strip()
         if mode_key == "html":
             return fields.get("asset", "").strip() or fields.get("nohud", "").strip()
         if mode_key == "ipk":
@@ -1069,7 +1100,12 @@ class ModeSelectorWidget(QWidget):
 
     def set_fetch_codenames(self, raw_value: str) -> None:
         """Public setter used by MainWindow (avoid direct child-input access)."""
-        self.inputs["fetch"]["codenames"].setText(raw_value)
+        self.set_mode_codenames("fetch", raw_value)
+
+    def set_mode_codenames(self, mode_key: str, raw_value: str) -> None:
+        """Set codename input for a codename-driven mode."""
+        if mode_key in self.inputs and "codenames" in self.inputs[mode_key]:
+            self.inputs[mode_key]["codenames"].setText(raw_value)
 
     def get_current_state(self) -> dict[str, object]:
         """Return a normalized snapshot of selected mode and user-provided values."""

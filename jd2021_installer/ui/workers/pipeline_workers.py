@@ -689,6 +689,7 @@ class BatchInstallWorker(QObject):
         config: AppConfig,
         selected_maps: Optional[set[str]] = None,
         fetch_codenames: Optional[list[str]] = None,
+        fetch_source: str = "jdu",
         force_unlock_locked_status: bool = False,
         parent: Optional[QObject] = None,
     ) -> None:
@@ -698,6 +699,7 @@ class BatchInstallWorker(QObject):
         self._config = config
         self._selected_maps = selected_maps
         self._fetch_codenames = [c.strip() for c in (fetch_codenames or []) if c and c.strip()]
+        self._fetch_source = (fetch_source or "jdu").strip().lower() or "jdu"
         self._force_unlock_locked_status = force_unlock_locked_status
 
     def run(self) -> None:
@@ -933,6 +935,7 @@ class BatchInstallWorker(QObject):
                         self.status.emit(f"[{map_name}] Fetch map data")
                         extractor = WebPlaywrightExtractor(
                             codenames=[map_name],
+                            source_game=self._fetch_source,
                             quality=self._config.video_quality,
                             config=self._config,
                         )

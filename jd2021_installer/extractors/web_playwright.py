@@ -49,7 +49,7 @@ _SEL_MESSAGE_ACCESSORIES = 'div[id^="message-accessories-"]'
 
 # CDN link validation patterns
 _UBI_CDN_HOST_PATTERN = re.compile(r"https?://[^\s\"']*(?:cdn\.ubi\.com|cdn\.ubisoft\.cn)", re.IGNORECASE)
-_MAP_PATH_PATTERN = re.compile(r"/(?:public|private)/map/", re.IGNORECASE)
+_MAP_PATH_PATTERN = re.compile(r"/(?:public|private)/(?:map|jdnext/maps)/", re.IGNORECASE)
 
 
 def _is_browser_closed_error(exc: BaseException) -> bool:
@@ -130,7 +130,9 @@ def _is_nohud_video_url(url: str) -> bool:
     """Return True for NOHUD gameplay video URLs from private map CDN paths."""
     parsed = urlparse(url)
     path_low = parsed.path.lower()
-    if "/private/map/" not in path_low:
+    if "/private/" not in path_low:
+        return False
+    if "/map/" not in path_low and "/maps/" not in path_low:
         return False
     name_low = get_filename_from_url(url).lower()
     if not name_low.endswith(".webm"):
@@ -207,15 +209,23 @@ def _classify_urls(
             if pattern in u:
                 video_urls_by_quality[q] = u
                 break
-        if ".ogg" in u and "AudioPreview" not in u:
+        if (
+            (
+                ".ogg" in u
+                or ".opus" in u
+            )
+            and "audiopreview" not in u.lower()
+        ):
             audio_url = u
         elif "MAIN_SCENE" in u and ".zip" in u:
             for plat in ["X360", "DURANGO", "SCARLETT", "NX", "ORBIS", "PROSPERO", "PC", "GGP", "WIIU"]:
                 if f"MAIN_SCENE_{plat}" in u:
                     scene_zips[plat] = u
                     break
-        elif any(ext in u for ext in (".ckd", ".jpg", ".png", ".ad")):
-            if ".ckd" in u or ".ad" in u or ("discordapp.net" not in u):
+        elif "mappackage" in u.lower() and ".bundle" in u.lower():
+            scene_zips["MAP_PACKAGE"] = u
+        elif any(ext in u.lower() for ext in (".ckd", ".jpg", ".jpeg", ".png", ".ad", ".bundle", ".opus")):
+            if ".ckd" in u.lower() or ".ad" in u.lower() or ("discordapp.net" not in u):
                 other_urls.append(u)
 
     # Select best video
@@ -227,12 +237,14 @@ def _classify_urls(
             video_url = video_urls_by_quality[q]
             break
 
-    # Select best mainscene
+    # Select best mainscene/map package
     main_scene_url = None
     for plat in SCENE_PLATFORM_PREFERENCE:
         if plat in scene_zips:
             main_scene_url = scene_zips[plat]
             break
+    if not main_scene_url and "MAP_PACKAGE" in scene_zips:
+        main_scene_url = scene_zips["MAP_PACKAGE"]
     if not main_scene_url and scene_zips:
         main_scene_url = next(iter(scene_zips.values()))
 
@@ -280,8 +292,9 @@ def download_files(
     unique_urls = list(set(important_urls))
     # Prioritize: mainscene > audio > video > others
     def priority(u):
-        if "MAIN_SCENE" in u: return 0
+        if "MAIN_SCENE" in u or "mappackage" in u.lower(): return 0
         if ".ogg" in u or ".wav" in u: return 1
+        if ".opus" in u: return 1
         if any(pat in u for pat in QUALITY_PATTERNS.values()): return 2
         return 3
     
@@ -748,9 +761,10 @@ class WebPlaywrightExtractor(BaseExtractor):
     Operates in two modes:
     1. **From pre-saved HTML files** — legacy workflow, uses local
        ``assets.html`` / ``nohud.html``.
-    2. **Live Fetch** — launches a persistent-profile Chromium browser,
-       automates Discord slash commands (``/assets jdu <codename>`` and
-       ``/nohud <codename>``), captures the bot's embed HTML, then
+     2. **Live Fetch** — launches a persistent-profile Chromium browser,
+         automates Discord slash commands (JDU: ``/assets jdu <codename>`` +
+         ``/nohud <codename>``; JDNext: ``/asset server:jdnext codename:<codename>``),
+         captures the bot's embed HTML, then
        downloads the CDN URLs.
     """
 
@@ -760,6 +774,7 @@ class WebPlaywrightExtractor(BaseExtractor):
         nohud_html: Optional[str | Path] = None,
         urls: Optional[List[str]] = None,
         codenames: Optional[List[str]] = None,
+        source_game: str = "jdu",
         quality: str = "ULTRA_HD",
         config: Optional[AppConfig] = None,
     ) -> None:
@@ -770,6 +785,7 @@ class WebPlaywrightExtractor(BaseExtractor):
         self._config = config or AppConfig()
         self._codenames = codenames or []
         self._codename: Optional[str] = self._codenames[0] if self._codenames else None
+        self._source_game = (source_game or "jdu").strip().lower() or "jdu"
 
     def extract(self, output_dir: Path) -> Path:
         """Download files into download_root and extract them into output_dir."""
@@ -796,9 +812,15 @@ class WebPlaywrightExtractor(BaseExtractor):
         classified_required = _classify_urls(all_urls, self._quality)
         missing_required: list[str] = []
         if not classified_required.get("mainscene"):
-            missing_required.append("MAIN_SCENE zip")
+            if self._source_game == "jdnext":
+                missing_required.append("mapPackage bundle")
+            else:
+                missing_required.append("MAIN_SCENE zip")
         if not classified_required.get("audio"):
-            missing_required.append("full audio (.ogg)")
+            if self._source_game == "jdnext":
+                missing_required.append("full audio (.opus/.ogg)")
+            else:
+                missing_required.append("full audio (.ogg)")
         if not classified_required.get("video"):
             missing_required.append("gameplay video (.webm)")
 
@@ -938,7 +960,8 @@ class WebPlaywrightExtractor(BaseExtractor):
 
     async def _scrape_codename(self, codename: str) -> List[str]:
         """Full fetch flow for one codename: launch browser → login →
-        ``/assets`` → ``/nohud`` → save HTML → return extracted URLs.
+        JDU: ``/assets`` → ``/nohud``; JDNext: ``/asset server:jdnext``;
+        then save HTML and return extracted URLs.
         """
         try:
             from playwright.async_api import async_playwright
@@ -987,28 +1010,41 @@ class WebPlaywrightExtractor(BaseExtractor):
 
                 bot_timeout = self._config.fetch_bot_response_timeout_s
 
-                # Step 1: /assets jdu <codename>
-                logger.info("[1/2] /assets jdu %s", codename)
-                assets_html = await _fetch_command_with_retry(
-                    page,
-                    command="assets",
-                    choices=["jdu"],
-                    codename=codename,
-                    label="assets",
-                    bot_timeout_s=bot_timeout,
-                )
-                await page.wait_for_timeout(500)
+                nohud_html: Optional[str] = None
+                if self._source_game == "jdnext":
+                    logger.info("[1/1] /asset server:jdnext %s", codename)
+                    assets_html = await _fetch_command_with_retry(
+                        page,
+                        command="asset",
+                        choices=["jdnext"],
+                        codename=codename,
+                        label="asset",
+                        bot_timeout_s=bot_timeout,
+                        require_gameplay_video=True,
+                    )
+                else:
+                    # Step 1: /assets jdu <codename>
+                    logger.info("[1/2] /assets jdu %s", codename)
+                    assets_html = await _fetch_command_with_retry(
+                        page,
+                        command="assets",
+                        choices=["jdu"],
+                        codename=codename,
+                        label="assets",
+                        bot_timeout_s=bot_timeout,
+                    )
+                    await page.wait_for_timeout(500)
 
-                # Step 2: /nohud <codename>
-                logger.info("[2/2] /nohud %s", codename)
-                nohud_html = await _fetch_command_with_retry(
-                    page,
-                    command="nohud",
-                    choices=[],
-                    codename=codename,
-                    label="nohud",
-                    bot_timeout_s=bot_timeout,
-                )
+                    # Step 2: /nohud <codename>
+                    logger.info("[2/2] /nohud %s", codename)
+                    nohud_html = await _fetch_command_with_retry(
+                        page,
+                        command="nohud",
+                        choices=[],
+                        codename=codename,
+                        label="nohud",
+                        bot_timeout_s=bot_timeout,
+                    )
 
                 # Save HTML to output dir for caching / debugging
                 # Save HTML to download dir for caching / debugging / portability
@@ -1016,7 +1052,8 @@ class WebPlaywrightExtractor(BaseExtractor):
                 output_dir = self._config.download_root / codename
                 output_dir.mkdir(parents=True, exist_ok=True)
                 (output_dir / "assets.html").write_text(assets_html, encoding="utf-8")
-                (output_dir / "nohud.html").write_text(nohud_html, encoding="utf-8")
+                if nohud_html is not None:
+                    (output_dir / "nohud.html").write_text(nohud_html, encoding="utf-8")
                 logger.info("Saved HTML to %s", output_dir)
 
             finally:
@@ -1026,8 +1063,10 @@ class WebPlaywrightExtractor(BaseExtractor):
                     # Context may already be closed if user manually closed browser.
                     pass
 
-        # Extract all URLs from both pages
-        all_urls = extract_urls_from_html(assets_html) + extract_urls_from_html(nohud_html)
+        # Extract URLs from the fetched HTML payload(s)
+        all_urls = extract_urls_from_html(assets_html)
+        if nohud_html is not None:
+            all_urls += extract_urls_from_html(nohud_html)
         self._codename = extract_codename_from_urls(all_urls) or codename
         return all_urls
 

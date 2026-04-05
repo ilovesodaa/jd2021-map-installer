@@ -874,6 +874,7 @@ class MainWindow(QMainWindow):
         issues: list[str] = []
         from jd2021_installer.ui.widgets.mode_selector import (
             MODE_FETCH,
+            MODE_JDNEXT,
             MODE_HTML,
             MODE_IPK,
             MODE_BATCH,
@@ -884,12 +885,16 @@ class MainWindow(QMainWindow):
         idx = int(source_state.get("mode_index", MODE_FETCH))
         fields = source_state.get("fields", {})
 
-        if idx == MODE_FETCH:
-            fetch_fields = fields.get("fetch", {}) if isinstance(fields, dict) else {}
+        if idx in (MODE_FETCH, MODE_JDNEXT):
+            fetch_mode_key = "jdnext" if idx == MODE_JDNEXT else "fetch"
+            fetch_fields = fields.get(fetch_mode_key, {}) if isinstance(fields, dict) else {}
             raw = str(fetch_fields.get("codenames", "")).strip()
             codenames = [c.strip() for c in raw.split(",") if c.strip()]
             if not codenames:
-                issues.append("Enter at least one codename for Fetch mode.")
+                if idx == MODE_JDNEXT:
+                    issues.append("Enter at least one codename for Fetch JDNext mode.")
+                else:
+                    issues.append("Enter at least one codename for Fetch mode.")
             else:
                 self._current_target = ",".join(codenames)
             return issues
@@ -981,9 +986,9 @@ class MainWindow(QMainWindow):
             self._set_status("Pre-flight failed")
             return
 
-        from jd2021_installer.ui.widgets.mode_selector import MODE_FETCH
+        from jd2021_installer.ui.widgets.mode_selector import MODE_FETCH, MODE_JDNEXT
         source_state = self._mode_selector.get_current_state()
-        include_fetch_checks = int(source_state.get("mode_index", -1)) == MODE_FETCH
+        include_fetch_checks = int(source_state.get("mode_index", -1)) in (MODE_FETCH, MODE_JDNEXT)
         if not self._ensure_runtime_dependencies(include_fetch_checks=include_fetch_checks):
             self._set_status("Pre-flight failed")
             return
@@ -1426,11 +1431,13 @@ class MainWindow(QMainWindow):
             return
 
         # v1 parity: codename whitespace sanitization prompt before fetch scrape starts.
-        from jd2021_installer.ui.widgets.mode_selector import MODE_FETCH
+        from jd2021_installer.ui.widgets.mode_selector import MODE_FETCH, MODE_JDNEXT
         source_state = self._mode_selector.get_current_state()
         source_fields = source_state.get("fields", {})
-        if int(source_state.get("mode_index", -1)) == MODE_FETCH:
-            fetch_fields = source_fields.get("fetch", {}) if isinstance(source_fields, dict) else {}
+        mode_index = int(source_state.get("mode_index", -1))
+        if mode_index in (MODE_FETCH, MODE_JDNEXT):
+            fetch_mode_key = "jdnext" if mode_index == MODE_JDNEXT else "fetch"
+            fetch_fields = source_fields.get(fetch_mode_key, {}) if isinstance(source_fields, dict) else {}
             raw_value = str(fetch_fields.get("codenames", ""))
             if re.search(r"\s", raw_value):
                 sanitized = re.sub(r"\s+", "", raw_value)
@@ -1446,7 +1453,7 @@ class MainWindow(QMainWindow):
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 )
                 if reply == QMessageBox.StandardButton.Yes:
-                    self._mode_selector.set_fetch_codenames(sanitized)
+                    self._mode_selector.set_mode_codenames(fetch_mode_key, sanitized)
                     self._current_target = sanitized
                 else:
                     self.append_log("Install aborted: codename sanitization declined.")
@@ -1465,10 +1472,10 @@ class MainWindow(QMainWindow):
                 "\n".join(f"• {w}" for w in game_warnings),
             )
 
-        from jd2021_installer.ui.widgets.mode_selector import MODE_FETCH
+        from jd2021_installer.ui.widgets.mode_selector import MODE_FETCH, MODE_JDNEXT
         source_state = self._mode_selector.get_current_state()
         mode_index = int(source_state.get("mode_index", -1))
-        include_fetch_checks = mode_index == MODE_FETCH
+        include_fetch_checks = mode_index in (MODE_FETCH, MODE_JDNEXT)
         if not self._ensure_runtime_dependencies(include_fetch_checks=include_fetch_checks):
             return
 
@@ -1482,9 +1489,11 @@ class MainWindow(QMainWindow):
             return
 
         # Multi-codename Fetch should use the same multi-map review/apply flow as Batch/IPK bundle.
-        from jd2021_installer.ui.widgets.mode_selector import MODE_FETCH
-        if mode_index == MODE_FETCH:
-            fetch_fields = source_fields.get("fetch", {}) if isinstance(source_fields, dict) else {}
+        from jd2021_installer.ui.widgets.mode_selector import MODE_FETCH, MODE_JDNEXT
+        if mode_index in (MODE_FETCH, MODE_JDNEXT):
+            fetch_mode_key = "jdnext" if mode_index == MODE_JDNEXT else "fetch"
+            fetch_source = "jdnext" if mode_index == MODE_JDNEXT else "jdu"
+            fetch_fields = source_fields.get(fetch_mode_key, {}) if isinstance(source_fields, dict) else {}
             raw_fetch = str(fetch_fields.get("codenames", "")).strip()
             fetch_codenames = [c.strip() for c in raw_fetch.split(",") if c.strip()]
             if len(fetch_codenames) > 1:
@@ -1493,6 +1502,7 @@ class MainWindow(QMainWindow):
                     selected_maps=set(fetch_codenames),
                     map_names=fetch_codenames,
                     fetch_codenames=fetch_codenames,
+                    fetch_source=fetch_source,
                 )
                 return
 
@@ -2403,6 +2413,7 @@ class MainWindow(QMainWindow):
         """
         from jd2021_installer.ui.widgets.mode_selector import (
             MODE_FETCH,
+            MODE_JDNEXT,
             MODE_HTML,
             MODE_IPK,
             MODE_BATCH,
@@ -2430,11 +2441,17 @@ class MainWindow(QMainWindow):
             )
             return ArchiveIPKExtractor(ipk_path, desired_codename=desired_codename)
 
-        if idx == MODE_FETCH:
+        if idx in (MODE_FETCH, MODE_JDNEXT):
             from jd2021_installer.extractors.web_playwright import WebPlaywrightExtractor
+            fetch_mode_key = "jdnext" if idx == MODE_JDNEXT else "fetch"
+            fetch_source = "jdnext" if idx == MODE_JDNEXT else "jdu"
+            fetch_fields = source_fields.get(fetch_mode_key, {}) if isinstance(source_fields, dict) else {}
+            raw_codenames = str(fetch_fields.get("codenames", "")).strip()
+            codenames = [c.strip() for c in raw_codenames.split(",") if c.strip()]
 
             return WebPlaywrightExtractor(
-                codenames=[c.strip() for c in (self._current_target or "").split(",") if c.strip()],
+                codenames=codenames,
+                source_game=fetch_source,
                 config=self._config,
                 quality=self._config.video_quality,
             )
@@ -2512,6 +2529,7 @@ class MainWindow(QMainWindow):
         selected_maps: set[str] | None = None,
         map_names: list[str] | None = None,
         fetch_codenames: list[str] | None = None,
+        fetch_source: str = "jdu",
     ) -> None:
         """Launches the dedicated Batch mode worker."""
         if not self._current_target:
@@ -2539,6 +2557,7 @@ class MainWindow(QMainWindow):
             config=self._config,
             selected_maps=selected_maps,
             fetch_codenames=fetch_codenames,
+            fetch_source=fetch_source,
             force_unlock_locked_status=force_unlock_locked_status,
         )
         thread = QThread()
