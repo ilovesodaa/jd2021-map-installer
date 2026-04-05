@@ -322,7 +322,23 @@ def test_classify_urls_prefers_ultra_then_ultra_hd():
     selected = classified.get("video")
 
     assert isinstance(selected, str)
-    assert "video_ULTRA.vp9.webm" in selected
+    assert "video_ULTRA.hd.webm" in selected
+
+
+def test_classify_urls_ignores_jdnext_vp9_variants():
+    urls = [
+        "https://example.com/private/map/x/video_HIGH.vp9.webm/hash.webm",
+        "https://example.com/private/map/x/video_HIGH.hd.webm/hash.webm",
+        "https://example.com/private/map/x/video_MID.vp9.webm/hash.webm",
+        "https://example.com/private/map/x/video_MID.hd.webm/hash.webm",
+    ]
+
+    classified = web_playwright._classify_urls(urls, "HIGH")
+    selected = classified.get("video")
+
+    assert isinstance(selected, str)
+    assert "vp9" not in selected.lower()
+    assert "video_HIGH.hd.webm" in selected
 
 
 @pytest.mark.skipif(not _RUN_QT_WIDGET_TESTS, reason="Set JD2021_RUN_QT_WIDGET_TESTS=1 to run Qt widget behavior tests.")

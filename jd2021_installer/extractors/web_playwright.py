@@ -409,7 +409,8 @@ def _classify_urls(
     urls: List[str], quality: str
 ) -> Dict[str, object]:
     """Classify URLs into video, audio, mainscene, and other assets."""
-    jdnext_video_re = re.compile(r"/video_(ultra|high|mid|low)\.(hd|vp9|vp8)\.webm/", re.IGNORECASE)
+    jdnext_video_re = re.compile(r"/video_(ultra|high|mid|low)\.(hd|vp8)\.webm/", re.IGNORECASE)
+    jdnext_vp9_re = re.compile(r"/video_(ultra|high|mid|low)\.vp9\.webm/", re.IGNORECASE)
 
     video_urls_by_quality: Dict[str, str] = {}
     audio_url: Optional[str] = None
@@ -420,13 +421,19 @@ def _classify_urls(
         u_low = u.lower()
         if any(token in u_low for token in ("audiopreview", "videopreview", "mappreview")):
             continue
+
+        # Temporary compatibility policy for older JD2021 runtime builds:
+        # ignore JDNext VP9 variants and use HD/VP8 variants only.
+        if jdnext_vp9_re.search(u):
+            continue
+
         jdnext_q: Optional[str] = None
         m = jdnext_video_re.search(u)
         if m:
             tier = m.group(1).upper()
             variant = m.group(2).lower()
-            # Keep one shared quality dropdown: JDNext VP9/VP8 map to non-HD tiers.
-            jdnext_q = f"{tier}_HD" if variant == "hd" else tier
+            # JDNext compatibility mode: HD and VP8 map to the HD slot.
+            jdnext_q = f"{tier}_HD" if variant in ("hd", "vp8") else tier
         for q, pattern in QUALITY_PATTERNS.items():
             if pattern in u:
                 video_urls_by_quality[q] = u

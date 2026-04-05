@@ -42,6 +42,28 @@ logger = logging.getLogger("jd2021.parsers.normalizer")
 JDU_AUDIO_CALIBRATION_MS = 85.0
 
 
+def _is_jdnext_source(source_dir: Path, media: MapMedia) -> bool:
+    """Best-effort detection for JDNext-origin maps in normalized sources."""
+    assets_html = source_dir / "assets.html"
+    if assets_html.exists():
+        try:
+            content = assets_html.read_text(encoding="utf-8", errors="ignore").lower()
+            if "/jdnext/maps/" in content or "server:jdnext" in content:
+                return True
+        except OSError:
+            pass
+
+    video_path = media.video_path
+    if video_path and re.match(r"^video_(ultra|high|mid|low)\.(hd|vp8|vp9)\.webm$", video_path.name.lower()):
+        return True
+
+    audio_path = media.audio_path
+    if audio_path and audio_path.name.lower() == "audio.opus":
+        return True
+
+    return False
+
+
 # ---------------------------------------------------------------------------
 # CKD file loading (JSON-first, binary fallback)
 # ---------------------------------------------------------------------------
@@ -990,6 +1012,7 @@ def normalize_sync(
     music_track: Optional[MusicTrackStructure], 
     is_html_source: bool = False,
     existing_trk_path: Optional[Path] = None,
+    is_jdnext_source: bool = False,
 ) -> MapSync:
     """Determine the optimal audio/video sync offsets.
     
@@ -1037,7 +1060,14 @@ def normalize_sync(
             )
 
             metadata_ms = music_track.video_start_time * 1000.0
-            if prms_audio is not None:
+            if is_jdnext_source:
+                # JDNext should still use marker/metadata-based audio alignment,
+                # but without the JDU-specific +85ms calibration.
+                if prms_audio is not None:
+                    audio_ms = -prms_audio
+                else:
+                    audio_ms = metadata_ms
+            elif prms_audio is not None:
                 audio_ms = -prms_audio + JDU_AUDIO_CALIBRATION_MS
             else:
                 audio_ms = metadata_ms + JDU_AUDIO_CALIBRATION_MS
@@ -1046,21 +1076,38 @@ def normalize_sync(
             # Only synthesize from markers when metadata is effectively zero.
             if abs(metadata_ms) > 0.0001:
                 video_ms = metadata_ms
-                logger.info(
-                    "Fetch/HTML sync (metadata-preserved): audio_offset=%.3f ms (marker+cal), video_offset=%.3f ms (metadata)",
-                    audio_ms,
-                    video_ms,
-                )
+                if is_jdnext_source:
+                    logger.info(
+                        "JDNext sync (metadata-preserved): audio_offset=%.3f ms, video_offset=%.3f ms (metadata)",
+                        audio_ms,
+                        video_ms,
+                    )
+                else:
+                    logger.info(
+                        "Fetch/HTML sync (metadata-preserved): audio_offset=%.3f ms (marker+cal), video_offset=%.3f ms (metadata)",
+                        audio_ms,
+                        video_ms,
+                    )
             elif prms_video is not None:
                 video_ms = -prms_video
-                logger.info(
-                    "Fetch/HTML sync (synthesized video): audio_offset=%.3f ms (marker+cal), video_offset=%.3f ms (marker)",
-                    audio_ms,
-                    video_ms,
-                )
+                if is_jdnext_source:
+                    logger.info(
+                        "JDNext sync (synthesized video): audio_offset=%.3f ms, video_offset=%.3f ms (marker)",
+                        audio_ms,
+                        video_ms,
+                    )
+                else:
+                    logger.info(
+                        "Fetch/HTML sync (synthesized video): audio_offset=%.3f ms (marker+cal), video_offset=%.3f ms (marker)",
+                        audio_ms,
+                        video_ms,
+                    )
             else:
                 video_ms = metadata_ms
-                logger.info("Fetch/HTML sync (fallback): using metadata offsets = %.3f ms", video_ms)
+                if is_jdnext_source:
+                    logger.info("JDNext sync (fallback): using metadata offsets = %.3f ms", video_ms)
+                else:
+                    logger.info("Fetch/HTML sync (fallback): using metadata offsets = %.3f ms", video_ms)
 
         else:
             # Binary Mode (IPK / WAV)
@@ -1169,10 +1216,13 @@ def normalize(
     _merge_preview_fields_from_trk(music_track, source_trk_path)
 
     # 5. Calculate effective video start time (with V1-style fallbacks)
+    is_jdnext_source = _is_jdnext_source(source_dir, media)
+
     sync_data = normalize_sync(
         music_track, 
         is_html_source=is_html_source,
-        existing_trk_path=source_trk_path
+        existing_trk_path=source_trk_path,
+        is_jdnext_source=is_jdnext_source,
     )
 
     # V1 Parity: Detect whether the source contains real autodance data.

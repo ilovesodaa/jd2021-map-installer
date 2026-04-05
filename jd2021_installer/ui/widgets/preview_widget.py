@@ -95,6 +95,7 @@ class _FrameReaderWorker(QObject):
         height: int,
         ffplay_cmd: Optional[list[str]] = None,
         start_position: float = 0.0,
+        fps: float = PREVIEW_FPS,
     ) -> None:
         super().__init__()
         self._ffmpeg_cmd = ffmpeg_cmd
@@ -102,6 +103,7 @@ class _FrameReaderWorker(QObject):
         self._width = width
         self._height = height
         self._start_position = start_position
+        self._fps = max(1.0, float(fps))
         self._stop_flag = threading.Event()
         self._ffmpeg: Optional[subprocess.Popen] = None
         self._ffplay: Optional[subprocess.Popen] = None
@@ -155,7 +157,7 @@ class _FrameReaderWorker(QObject):
                     data += chunk
 
                 frames_read += 1
-                position += 1.0 / PREVIEW_FPS
+                position += 1.0 / self._fps
 
                 if self._stop_flag.is_set():
                     return
@@ -175,9 +177,9 @@ class _FrameReaderWorker(QObject):
                 if frames_read % 12 == 0:
                     self.position_updated.emit(position)
 
-                # Simple wall-clock throttle to ~24 FPS
+                # Simple wall-clock throttle to the active preview FPS
                 if wall_start > 0:
-                    expected = frames_read / float(PREVIEW_FPS)
+                    expected = frames_read / float(self._fps)
                     now = time.time()
                     remaining = (wall_start + expected) - now
                     if remaining > 0:
@@ -253,6 +255,8 @@ class PreviewWidget(QWidget):
         self._ffplay_path: str = "ffplay"
         self._ffmpeg_hwaccel: str = "auto"
         self._preview_video_mode: str = "proxy_low"
+        self._preview_fps_default: float = float(PREVIEW_FPS)
+        self._playback_fps: float = float(PREVIEW_FPS)
         self._preview_proxy_cache: dict[str, str] = {}
 
         self._build_ui()
@@ -358,6 +362,7 @@ class PreviewWidget(QWidget):
         ffplay_path: str,
         ffmpeg_hwaccel: str = "auto",
         preview_video_mode: str = "proxy_low",
+        preview_fps: int = PREVIEW_FPS,
     ) -> None:
         """Update ffmpeg tool paths used by preview subprocesses."""
         self._ffmpeg_path = ffmpeg_path or "ffmpeg"
@@ -365,6 +370,11 @@ class PreviewWidget(QWidget):
         self._ffplay_path = ffplay_path or "ffplay"
         self._ffmpeg_hwaccel = ffmpeg_hwaccel or "auto"
         self._preview_video_mode = preview_video_mode or "proxy_low"
+        try:
+            fps = float(preview_fps)
+        except (TypeError, ValueError):
+            fps = float(PREVIEW_FPS)
+        self._preview_fps_default = fps if fps > 0 else float(PREVIEW_FPS)
 
     def launch(
         self,
@@ -375,6 +385,7 @@ class PreviewWidget(QWidget):
         start_time: float = 0.0,
         loop_start: float = 0.0,
         loop_end: float = 0.0,
+        preview_fps: Optional[float] = None,
     ) -> None:
         """Start (or restart) embedded preview playback.
 
@@ -390,6 +401,15 @@ class PreviewWidget(QWidget):
         if not video_path or not audio_path:
             return
 
+        if preview_fps is None:
+            effective_fps = self._preview_fps_default
+        else:
+            try:
+                fps_val = float(preview_fps)
+            except (TypeError, ValueError):
+                fps_val = self._preview_fps_default
+            effective_fps = fps_val if fps_val > 0 else self._preview_fps_default
+
         resolved_video_path = self._resolve_preview_video_path(video_path)
         resolved_audio_path = self._resolve_preview_audio_path(audio_path)
 
@@ -400,6 +420,7 @@ class PreviewWidget(QWidget):
         self._a_offset = a_offset
         self._loop_start = max(0.0, loop_start)
         self._loop_end = max(0.0, loop_end)
+        self._playback_fps = effective_fps
         self._stop_requested = False
 
         # Kill previous, but keep position if we are just restarting/seeking
@@ -445,6 +466,8 @@ class PreviewWidget(QWidget):
         if video_delay_s > 0:
             vf_chain = f"tpad=start_duration={video_delay_s:.6f}," + vf_chain
 
+        fps_arg = str(int(effective_fps)) if abs(effective_fps - round(effective_fps)) < 1e-6 else f"{effective_fps:.6f}"
+
         ffmpeg_cmd: list[str] = [self._ffmpeg_path, "-loglevel", "error"]
         if self._ffmpeg_hwaccel == "auto":
             ffmpeg_cmd += ["-hwaccel", "auto"]
@@ -454,7 +477,7 @@ class PreviewWidget(QWidget):
         ffmpeg_cmd += [
             "-i", resolved_video_path,
             "-vf", vf_chain,
-            "-r", str(PREVIEW_FPS),
+            "-r", fps_arg,
             "-pix_fmt", "rgb24",
             "-f", "rawvideo",
             "-",
@@ -482,6 +505,7 @@ class PreviewWidget(QWidget):
             ffmpeg_cmd, w, h,
             ffplay_cmd=ffplay_cmd,
             start_position=start_time,
+            fps=effective_fps,
         )
         thread = QThread()
         worker.moveToThread(thread)
@@ -666,6 +690,7 @@ class PreviewWidget(QWidget):
                 start_time=start_time,
                 loop_start=self._loop_start,
                 loop_end=self._loop_end,
+                preview_fps=self._playback_fps,
             )
 
     # ==================================================================

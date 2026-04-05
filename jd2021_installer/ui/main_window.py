@@ -557,6 +557,7 @@ class MainWindow(QMainWindow):
                 ffplay_path=resolved_ffplay or "ffplay",
                 ffmpeg_hwaccel=getattr(self._config, "ffmpeg_hwaccel", "auto"),
                 preview_video_mode=getattr(self._config, "preview_video_mode", "proxy_low"),
+                preview_fps=getattr(self._config, "preview_fps", 24),
             )
 
         if persist and updated:
@@ -709,6 +710,7 @@ class MainWindow(QMainWindow):
             ffplay_path="ffplay",
             ffmpeg_hwaccel=getattr(self._config, "ffmpeg_hwaccel", "auto"),
             preview_video_mode=getattr(self._config, "preview_video_mode", "proxy_low"),
+            preview_fps=getattr(self._config, "preview_fps", 24),
         )
         self._preview_widget.setObjectName("mainWindowPreviewWidget")
         self._preview_widget.setMinimumHeight(300)
@@ -1378,6 +1380,78 @@ class MainWindow(QMainWindow):
             return True
 
         return False
+
+    def _is_jdnext_source_map(self, map_data: Optional[NormalizedMapData]) -> bool:
+        """Best-effort detection for maps originating from JDNext sources."""
+        if map_data is None:
+            return False
+
+        mode_low = (self._current_mode or "").lower()
+        if "jdnext" in mode_low:
+            return True
+
+        source_dir = getattr(map_data, "source_dir", None)
+        if source_dir:
+            src = Path(str(source_dir))
+            src_low = str(src).lower().replace("\\", "/")
+            if "/mapdownloads/" in src_low:
+                assets_html = src / "assets.html"
+                if assets_html.exists():
+                    try:
+                        content = assets_html.read_text(encoding="utf-8", errors="ignore").lower()
+                        if "/jdnext/maps/" in content or "server:jdnext" in content:
+                            return True
+                    except OSError:
+                        pass
+
+        video_path = map_data.media.video_path
+        if video_path:
+            name = video_path.name.lower()
+            if re.match(r"^video_(ultra|high|mid|low)\.(hd|vp8|vp9)\.webm$", name):
+                return True
+
+        return False
+
+    def _get_preview_fps_for_map(self, map_data: Optional[NormalizedMapData]) -> float:
+        """Return preview FPS, auto-switching JDNext maps to 25 FPS."""
+        default_fps = float(getattr(self._config, "preview_fps", 24) or 24)
+        if self._is_jdnext_source_map(map_data):
+            return 25.0
+        return default_fps if default_fps > 0 else 24.0
+
+    def _estimate_ms_per_beat(self, map_data: Optional[NormalizedMapData]) -> Optional[float]:
+        """Estimate beat length from music track markers (milliseconds per beat)."""
+        if map_data is None or not map_data.music_track or not map_data.music_track.markers:
+            return None
+
+        markers = map_data.music_track.markers
+        if len(markers) < 2:
+            return None
+
+        # Marker units are 1/48 ms; derive beat duration from neighboring diffs.
+        diffs_ms: list[float] = []
+        max_samples = min(len(markers) - 1, 16)
+        for idx in range(max_samples):
+            delta = markers[idx + 1] - markers[idx]
+            if delta > 0:
+                diffs_ms.append(delta / 48.0)
+
+        if not diffs_ms:
+            return None
+        return sum(diffs_ms) / float(len(diffs_ms))
+
+    def _get_preview_only_audio_nudge_s(self, map_data: Optional[NormalizedMapData]) -> float:
+        """Return preview-only audio nudge (seconds), never applied to install output."""
+        nudge_ms = float(getattr(self._config, "preview_only_audio_offset_ms", 0.0) or 0.0)
+
+        if self._is_jdnext_source_map(map_data):
+            beat_nudge = float(getattr(self._config, "jdnext_preview_beat_nudge", 0.0) or 0.0)
+            if abs(beat_nudge) > 1e-9:
+                beat_ms = self._estimate_ms_per_beat(map_data)
+                if beat_ms is not None:
+                    nudge_ms += beat_nudge * beat_ms
+
+        return nudge_ms / 1000.0
 
     def _activate_readjust_maps(self, maps: list[NormalizedMapData]) -> None:
         self._nav_maps = maps
@@ -2075,9 +2149,18 @@ class MainWindow(QMainWindow):
 
                 v_override = self._sync_refinement.get_video_offset() / 1000.0
                 a_offset = self._sync_refinement.get_audio_offset() / 1000.0
+                preview_nudge_s = self._get_preview_only_audio_nudge_s(self._current_map)
+                a_offset += preview_nudge_s
                 loop_start, loop_end = self._get_preview_loop_seconds(self._current_map)
+                preview_fps = self._get_preview_fps_for_map(self._current_map)
                 
-                logger.debug("Preview launch: v_override=%.3f, a_offset=%.3f", v_override, a_offset)
+                logger.debug(
+                    "Preview launch: v_override=%.3f, a_offset=%.3f, preview_nudge=%.3f, fps=%.3f",
+                    v_override,
+                    a_offset,
+                    preview_nudge_s,
+                    preview_fps,
+                )
 
                 self._preview_widget.launch(
                     video, audio,
@@ -2085,6 +2168,7 @@ class MainWindow(QMainWindow):
                     a_offset=a_offset,
                     loop_start=loop_start,
                     loop_end=loop_end,
+                    preview_fps=preview_fps,
                 )
             else:
                 self.append_log("No video available for preview.")
@@ -2129,7 +2213,10 @@ class MainWindow(QMainWindow):
         if self._current_map and self._current_map.media.video_path and self._current_map.media.video_path.exists():
             v_override = self._sync_refinement.get_video_offset() / 1000.0
             a_offset = self._sync_refinement.get_audio_offset() / 1000.0
+            preview_nudge_s = self._get_preview_only_audio_nudge_s(self._current_map)
+            a_offset += preview_nudge_s
             loop_start, loop_end = self._get_preview_loop_seconds(self._current_map)
+            preview_fps = self._get_preview_fps_for_map(self._current_map)
             
             logger.debug("Debounced preview restart...")
             self._preview_widget.launch(
@@ -2140,6 +2227,7 @@ class MainWindow(QMainWindow):
                 start_time=self._preview_widget.get_current_position(),
                 loop_start=loop_start,
                 loop_end=loop_end,
+                preview_fps=preview_fps,
             )
 
     def _on_pad_audio(self) -> None:
