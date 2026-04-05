@@ -983,12 +983,15 @@ def decode_xma2_audio(
 def copy_moves(
     moves_src_dir: str | Path,
     target_dir: str | Path,
+    *,
+    skip_gestures: bool = False,
 ) -> int:
     """Extract and merge move files with Kinect-safe gesture filtering.
 
     Args:
         moves_src_dir: The extracted root 'moves' folder containing 'nx', 'durango', etc.
         target_dir: The map's root installation target directory.
+        skip_gestures: When True, do not import any .gesture files.
 
     Returns:
         The number of valid move files copied.
@@ -1036,6 +1039,9 @@ def copy_moves(
 
     KINECT_GESTURE_PLATFORMS = {"DURANGO", "X360"}
 
+    if skip_gestures:
+        logger.info("Gesture import disabled for this source; only .msm files will be copied.")
+
     # Pass 1: Copy Kinect-compatible gestures and universally compatible MSMs
     for plat_dir in src_root.iterdir():
         if not plat_dir.is_dir() or plat_dir.name.upper() == "PC":
@@ -1043,7 +1049,16 @@ def copy_moves(
 
         plat_name = plat_dir.name.upper()
 
-        if plat_name in KINECT_GESTURE_PLATFORMS:
+        if skip_gestures:
+            skipped = list(plat_dir.glob("*.gesture"))
+            if skipped:
+                skipped_gesture_names.update(g.name for g in skipped)
+                logger.info(
+                    "Skipping %d gesture file(s) from platform '%s' (source flagged incompatible)",
+                    len(skipped),
+                    plat_name,
+                )
+        elif plat_name in KINECT_GESTURE_PLATFORMS:
             for gesture_file in plat_dir.glob("*.gesture"):
                 is_valid, reason = _is_probably_valid_kinect_gesture(gesture_file)
                 if not is_valid:
@@ -1079,6 +1094,12 @@ def copy_moves(
                 total_copied += 1
 
     # Pass 2: Substitute non-Kinect naming variants with already accepted gestures
+    # (disabled when gesture import is explicitly skipped)
+    if skip_gestures:
+        if total_copied:
+            logger.info("Merged %d move file(s) from %s into PC/ (gestures intentionally skipped)", total_copied, src_root)
+        return total_copied
+
     pc_gestures = {f.name for f in pc_moves_dir.glob("*.gesture")}
 
     for plat_dir in src_root.iterdir():

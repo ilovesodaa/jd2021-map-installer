@@ -1223,6 +1223,30 @@ def install_map_to_game(
 ) -> None:
     """Core installation logic: files → game directory."""
     codename = map_data.codename
+
+    def _is_jdnext_source_map() -> bool:
+        mode_low = (source_mode or "").lower()
+        if "jdnext" in mode_low:
+            return True
+
+        source_dir = map_data.source_dir
+        if source_dir and source_dir.exists():
+            assets_html = source_dir / "assets.html"
+            if assets_html.exists():
+                try:
+                    content = assets_html.read_text(encoding="utf-8", errors="ignore").lower()
+                    if "/jdnext/maps/" in content or "server:jdnext" in content:
+                        return True
+                except OSError:
+                    pass
+
+        video_path = map_data.media.video_path
+        if video_path:
+            name = video_path.name.lower()
+            if re.match(r"^video_(ultra|high|mid|low)\.(hd|vp8|vp9)\.webm$", name):
+                return True
+
+        return False
     
     # 0. Pre-install cleanup
     pre_install_cleanup(game_dir, codename, status_callback)
@@ -1434,7 +1458,7 @@ def install_map_to_game(
         if status_callback: status_callback("Integrate Move data")
         if progress_callback: progress_callback(85)
         from jd2021_installer.installers.media_processor import copy_moves
-        copy_moves(media.moves_dir, map_target)
+        copy_moves(media.moves_dir, map_target, skip_gestures=_is_jdnext_source_map())
 
     # 5b. Autodance + stape payloads (V1 step_11 parity)
     if map_data.has_autodance and map_data.source_dir and map_data.source_dir.exists():
