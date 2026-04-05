@@ -154,14 +154,64 @@ def get_video_duration(video_path: str | Path, config: Optional[AppConfig] = Non
 def copy_video(
     src_path: str | Path,
     dst_path: str | Path,
+    config: Optional[AppConfig] = None,
+    force_reencode: bool = False,
 ) -> Path:
-    """Copy a video file to the destination, creating dirs as needed."""
+    """Copy a video file to the destination, creating dirs as needed.
+
+    For WebM inputs, normalize unsupported variants to VP9 + yuv420p so
+    in-game playback remains compatible across source packs.
+    """
     src = Path(src_path)
     dst = Path(dst_path)
     dst.parent.mkdir(parents=True, exist_ok=True)
 
     if not src.exists():
         raise MediaProcessingError(f"Source video not found: {src}")
+
+    # Best-effort codec compatibility normalization.
+    if src.suffix.lower() == ".webm":
+        needs_transcode = force_reencode
+        try:
+            probe = run_ffprobe(
+                [
+                    "-v", "error",
+                    "-select_streams", "v:0",
+                    "-show_entries", "stream=codec_name,pix_fmt",
+                    "-of", "default=nw=1:nk=1",
+                    str(src),
+                ],
+                config=config,
+            )
+            lines = [ln.strip().lower() for ln in (probe.stdout or "").splitlines() if ln.strip()]
+            codec = lines[0] if lines else ""
+            pix_fmt = lines[1] if len(lines) > 1 else ""
+            if not force_reencode:
+                needs_transcode = codec != "vp9" or pix_fmt != "yuv420p"
+        except Exception:
+            # If probing fails, normalize defensively.
+            needs_transcode = True
+
+        if needs_transcode:
+            logger.info("Normalizing video codec for compatibility: %s", src.name)
+            run_ffmpeg(
+                [
+                    "-y",
+                    "-i", str(src),
+                    "-an",
+                    "-c:v", "libvpx-vp9",
+                    "-pix_fmt", "yuv420p",
+                    "-row-mt", "1",
+                    "-cpu-used", "4",
+                    "-deadline", "good",
+                    "-b:v", "0",
+                    "-crf", "33",
+                    str(dst),
+                ],
+                config=config,
+            )
+            logger.info("Converted video: %s -> %s", src.name, dst)
+            return dst
 
     shutil.copy2(src, dst)
     logger.info("Copied video: %s -> %s", src.name, dst)
@@ -1048,6 +1098,52 @@ def process_menu_art(target_dir: str | Path, codename: str) -> int:
             found_tgas[expected.lower()] = actual_path
         else:
             logger.debug("Missing MenuArt: %s", expected)
+
+    # If canonical TGA files are missing but PNG/JPG variants exist, convert them.
+    if Image is not None:
+        for expected in expected_tgas:
+            key = expected.lower()
+            if key in found_tgas:
+                continue
+
+            stem = Path(expected).stem
+            source_candidate = None
+            for ext in (".png", ".jpg", ".jpeg", ".tga"):
+                cand = actual_lower_map.get(f"{stem}{ext}".lower())
+                if cand and cand.is_file():
+                    source_candidate = cand
+                    break
+
+            if source_candidate is None:
+                continue
+
+            out_path = tex_dir / expected
+            try:
+                with Image.open(source_candidate) as img:
+                    if img.mode != "RGBA":
+                        img = img.convert("RGBA")
+                    img.save(out_path, format="TGA")
+                found_tgas[key] = out_path
+                actual_lower_map[out_path.name.lower()] = out_path
+                logger.info("Canonicalized MenuArt to TGA: %s -> %s", source_candidate.name, out_path.name)
+            except Exception as e:
+                logger.warning("Failed to canonicalize MenuArt %s: %s", source_candidate.name, e)
+
+        # Coaches are also actor-referenced as TGA; synthesize from PNG when needed.
+        for png_coach in sorted(tex_dir.glob(f"{codename}_coach_*.png")):
+            if "_phone" in png_coach.stem.lower():
+                continue
+            tga_coach = tex_dir / f"{png_coach.stem}.tga"
+            if tga_coach.exists():
+                continue
+            try:
+                with Image.open(png_coach) as img:
+                    if img.mode != "RGBA":
+                        img = img.convert("RGBA")
+                    img.save(tga_coach, format="TGA")
+                logger.info("Canonicalized coach texture to TGA: %s", tga_coach.name)
+            except Exception as e:
+                logger.warning("Failed to canonicalize coach texture %s: %s", png_coach.name, e)
 
     # V1 Parity Synthesis Logic
     online_key = f"{codename}_cover_online.tga".lower()

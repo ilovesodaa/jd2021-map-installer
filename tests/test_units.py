@@ -6,6 +6,7 @@ from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QApplication
 from jd2021_installer.core.models import NormalizedMapData, SongDescription, MusicTrackStructure, MapMedia
 from jd2021_installer.core.config import AppConfig
+from jd2021_installer.installers import media_processor
 from jd2021_installer.ui.widgets.preview_widget import PreviewWidget
 from jd2021_installer.ui.widgets.bundle_dialog import BundleSelectDialog
 from jd2021_installer.ui.workers.pipeline_workers import BatchInstallWorker
@@ -120,6 +121,114 @@ def test_preview_probe_duration_audio_fallback_from_ckd(monkeypatch):
 
     assert duration == pytest.approx(122.0, abs=1e-3)
     assert any(path.lower().endswith("audio.wav") for path in attempted)
+
+
+def test_preview_probe_duration_handles_positive_video_offset(monkeypatch):
+    def fake_check_output(cmd, text=True, creationflags=0):
+        target = str(cmd[-1]).lower()
+        if target.endswith("video.webm"):
+            return "100.0\n"
+        if target.endswith("audio.ogg"):
+            return "100.0\n"
+        raise AssertionError(f"Unexpected ffprobe target: {cmd[-1]}")
+
+    monkeypatch.setattr(subprocess, "check_output", fake_check_output)
+
+    duration = PreviewWidget._probe_duration(
+        video_path="C:/tmp/video.webm",
+        audio_path="C:/tmp/audio.ogg",
+        v_override=2.0,
+        a_offset=0.0,
+    )
+
+    assert duration == pytest.approx(102.0, abs=1e-3)
+
+
+def test_copy_video_transcodes_non_vp9(monkeypatch, tmp_path: Path):
+    src = tmp_path / "src.webm"
+    dst = tmp_path / "dst.webm"
+    src.write_bytes(b"data")
+
+    class _Probe:
+        stdout = "vp8\nyuv420p\n"
+
+    called: dict[str, bool] = {"ffmpeg": False}
+
+    def _fake_run_ffprobe(args, config=None, timeout=30):
+        return _Probe()
+
+    def _fake_run_ffmpeg(args, config=None, timeout=300):
+        called["ffmpeg"] = True
+        dst.write_bytes(b"converted")
+        class _Ok:
+            returncode = 0
+        return _Ok()
+
+    monkeypatch.setattr(media_processor, "run_ffprobe", _fake_run_ffprobe)
+    monkeypatch.setattr(media_processor, "run_ffmpeg", _fake_run_ffmpeg)
+
+    out = media_processor.copy_video(src, dst)
+
+    assert out == dst
+    assert called["ffmpeg"] is True
+    assert dst.exists()
+
+
+def test_copy_video_keeps_vp9_yuv420p(monkeypatch, tmp_path: Path):
+    src = tmp_path / "src.webm"
+    dst = tmp_path / "dst.webm"
+    src.write_bytes(b"data")
+
+    class _Probe:
+        stdout = "vp9\nyuv420p\n"
+
+    copied: dict[str, bool] = {"copy": False}
+
+    def _fake_run_ffprobe(args, config=None, timeout=30):
+        return _Probe()
+
+    def _fake_copy2(src_path, dst_path):
+        copied["copy"] = True
+        Path(dst_path).write_bytes(Path(src_path).read_bytes())
+
+    monkeypatch.setattr(media_processor, "run_ffprobe", _fake_run_ffprobe)
+    monkeypatch.setattr(media_processor.shutil, "copy2", _fake_copy2)
+
+    out = media_processor.copy_video(src, dst)
+
+    assert out == dst
+    assert copied["copy"] is True
+    assert dst.exists()
+
+
+def test_copy_video_force_reencode_even_if_vp9(monkeypatch, tmp_path: Path):
+    src = tmp_path / "src.webm"
+    dst = tmp_path / "dst.webm"
+    src.write_bytes(b"data")
+
+    class _Probe:
+        stdout = "vp9\nyuv420p\n"
+
+    called: dict[str, bool] = {"ffmpeg": False}
+
+    def _fake_run_ffprobe(args, config=None, timeout=30):
+        return _Probe()
+
+    def _fake_run_ffmpeg(args, config=None, timeout=300):
+        called["ffmpeg"] = True
+        dst.write_bytes(b"reencoded")
+        class _Ok:
+            returncode = 0
+        return _Ok()
+
+    monkeypatch.setattr(media_processor, "run_ffprobe", _fake_run_ffprobe)
+    monkeypatch.setattr(media_processor, "run_ffmpeg", _fake_run_ffmpeg)
+
+    out = media_processor.copy_video(src, dst, force_reencode=True)
+
+    assert out == dst
+    assert called["ffmpeg"] is True
+    assert dst.exists()
 
 
 @pytest.mark.skipif(not _RUN_QT_WIDGET_TESTS, reason="Set JD2021_RUN_QT_WIDGET_TESTS=1 to run Qt widget behavior tests.")

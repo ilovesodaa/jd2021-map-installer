@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import platform
 import re
 import requests
 import shutil
@@ -36,6 +37,10 @@ from jd2021_installer.core.config import (
 from jd2021_installer.core.exceptions import DownloadError, WebExtractionError
 from jd2021_installer.extractors.archive_ipk import extract_ipk
 from jd2021_installer.extractors.base import BaseExtractor
+from jd2021_installer.extractors.jdnext_bundle_strategy import (
+    _run_assetstudio_export,
+    run_jdnext_bundle_strategy,
+)
 
 logger = logging.getLogger("jd2021.extractors.web_playwright")
 
@@ -116,6 +121,16 @@ def extract_codename_from_urls(urls: List[str]) -> Optional[str]:
     return None
 
 
+def _extract_embed_title_from_html(html_content: str) -> Optional[str]:
+    match = re.search(r"<div class=\"embedTitle[^\"]*\">\s*<span>([^<]+)</span>", html_content, re.IGNORECASE)
+    if not match:
+        return None
+    raw = match.group(1).strip()
+    # Keep filesystem-safe codename characters only.
+    safe = re.sub(r"[^a-zA-Z0-9_-]+", "", raw)
+    return safe or None
+
+
 def _parse_retry_after_seconds(header_value: Optional[str], fallback: int) -> int:
     """Parse Retry-After header as seconds, returning a safe fallback on failure."""
     if not header_value:
@@ -191,6 +206,201 @@ def _is_valid_webm_file(path: Path, config: AppConfig) -> bool:
         return False
 
 
+def _download_with_powershell(url: str, target: Path, timeout_s: int) -> bool:
+    """Fallback downloader for Windows environments where Python DNS fails.
+
+    Uses Invoke-WebRequest in a separate PowerShell process.
+    """
+    if platform.system().lower() != "windows":
+        return False
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    script = (
+        "$ProgressPreference='SilentlyContinue'; "
+        f"Invoke-WebRequest -Uri '{url}' -OutFile '{str(target)}' -TimeoutSec {int(timeout_s)}"
+    )
+    try:
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return completed.returncode == 0 and target.exists() and target.stat().st_size > 1024
+    except (OSError, ValueError):
+        return False
+
+
+def _resolve_host_via_public_dns(host: str) -> Optional[str]:
+    """Resolve host using public DNS via PowerShell to avoid local ISP DNS issues."""
+    if platform.system().lower() != "windows":
+        return None
+    cmd = (
+        "try { "
+        f"$r = Resolve-DnsName '{host}' -Type A -Server 1.1.1.1 -ErrorAction Stop | "
+        "Where-Object { $_.Type -eq 'A' } | Select-Object -First 1 -ExpandProperty IPAddress; "
+        "if ($r) { Write-Output $r } "
+        "} catch { }"
+    )
+    try:
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", cmd],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        ip = (completed.stdout or "").strip()
+        return ip or None
+    except OSError:
+        return None
+
+
+def _download_with_curl_resolve(url: str, target: Path, timeout_s: int) -> bool:
+    """Use curl --resolve to bypass system DNS for a specific host."""
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if not host:
+        return False
+    ip = _resolve_host_via_public_dns(host)
+    if not ip:
+        return False
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        completed = subprocess.run(
+            [
+                "curl.exe",
+                "--location",
+                "--silent",
+                "--show-error",
+                "--connect-timeout",
+                str(max(5, int(timeout_s))),
+                "--max-time",
+                str(max(10, int(timeout_s) * 2)),
+                "--resolve",
+                f"{host}:443:{ip}",
+                "--output",
+                str(target),
+                url,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return completed.returncode == 0 and target.exists() and target.stat().st_size > 1024
+    except OSError:
+        return False
+
+
+def _download_single_file(url: str, target: Path, config: AppConfig) -> bool:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with requests.get(
+            url,
+            stream=True,
+            timeout=config.download_timeout_s,
+            headers={"User-Agent": config.user_agent, "Referer": "https://discord.com/"},
+        ) as r:
+            r.raise_for_status()
+            with open(target, "wb") as f:
+                for chunk in r.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+        return target.exists() and target.stat().st_size > 1024
+    except Exception:
+        return False
+
+
+def _try_jdnext_missing_fallbacks(
+    *,
+    all_urls: List[str],
+    classified: Dict[str, object],
+    downloaded: Dict[str, str],
+    download_dir: Path,
+    config: AppConfig,
+) -> None:
+    """Best-effort recovery for JDNext when private links fail in this environment.
+
+    - mapPackage: try cached local mapPackage bundle from temp/jdnext_downloads.
+    Preview audio/video are intentionally excluded.
+    """
+    expected_video = cast(Optional[str], classified.get("video"))
+    expected_audio = cast(Optional[str], classified.get("audio"))
+    expected_scene = cast(Optional[str], classified.get("mainscene"))
+
+    _ = expected_video
+    _ = expected_audio
+
+    if expected_scene:
+        expected_scene_name = get_filename_from_url(expected_scene)
+        if expected_scene_name not in downloaded:
+            local_cache = Path(__file__).resolve().parents[2] / "temp" / "jdnext_downloads"
+            candidates = []
+            if local_cache.exists():
+                candidates.extend(local_cache.glob("*mapPackage*.bundle"))
+                candidates.extend(local_cache.glob("*_mapPackage.bundle"))
+                candidates.extend(local_cache.glob("*.bundle"))
+            for cand in candidates:
+                try:
+                    if cand.is_file() and cand.stat().st_size > 1024:
+                        target = download_dir / expected_scene_name
+                        shutil.copy2(cand, target)
+                        downloaded[expected_scene_name] = str(target)
+                        logger.warning("JDNext fallback: reusing local bundle cache for %s", expected_scene_name)
+                        break
+                except OSError:
+                    continue
+
+
+def _extract_jdnext_aux_texture_bundles(
+    *,
+    download_dir: Path,
+    extract_dir: Path,
+    mainscene_name: str,
+    codename: str,
+) -> int:
+    """Decode JDNext non-mapPackage bundles and copy loose texture payloads.
+
+    These bundles usually contain Cover/Coach/Title/background images that are
+    not present in mapPackage payloads.
+    """
+    copied = 0
+    strategy_aux_root = extract_dir / "jdnext_strategy" / "aux_bundles"
+    menuart_root = extract_dir / "menuart"
+    menuart_root.mkdir(parents=True, exist_ok=True)
+
+    mainscene_name_low = mainscene_name.lower()
+    for bundle_path in sorted(download_dir.glob("*.bundle")):
+        if bundle_path.name.lower() == mainscene_name_low:
+            continue
+
+        export_dir = strategy_aux_root / bundle_path.stem
+        try:
+            _run_assetstudio_export(bundle_path, export_dir, "2021.3.9f1")
+        except Exception as exc:
+            logger.debug("JDNext aux bundle export failed (%s): %s", bundle_path.name, exc)
+            continue
+
+        for asset_dir_name in ("Texture2D", "Sprite"):
+            asset_dir = export_dir / asset_dir_name
+            if not asset_dir.exists():
+                continue
+
+            for src in asset_dir.glob("*.png"):
+                dst_name = src.name
+                if not dst_name.lower().startswith(codename.lower() + "_") and dst_name.lower().startswith(("cover", "coach", "banner", "map_", "title")):
+                    dst_name = f"{codename}_{dst_name}"
+                dst = menuart_root / dst_name
+                if dst.exists():
+                    continue
+                shutil.copy2(src, dst)
+                copied += 1
+
+    if copied:
+        logger.info("JDNext aux bundle texture import: copied %d texture(s)", copied)
+    return copied
+
+
 # ---------------------------------------------------------------------------
 # File downloader
 # ---------------------------------------------------------------------------
@@ -199,16 +409,30 @@ def _classify_urls(
     urls: List[str], quality: str
 ) -> Dict[str, object]:
     """Classify URLs into video, audio, mainscene, and other assets."""
+    jdnext_video_re = re.compile(r"/video_(ultra|high|mid|low)\.(hd|vp9|vp8)\.webm/", re.IGNORECASE)
+
     video_urls_by_quality: Dict[str, str] = {}
     audio_url: Optional[str] = None
     scene_zips: Dict[str, str] = {}
     other_urls: List[str] = []
 
     for u in urls:
+        u_low = u.lower()
+        if any(token in u_low for token in ("audiopreview", "videopreview", "mappreview")):
+            continue
+        jdnext_q: Optional[str] = None
+        m = jdnext_video_re.search(u)
+        if m:
+            tier = m.group(1).upper()
+            variant = m.group(2).lower()
+            # Keep one shared quality dropdown: JDNext VP9/VP8 map to non-HD tiers.
+            jdnext_q = f"{tier}_HD" if variant == "hd" else tier
         for q, pattern in QUALITY_PATTERNS.items():
             if pattern in u:
                 video_urls_by_quality[q] = u
                 break
+        if jdnext_q:
+            video_urls_by_quality[jdnext_q] = u
         if (
             (
                 ".ogg" in u
@@ -296,6 +520,7 @@ def download_files(
         if ".ogg" in u or ".wav" in u: return 1
         if ".opus" in u: return 1
         if any(pat in u for pat in QUALITY_PATTERNS.values()): return 2
+        if re.search(r"/video_(ultra|high|mid|low)\.(hd|vp9|vp8)\.webm/", u, re.IGNORECASE): return 2
         return 3
     
     unique_urls.sort(key=priority)
@@ -445,6 +670,28 @@ def download_files(
         if success:
             downloaded[fname] = str(target)
         else:
+            if "cdn-jdhelper.ramaprojects.ru" in url.lower():
+                logger.warning("Trying curl --resolve fallback download for %s", fname)
+                if _download_with_curl_resolve(url, target, config.download_timeout_s):
+                    if is_nohud_video and not _is_valid_webm_file(target, config):
+                        logger.warning("curl --resolve downloaded corrupt NOHUD video %s", fname)
+                        target.unlink(missing_ok=True)
+                    else:
+                        logger.info("curl --resolve fallback succeeded for %s", fname)
+                        downloaded[fname] = str(target)
+                        time.sleep(config.inter_request_delay_s)
+                        continue
+
+                logger.warning("Trying PowerShell fallback download for %s", fname)
+                if _download_with_powershell(url, target, config.download_timeout_s):
+                    if is_nohud_video and not _is_valid_webm_file(target, config):
+                        logger.warning("PowerShell fallback downloaded corrupt NOHUD video %s", fname)
+                        target.unlink(missing_ok=True)
+                    else:
+                        logger.info("PowerShell fallback succeeded for %s", fname)
+                        downloaded[fname] = str(target)
+                        time.sleep(config.inter_request_delay_s)
+                        continue
             logger.error("Failed to download %s after %d attempts", fname, config.max_retries)
 
         time.sleep(config.inter_request_delay_s)
@@ -831,7 +1078,17 @@ class WebPlaywrightExtractor(BaseExtractor):
                 + ". The bot likely returned an error, or the HTML links are stale/invalid."
             )
 
-        self._codename = extract_codename_from_urls(all_urls) or self._codename
+        inferred_codename = extract_codename_from_urls(all_urls)
+        if not inferred_codename and self._codenames:
+            inferred_codename = self._codenames[0]
+        if not inferred_codename and self._asset_html and Path(self._asset_html).exists():
+            try:
+                html_content = Path(self._asset_html).read_text(encoding="utf-8", errors="ignore")
+                inferred_codename = _extract_embed_title_from_html(html_content)
+            except OSError:
+                pass
+
+        self._codename = inferred_codename or self._codename
         codename = self._codename or "UnknownMap"
         
         # 1. Determine download directory (respect hand-picked HTML location if available)
@@ -878,6 +1135,24 @@ class WebPlaywrightExtractor(BaseExtractor):
                 still_missing.append(f"{key}:{fname}")
 
         if still_missing:
+            if self._source_game == "jdnext":
+                _try_jdnext_missing_fallbacks(
+                    all_urls=all_urls,
+                    classified=classified,
+                    downloaded=downloaded,
+                    download_dir=download_dir,
+                    config=self._config,
+                )
+                still_missing = []
+                for key in ("video", "audio", "mainscene"):
+                    url = classified.get(key)
+                    if not url:
+                        continue
+                    fname = get_filename_from_url(url)
+                    if fname not in downloaded:
+                        still_missing.append(f"{key}:{fname}")
+
+        if still_missing:
             raise WebExtractionError(
                 "Critical download(s) missing after retry: "
                 + ", ".join(still_missing)
@@ -887,6 +1162,42 @@ class WebPlaywrightExtractor(BaseExtractor):
         # 2. Extract/Assemble into temporary output_dir
         extract_dir = output_dir / codename
         extract_dir.mkdir(parents=True, exist_ok=True)
+
+        if self._source_game == "jdnext":
+            mainscene_url = cast(Optional[str], classified.get("mainscene"))
+            if mainscene_url:
+                mainscene_name = get_filename_from_url(mainscene_url)
+                mainscene_path = download_dir / mainscene_name
+                if mainscene_path.exists() and mainscene_path.suffix.lower() == ".bundle":
+                    strategy_dir = extract_dir / "jdnext_strategy"
+                    try:
+                        summary = run_jdnext_bundle_strategy(
+                            mainscene_path,
+                            strategy_dir,
+                            strategy="assetstudio_first",
+                            codename=codename,
+                        )
+                        mapped_root = strategy_dir / "mapped"
+                        if mapped_root.exists():
+                            for child in mapped_root.iterdir():
+                                dst = extract_dir / child.name
+                                if child.is_dir():
+                                    shutil.copytree(child, dst, dirs_exist_ok=True)
+                                else:
+                                    shutil.copy2(child, dst)
+                        logger.info("JDNext mapPackage strategy winner: %s", summary.winner)
+                    except Exception as exc:
+                        logger.warning("JDNext mapPackage strategy extraction failed: %s", exc)
+
+                    try:
+                        _extract_jdnext_aux_texture_bundles(
+                            download_dir=download_dir,
+                            extract_dir=extract_dir,
+                            mainscene_name=mainscene_name,
+                            codename=codename,
+                        )
+                    except Exception as exc:
+                        logger.warning("JDNext auxiliary texture extraction failed: %s", exc)
         
         # Post-download: extract MAIN_SCENE_*.zip from download_dir into extract_dir
         self._extract_scene_zips(download_dir, extract_dir)
@@ -895,6 +1206,9 @@ class WebPlaywrightExtractor(BaseExtractor):
         for f in os.listdir(download_dir):
             src_file = download_dir / f
             dst_file = extract_dir / f
+            low_name = f.lower()
+            if any(token in low_name for token in ("audiopreview", "videopreview", "mappreview")):
+                continue
             if src_file.is_file() and not f.endswith(".zip") and not dst_file.exists():
                 logger.debug("Copying %s to extraction dir", f)
                 shutil.copy2(src_file, dst_file)

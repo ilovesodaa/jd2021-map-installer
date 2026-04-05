@@ -340,16 +340,60 @@ def _extract_song_desc(
     directory: str, codename: Optional[str] = None
 ) -> SongDescription:
     """Find and parse a songdesc CKD → SongDescription."""
+    def _songdesc_from_html_fallback() -> SongDescription:
+        """Best-effort SongDesc metadata from downloaded embed HTML."""
+        title = codename or "Unknown"
+        artist = "Unknown Artist"
+
+        html_candidates = sorted(Path(directory).rglob("*assets*.html"))
+        if not html_candidates:
+            html_candidates = sorted(Path(directory).glob("*.html"))
+
+        for html_path in html_candidates:
+            try:
+                content = html_path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+
+            title_match = re.search(
+                r"<div class=\"embedTitle[^\"]*\">\s*<span>([^<]+)</span>",
+                content,
+                re.IGNORECASE,
+            )
+            artist_match = re.search(
+                r"<div class=\"embedDescription[^\"]*\">\s*<span>\s*by\s+([^<]+)</span>",
+                content,
+                re.IGNORECASE,
+            )
+
+            if title_match:
+                candidate_title = title_match.group(1).strip()
+                if candidate_title:
+                    title = candidate_title
+            if artist_match:
+                candidate_artist = artist_match.group(1).strip()
+                if candidate_artist:
+                    artist = candidate_artist
+
+            if title_match or artist_match:
+                logger.info(
+                    "Recovered SongDesc metadata from HTML fallback: title='%s', artist='%s'",
+                    title,
+                    artist,
+                )
+                break
+
+        return SongDescription(
+            map_name=codename or "Unknown",
+            title=title,
+            artist=artist,
+        )
+
     ckd_paths = _find_ckd_files(directory, "*songdesc*.tpl.ckd", codename)
 
     if not ckd_paths:
-        # Return defaults if songdesc not found
-        logger.warning("songdesc.tpl.ckd not found; using defaults")
-        return SongDescription(
-            map_name=codename or "Unknown",
-            title=codename or "Unknown",
-            artist="Unknown Artist",
-        )
+        logger.warning("songdesc.tpl.ckd not found; using fallback metadata")
+        return _songdesc_from_html_fallback()
 
     data = load_ckd(ckd_paths[0])
     if isinstance(data, SongDescription):
@@ -370,7 +414,7 @@ def _extract_song_desc(
                 if k.lower() not in ("theme", "lyrics"):
                     dc.extra[k] = v
 
-        return SongDescription(
+        song_desc = SongDescription(
             map_name=sd.get("MapName", codename or "Unknown"),
             title=sd.get("Title", codename or "Unknown"),
             artist=sd.get("Artist", "Unknown Artist"),
@@ -397,6 +441,15 @@ def _extract_song_desc(
             default_colors=dc,
             phone_images=sd.get("PhoneImages", {}),
         )
+
+        if not str(song_desc.title or "").strip() or not str(song_desc.artist or "").strip():
+            html_fallback = _songdesc_from_html_fallback()
+            if not str(song_desc.title or "").strip() and str(html_fallback.title or "").strip():
+                song_desc.title = html_fallback.title
+            if not str(song_desc.artist or "").strip() and str(html_fallback.artist or "").strip():
+                song_desc.artist = html_fallback.artist
+
+        return song_desc
     except (KeyError, IndexError, TypeError) as exc:
         raise NormalizationError(f"Invalid songdesc JSON: {exc}") from exc
 
@@ -412,14 +465,44 @@ def _extract_dance_tape(
     if isinstance(data, DanceTape):
         return data
     if isinstance(data, dict):
-        # Best-effort clip count for JSON dtapes (Fetch/HTML mode maps)
+        # Best-effort clip count for JSON dtapes (supports legacy and synthesized layouts).
         clips = []
+        clip_sources = []
+
+        if isinstance(data.get("Clips"), list):
+            clip_sources.append(data.get("Clips", []))
+        if isinstance(data.get("clips"), list):
+            clip_sources.append(data.get("clips", []))
+
         for comp in data.get("COMPONENTS", []):
-            if "JD_TapeComponent_Template" in comp:
-                tape_data = comp["JD_TapeComponent_Template"].get("tape", {})
-                for clip in tape_data.get("clips", []):
-                    # Minimal stub to allow counting in logs/UI
-                    clips.append(MotionClip(id=0, track_id=0, is_active=1, start_time=0, duration=0, classifier_path=""))
+            if not isinstance(comp, dict):
+                continue
+            if "JD_TapeComponent_Template" not in comp:
+                continue
+            tape_data = comp["JD_TapeComponent_Template"].get("tape", {})
+            if isinstance(tape_data.get("clips"), list):
+                clip_sources.append(tape_data.get("clips", []))
+            if isinstance(tape_data.get("Clips"), list):
+                clip_sources.append(tape_data.get("Clips", []))
+
+        for source in clip_sources:
+            for clip in source:
+                if not isinstance(clip, dict):
+                    continue
+                # Minimal stub to allow counting in logs/UI
+                clips.append(
+                    MotionClip(
+                        id=0,
+                        track_id=0,
+                        is_active=1,
+                        start_time=0,
+                        duration=0,
+                        classifier_path="",
+                        gold_move=0,
+                        coach_id=0,
+                        move_type=0,
+                    )
+                )
         return DanceTape(clips=clips, map_name=codename or "Unknown")
     return None
 
@@ -435,13 +518,42 @@ def _extract_karaoke_tape(
     if isinstance(data, KaraokeTape):
         return data
     if isinstance(data, dict):
-        # Best-effort clip count for JSON ktapes
+        # Best-effort clip count for JSON ktapes (supports legacy and synthesized layouts).
         clips = []
+        clip_sources = []
+
+        if isinstance(data.get("Clips"), list):
+            clip_sources.append(data.get("Clips", []))
+        if isinstance(data.get("clips"), list):
+            clip_sources.append(data.get("clips", []))
+
         for comp in data.get("COMPONENTS", []):
-            if "JD_TapeComponent_Template" in comp:
-                tape_data = comp["JD_TapeComponent_Template"].get("tape", {})
-                for clip in tape_data.get("clips", []):
-                    clips.append(KaraokeClip(id=0, track_id=0, is_active=1, start_time=0, duration=0, lyrics="", pitch=0))
+            if not isinstance(comp, dict):
+                continue
+            if "JD_TapeComponent_Template" not in comp:
+                continue
+            tape_data = comp["JD_TapeComponent_Template"].get("tape", {})
+            if isinstance(tape_data.get("clips"), list):
+                clip_sources.append(tape_data.get("clips", []))
+            if isinstance(tape_data.get("Clips"), list):
+                clip_sources.append(tape_data.get("Clips", []))
+
+        for source in clip_sources:
+            for clip in source:
+                if not isinstance(clip, dict):
+                    continue
+                clips.append(
+                    KaraokeClip(
+                        id=0,
+                        track_id=0,
+                        is_active=1,
+                        start_time=0,
+                        duration=0,
+                        lyrics="",
+                        pitch=0.0,
+                        is_end_of_line=0,
+                    )
+                )
         return KaraokeTape(clips=clips, map_name=codename or "Unknown")
     return None
 
@@ -584,18 +696,18 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
                 
                 media.video_path = best_video
 
-    # 2. Audio files (.ogg, .wav, .wav.ckd)
-    # V1 Priority: .ogg > .wav > .wav.ckd
+    # 2. Audio files (.ogg, .opus, .wav, .wav.ckd)
+    # V1 Priority extended for JDNext: .ogg > .opus > .wav > .wav.ckd
     audio_found = False
 
     def _audio_base_name(path: Path) -> str:
         name = path.name.lower()
-        for suffix in (".wav.ckd", ".ogg.ckd", ".wav", ".ogg", ".ckd"):
+        for suffix in (".wav.ckd", ".ogg.ckd", ".opus.ckd", ".wav", ".ogg", ".opus", ".ckd"):
             if name.endswith(suffix):
                 return name[: -len(suffix)]
         return path.stem.lower()
 
-    for ext_pattern in ("*.ogg", "*.wav", "*.wav.ckd"):
+    for ext_pattern in ("*.ogg", "*.opus", "*.wav", "*.wav.ckd"):
         if audio_found: break
         
         candidates = list(dir_path.rglob(ext_pattern))

@@ -336,3 +336,45 @@ def test_has_valid_cdn_links_accepts_jdnext_maps_path():
         '<a href="https://jd-s3.cdn.ubi.com/public/jdnext/maps/uuid123/nx/mapPackage/hash_v0.bundle">Link</a>'
     )
     assert _has_valid_cdn_links(html)
+
+
+def test_classify_urls_excludes_jdnext_preview_media():
+    urls = [
+        "https://jd-s3.cdn.ubi.com/public/jdnext/maps/uuid123/videoPreview_ULTRA.vp8.webm/hash.webm",
+        "https://jd-s3.cdn.ubi.com/public/jdnext/maps/uuid123/audioPreview.opus/hash.opus",
+        "https://cdn-jdhelper.ramaprojects.ru/private/jdnext/maps/uuid123/video_ULTRA.hd.webm/hashgameplay.webm?auth=abc",
+        "https://cdn-jdhelper.ramaprojects.ru/private/jdnext/maps/uuid123/audio.opus/hashaudio.opus?auth=abc",
+        "https://cdn-jdhelper.ramaprojects.ru/private/jdnext/maps/uuid123/nx/mapPackage/hashmap_v0.bundle?auth=abc",
+    ]
+
+    classified = _classify_urls(urls, "ULTRA_HD")
+    assert classified["video"] is not None
+    assert "videoPreview" not in str(classified["video"])
+    assert classified["audio"] is not None
+    assert "audioPreview" not in str(classified["audio"])
+
+
+def test_classify_urls_maps_jdnext_vp9_to_non_hd_tier():
+    urls = [
+        "https://cdn-jdhelper.ramaprojects.ru/private/jdnext/maps/uuid123/video_ULTRA.vp9.webm/hash-ultra-vp9.webm?auth=abc",
+        "https://cdn-jdhelper.ramaprojects.ru/private/jdnext/maps/uuid123/video_HIGH.hd.webm/hash-high-hd.webm?auth=abc",
+        "https://cdn-jdhelper.ramaprojects.ru/private/jdnext/maps/uuid123/audio.opus/hashaudio.opus?auth=abc",
+        "https://cdn-jdhelper.ramaprojects.ru/private/jdnext/maps/uuid123/nx/mapPackage/hashmap_v0.bundle?auth=abc",
+    ]
+
+    classified = _classify_urls(urls, "ULTRA")
+    assert classified["video"] is not None
+    assert "video_ULTRA.vp9.webm" in str(classified["video"])
+
+
+def test_classify_urls_maps_jdnext_vp9_for_hd_fallback_search_order():
+    urls = [
+        "https://cdn-jdhelper.ramaprojects.ru/private/jdnext/maps/uuid123/video_HIGH.vp9.webm/hash-high-vp9.webm?auth=abc",
+        "https://cdn-jdhelper.ramaprojects.ru/private/jdnext/maps/uuid123/audio.opus/hashaudio.opus?auth=abc",
+        "https://cdn-jdhelper.ramaprojects.ru/private/jdnext/maps/uuid123/nx/mapPackage/hashmap_v0.bundle?auth=abc",
+    ]
+
+    # Request HIGH_HD when only HIGH_VP9 exists: should resolve to HIGH tier fallback.
+    classified = _classify_urls(urls, "HIGH_HD")
+    assert classified["video"] is not None
+    assert "video_HIGH.vp9.webm" in str(classified["video"])

@@ -6,6 +6,7 @@ import os
 from jd2021_installer.parsers.normalizer import _discover_media
 from jd2021_installer.core.models import MapMedia
 from jd2021_installer.installers.media_processor import process_menu_art
+from jd2021_installer.installers.texture_decoder import decode_menuart_textures
 
 from PIL import Image
 
@@ -141,6 +142,20 @@ class TestMenuArt(unittest.TestCase):
                            "Optional banner_bkg should be discovered without codename prefix")
         self.assertIsNotNone(media.cover_albumbkg_path,
                            "Optional cover_albumbkg should be discovered without codename prefix")
+
+    def test_decode_menuart_counts_loose_png(self):
+        src = self.test_dir / "menuart_src"
+        dst = self.test_dir / "menuart_dst"
+        src.mkdir(parents=True)
+        dst.mkdir(parents=True)
+
+        img = Image.new('RGBA', (8, 8), color=(0, 255, 0, 255))
+        img.save(src / "TestMap_cover_phone.png", format='PNG')
+
+        decoded = decode_menuart_textures(src, dst)
+
+        self.assertEqual(decoded, 1)
+        self.assertTrue((dst / "TestMap_cover_phone.png").exists())
 
 if __name__ == "__main__":
     unittest.main()

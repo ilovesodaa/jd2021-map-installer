@@ -274,3 +274,83 @@ class TestNormalizerMusicTrack:
         assert result.music_track.preview_entry == 287
         assert result.music_track.preview_loop_start == 287
         assert result.music_track.preview_loop_end == 574
+
+    def test_missing_songdesc_uses_assets_html_metadata(self, tmp_path: Path) -> None:
+        import json
+
+        mt_data = {
+            "COMPONENTS": [{
+                "trackData": {
+                    "structure": {
+                        "markers": [0, 2400, 4800],
+                        "signatures": [{"beats": 4, "marker": 0}],
+                        "sections": [{"sectionType": 0, "marker": 0}],
+                        "startBeat": 0,
+                        "endBeat": 2,
+                        "videoStartTime": 0.0,
+                    }
+                }
+            }]
+        }
+        (tmp_path / "AQueda_musictrack.tpl.ckd").write_text(json.dumps(mt_data), encoding="utf-8")
+        (tmp_path / "assets.html").write_text(
+            '<div class="embedTitle__x"><span>A QUEDA</span></div>'
+            '<div class="embedDescription__x"><span>by Gloria Groove</span></div>',
+            encoding="utf-8",
+        )
+
+        result = normalize(tmp_path, codename="AQueda")
+
+        assert result.song_desc.title == "A QUEDA"
+        assert result.song_desc.artist == "Gloria Groove"
+
+    def test_synthesized_tapes_with_top_level_clips_are_counted(self, tmp_path: Path) -> None:
+        import json
+
+        mt_data = {
+            "COMPONENTS": [{
+                "trackData": {
+                    "structure": {
+                        "markers": [0, 2400, 4800],
+                        "signatures": [{"beats": 4, "marker": 0}],
+                        "sections": [{"sectionType": 0, "marker": 0}],
+                        "startBeat": 0,
+                        "endBeat": 2,
+                        "videoStartTime": 0.0,
+                    }
+                }
+            }]
+        }
+        sd_data = {
+            "COMPONENTS": [{
+                "MapName": "AQueda",
+                "Title": "A Queda",
+                "Artist": "Gloria Groove",
+                "NumCoach": 1,
+            }]
+        }
+        dtape_data = {
+            "__class": "Tape",
+            "Clips": [
+                {"__class": "MotionClip", "StartTime": 0, "Duration": 10},
+                {"__class": "PictogramClip", "StartTime": 20, "Duration": 10},
+            ],
+        }
+        ktape_data = {
+            "__class": "Tape",
+            "Clips": [
+                {"__class": "KaraokeClip", "StartTime": 0, "Duration": 10, "Lyrics": "a"},
+            ],
+        }
+
+        (tmp_path / "aqueda_musictrack.tpl.ckd").write_text(json.dumps(mt_data), encoding="utf-8")
+        (tmp_path / "aqueda_songdesc.tpl.ckd").write_text(json.dumps(sd_data), encoding="utf-8")
+        (tmp_path / "aqueda_tml_dance.dtape.ckd").write_text(json.dumps(dtape_data), encoding="utf-8")
+        (tmp_path / "aqueda_tml_karaoke.ktape.ckd").write_text(json.dumps(ktape_data), encoding="utf-8")
+
+        result = normalize(tmp_path, codename="AQueda")
+
+        assert result.dance_tape is not None
+        assert result.karaoke_tape is not None
+        assert len(result.dance_tape.clips) == 2
+        assert len(result.karaoke_tape.clips) == 1

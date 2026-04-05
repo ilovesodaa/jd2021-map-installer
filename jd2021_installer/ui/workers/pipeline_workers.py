@@ -138,6 +138,8 @@ def _collect_menuart_texture_sources(source_dir: Path, codename: str) -> list[Pa
             seen.add(key)
             sources.append(path)
 
+    _add(source_dir / "MenuArt")
+    _add(source_dir / "menuart")
     _add(source_dir / "MenuArt" / "textures")
     _add(source_dir / "menuart" / "textures")
 
@@ -161,6 +163,8 @@ def _collect_menuart_texture_sources(source_dir: Path, codename: str) -> list[Pa
     for platform_dir in itf_cooked.iterdir():
         if not platform_dir.is_dir():
             continue
+        _add(platform_dir / "world" / "maps" / codename / "menuart")
+        _add(platform_dir / "world" / "maps" / codename_low / "menuart")
         _add(platform_dir / "world" / "maps" / codename / "menuart" / "textures")
         _add(platform_dir / "world" / "maps" / codename_low / "menuart" / "textures")
 
@@ -1244,10 +1248,10 @@ def install_map_to_game(
         if progress_callback: progress_callback(50)
         from jd2021_installer.installers.media_processor import copy_video
         video_dst = map_target / "videoscoach" / f"{codename}.webm"
-        copy_video(media.video_path, video_dst)
+        copy_video(media.video_path, video_dst, config=config, force_reencode=True)
         if media.map_preview_video and media.map_preview_video.exists():
             preview_dst = map_target / "videoscoach" / f"{codename}_MapPreview.webm"
-            copy_video(media.map_preview_video, preview_dst)
+            copy_video(media.map_preview_video, preview_dst, config=config)
 
     # 3. Copy/Rename MenuArt assets (Cover, Banner, Coach, etc.)
     textures_dir = map_target / "menuart" / "textures"

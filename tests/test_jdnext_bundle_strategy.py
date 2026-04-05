@@ -1,0 +1,177 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from jd2021_installer.extractors import jdnext_bundle_strategy as strategy_mod
+
+
+def test_map_assetstudio_output_maps_expected_files(tmp_path: Path):
+    raw = tmp_path / "raw"
+    (raw / "MonoBehaviour").mkdir(parents=True)
+    (raw / "TextAsset").mkdir(parents=True)
+    (raw / "Texture2D").mkdir(parents=True)
+    (raw / "Sprite").mkdir(parents=True)
+
+    (raw / "MonoBehaviour" / "TestMap.json").write_text(
+        json.dumps(
+            {
+                "MapName": "TestMap",
+                "DanceData": {
+                    "MotionClips": [
+                        {
+                            "StartTime": 0,
+                            "Duration": 24,
+                            "Id": 1,
+                            "TrackId": 2,
+                            "IsActive": 1,
+                            "MoveName": "move_a",
+                            "MoveType": 1,
+                            "GoldMove": 0,
+                            "CoachId": 0,
+                            "Color": "",
+                        },
+                        {
+                            "StartTime": 24,
+                            "Duration": 24,
+                            "Id": 3,
+                            "TrackId": 4,
+                            "IsActive": 1,
+                            "MoveName": "move_b",
+                            "MoveType": 0,
+                            "GoldMove": 0,
+                            "CoachId": 0,
+                            "Color": "",
+                        },
+                    ],
+                    "PictoClips": [
+                        {
+                            "StartTime": 0,
+                            "Duration": 24,
+                            "Id": 5,
+                            "TrackId": 6,
+                            "IsActive": 1,
+                            "PictoPath": "picto_001",
+                            "CoachCount": 1,
+                        }
+                    ],
+                    "GoldEffectClips": [],
+                },
+                "KaraokeData": {
+                    "Clips": [
+                        {
+                            "KaraokeClip": {
+                                "StartTime": 0,
+                                "Duration": 24,
+                                "Id": 7,
+                                "TrackId": 8,
+                                "IsActive": 1,
+                                "Lyrics": "Hi",
+                                "Pitch": 1.0,
+                                "IsEndOfLine": 1,
+                            }
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (raw / "MonoBehaviour" / "MusicTrack.json").write_text(
+        json.dumps(
+            {
+                "m_structure": {
+                    "MusicTrackStructure": {
+                        "startBeat": -4,
+                        "endBeat": 100,
+                        "videoStartTime": -2.5,
+                        "previewEntry": 10.0,
+                        "previewLoopStart": 10.0,
+                        "previewLoopEnd": 40.0,
+                        "markers": [{"VAL": 0}, {"VAL": 24000}],
+                        "signatures": [{"MusicSignature": {"beats": 4, "marker": 1}}],
+                        "sections": [{"MusicSection": {"sectionType": 0, "marker": 1}}],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (raw / "TextAsset" / "move_a.gesture").write_text("g", encoding="utf-8")
+    (raw / "TextAsset" / "move_b.msm").write_text("m", encoding="utf-8")
+    (raw / "TextAsset" / "scoringRules.txt").write_text("s", encoding="utf-8")
+    (raw / "Texture2D" / "cover.png").write_bytes(b"PNG")
+    (raw / "Sprite" / "picto_001.png").write_bytes(b"PNG")
+
+    mapped = tmp_path / "mapped"
+    summary = strategy_mod.map_assetstudio_output(raw, mapped, codename="TestMap")
+
+    assert summary.map_json is not None
+    assert summary.musictrack_json is not None
+    assert summary.gestures == 1
+    assert summary.msm == 1
+    assert summary.pictos == 1
+    assert summary.menuart == 1
+    assert (mapped / "monobehaviour" / "map.json").exists()
+    assert (mapped / "monobehaviour" / "musictrack.json").exists()
+    assert (mapped / "testmap_musictrack.tpl.ckd").exists()
+    assert (mapped / "testmap_tml_dance.dtape.ckd").exists()
+    assert (mapped / "testmap_tml_karaoke.ktape.ckd").exists()
+    assert (mapped / "timeline" / "moves" / "x360" / "move_a.gesture").exists()
+    assert (mapped / "timeline" / "moves" / "x360" / "move_b.msm").exists()
+
+
+def test_strategy_uses_assetstudio_first(tmp_path: Path, monkeypatch):
+    bundle = tmp_path / "a.bundle"
+    bundle.write_bytes(b"x")
+
+    calls: list[str] = []
+
+    def fake_assetstudio(bundle_path: Path, output_dir: Path, unity_version: str):
+        calls.append("assetstudio")
+        (output_dir / "MonoBehaviour").mkdir(parents=True, exist_ok=True)
+        (output_dir / "MonoBehaviour" / "TestMap.json").write_text("{}", encoding="utf-8")
+        (output_dir / "MonoBehaviour" / "MusicTrack.json").write_text("{}", encoding="utf-8")
+        (output_dir / "TextAsset").mkdir(parents=True, exist_ok=True)
+        return output_dir
+
+    def fake_unitypy(bundle_path: Path, output_dir: Path):
+        calls.append("unitypy")
+        raise AssertionError("UnityPy should not run when AssetStudio succeeds first")
+
+    monkeypatch.setattr(strategy_mod, "_run_assetstudio_export", fake_assetstudio)
+    monkeypatch.setattr(strategy_mod, "_run_unitypy", fake_unitypy)
+
+    out = tmp_path / "out"
+    summary = strategy_mod.run_jdnext_bundle_strategy(bundle, out, strategy="assetstudio_first", codename="TestMap")
+
+    assert summary.winner == "assetstudio"
+    assert calls == ["assetstudio"]
+
+
+def test_strategy_falls_back_to_assetstudio_when_unitypy_fails(tmp_path: Path, monkeypatch):
+    bundle = tmp_path / "a.bundle"
+    bundle.write_bytes(b"x")
+
+    calls: list[str] = []
+
+    def fake_assetstudio(bundle_path: Path, output_dir: Path, unity_version: str):
+        calls.append("assetstudio")
+        (output_dir / "MonoBehaviour").mkdir(parents=True, exist_ok=True)
+        (output_dir / "MonoBehaviour" / "RecoveredMap.json").write_text("{}", encoding="utf-8")
+        (output_dir / "MonoBehaviour" / "MusicTrack.json").write_text("{}", encoding="utf-8")
+        (output_dir / "TextAsset").mkdir(parents=True, exist_ok=True)
+        return output_dir
+
+    def fake_unitypy(bundle_path: Path, output_dir: Path):
+        calls.append("unitypy")
+        raise RuntimeError("encrypted")
+
+    monkeypatch.setattr(strategy_mod, "_run_assetstudio_export", fake_assetstudio)
+    monkeypatch.setattr(strategy_mod, "_run_unitypy", fake_unitypy)
+
+    out = tmp_path / "out"
+    summary = strategy_mod.run_jdnext_bundle_strategy(bundle, out, strategy="unitypy_first")
+
+    assert summary.winner == "assetstudio"
+    assert calls == ["unitypy", "assetstudio"]
