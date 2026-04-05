@@ -984,38 +984,88 @@ def copy_moves(
     moves_src_dir: str | Path,
     target_dir: str | Path,
 ) -> int:
-    """Extract and merge .gesture and .msm files cross-platform to PC format.
+    """Extract and merge move files with Kinect-safe gesture filtering.
 
     Args:
         moves_src_dir: The extracted root 'moves' folder containing 'nx', 'durango', etc.
         target_dir: The map's root installation target directory.
 
     Returns:
-        The number of valid move skeleton files copied.
+        The number of valid move files copied.
     """
     src_root = Path(moves_src_dir)
     if not src_root.is_dir():
         return 0
 
+    def _is_probably_valid_kinect_gesture(gesture_path: Path) -> tuple[bool, str]:
+        """Best-effort guard against non-Kinect or malformed gesture payloads.
+
+        JD2021 PC only accepts Kinect v1/v2-compatible gesture binaries.
+        Some newer exports can produce gesture files that are tiny or text-like;
+        those are rejected before they reach the installed map.
+        """
+        try:
+            size = gesture_path.stat().st_size
+        except OSError as exc:
+            return False, f"cannot stat file ({exc})"
+
+        if size < 256:
+            return False, f"file too small ({size} bytes)"
+
+        try:
+            head = gesture_path.read_bytes()[:128]
+        except OSError as exc:
+            return False, f"cannot read file ({exc})"
+
+        if not head:
+            return False, "empty file"
+
+        trimmed = head.lstrip()
+        if trimmed.startswith((b"{", b"[")):
+            return False, "text/json-like payload"
+
+        printable = sum(1 for b in head if 32 <= b <= 126 or b in (9, 10, 13))
+        if printable / max(1, len(head)) > 0.95:
+            return False, "payload appears text-like"
+
+        return True, "ok"
+
     pc_moves_dir = Path(target_dir) / "timeline" / "moves" / "pc"
     total_copied = 0
 
-    KINECT_PLATFORMS = {"DURANGO", "SCARLETT", "X360"}
+    KINECT_GESTURE_PLATFORMS = {"DURANGO", "X360"}
 
     # Pass 1: Copy Kinect-compatible gestures and universally compatible MSMs
     for plat_dir in src_root.iterdir():
         if not plat_dir.is_dir() or plat_dir.name.upper() == "PC":
             continue
-            
+
         plat_name = plat_dir.name.upper()
 
-        if plat_name in KINECT_PLATFORMS:
+        if plat_name in KINECT_GESTURE_PLATFORMS:
             for gesture_file in plat_dir.glob("*.gesture"):
+                is_valid, reason = _is_probably_valid_kinect_gesture(gesture_file)
+                if not is_valid:
+                    logger.warning(
+                        "Skipping incompatible gesture '%s' from %s: %s",
+                        gesture_file.name,
+                        plat_name,
+                        reason,
+                    )
+                    continue
                 dest = pc_moves_dir / gesture_file.name
                 if not dest.exists():
                     pc_moves_dir.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(gesture_file, dest)
                     total_copied += 1
+        else:
+            gesture_count = sum(1 for _ in plat_dir.glob("*.gesture"))
+            if gesture_count:
+                logger.info(
+                    "Skipping %d gesture file(s) from unsupported platform '%s'",
+                    gesture_count,
+                    plat_name,
+                )
 
         for msm_file in plat_dir.glob("*.msm"):
             dest = pc_moves_dir / msm_file.name
@@ -1024,22 +1074,26 @@ def copy_moves(
                 shutil.copy2(msm_file, dest)
                 total_copied += 1
 
-    # Pass 2: Substitute ORBIS (PS4) exclusive gestures with Kinect base gestures
+    # Pass 2: Substitute non-Kinect naming variants with already accepted gestures
     pc_gestures = {f.name for f in pc_moves_dir.glob("*.gesture")}
-    
+
     for plat_dir in src_root.iterdir():
-        if not plat_dir.is_dir() or plat_dir.name.upper() in KINECT_PLATFORMS or plat_dir.name.upper() == "PC":
+        if (
+            not plat_dir.is_dir()
+            or plat_dir.name.upper() in KINECT_GESTURE_PLATFORMS
+            or plat_dir.name.upper() == "PC"
+        ):
             continue
-            
+
         for gesture_file in plat_dir.glob("*.gesture"):
             fname = gesture_file.name
             if fname in pc_gestures or (pc_moves_dir / fname).exists():
                 continue
-                
+
             stem = gesture_file.stem
             base = stem.rstrip("0123456789")
             sub_src = pc_moves_dir / (base + ".gesture")
-            
+
             if base != stem and sub_src.exists():
                 pc_moves_dir.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(sub_src, pc_moves_dir / fname)
