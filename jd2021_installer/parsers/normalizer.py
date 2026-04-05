@@ -265,21 +265,51 @@ def _extract_music_track(
 
 
 def _find_source_trk_path(source_dir: Path, codename: str) -> Optional[Path]:
-    """Locate the source .trk file for a map codename (case-insensitive)."""
+    """Locate the source .trk file for a map codename (case-insensitive).
+
+    Some JDNext sources use variant track names (for example extra suffixes
+    around the codename). Prefer exact matches first, then fallback to
+    codename-contained stems to mirror install-time behavior.
+    """
     direct = source_dir / "Audio" / f"{codename}.trk"
     if direct.exists():
         return direct
 
     codename_lower = codename.lower()
+
+    def _is_exact(candidate: Path) -> bool:
+        return candidate.stem.lower() == codename_lower
+
+    def _is_fuzzy(candidate: Path) -> bool:
+        stem_lower = candidate.stem.lower()
+        return codename_lower in stem_lower
+
     audio_dir = source_dir / "Audio"
     if audio_dir.exists():
+        exact_hits: List[Path] = []
+        fuzzy_hits: List[Path] = []
         for candidate in audio_dir.glob("*.trk"):
-            if candidate.stem.lower() == codename_lower:
-                return candidate
+            if _is_exact(candidate):
+                exact_hits.append(candidate)
+            elif _is_fuzzy(candidate):
+                fuzzy_hits.append(candidate)
+        if exact_hits:
+            return sorted(exact_hits)[0]
+        if fuzzy_hits:
+            return sorted(fuzzy_hits)[0]
 
+    exact_hits: List[Path] = []
+    fuzzy_hits: List[Path] = []
     for candidate in source_dir.rglob("*.trk"):
-        if candidate.stem.lower() == codename_lower:
-            return candidate
+        if _is_exact(candidate):
+            exact_hits.append(candidate)
+        elif _is_fuzzy(candidate):
+            fuzzy_hits.append(candidate)
+
+    if exact_hits:
+        return sorted(exact_hits)[0]
+    if fuzzy_hits:
+        return sorted(fuzzy_hits)[0]
 
     return None
 
@@ -929,6 +959,33 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
     return media
 
 
+def _infer_coach_count_from_media(media: MapMedia) -> int:
+    """Infer coach count from discovered coach image filenames.
+
+    Supports both ``coach_2`` and ``coach2`` style suffixes. If no explicit
+    index is present, each image contributes one coach.
+    """
+    if not media.coach_images:
+        return 0
+
+    indexed: List[int] = []
+    non_indexed = 0
+    for path in media.coach_images:
+        name_low = path.name.lower()
+        match = re.search(r"coach[_-]?(\d+)", name_low)
+        if match:
+            try:
+                indexed.append(int(match.group(1)))
+            except ValueError:
+                non_indexed += 1
+        else:
+            non_indexed += 1
+
+    if indexed:
+        return max(indexed)
+    return non_indexed
+
+
 def normalize_sync(
     music_track: Optional[MusicTrackStructure], 
     is_html_source: bool = False,
@@ -1082,6 +1139,24 @@ def normalize(
     else:
         search_root_str = None
     media = _discover_media(source_dir_str, codename, search_root=search_root_str)
+
+    # Keep SongDesc coach metadata aligned with discovered media assets.
+    inferred_coaches = _infer_coach_count_from_media(media)
+    if inferred_coaches > song_desc.num_coach:
+        logger.info(
+            "Adjusted NumCoach from media discovery: %d -> %d",
+            song_desc.num_coach,
+            inferred_coaches,
+        )
+        song_desc.num_coach = inferred_coaches
+
+    if song_desc.num_coach > 0 and (song_desc.main_coach < 0 or song_desc.main_coach >= song_desc.num_coach):
+        logger.info(
+            "Adjusted MainCoach from %d to 0 for NumCoach=%d",
+            song_desc.main_coach,
+            song_desc.num_coach,
+        )
+        song_desc.main_coach = 0
 
     # Infer codename from song_desc if not provided
     effective_codename = codename or song_desc.map_name

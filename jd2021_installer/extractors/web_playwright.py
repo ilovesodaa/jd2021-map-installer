@@ -454,8 +454,39 @@ def _classify_urls(
 
     # Select best video
     video_url = None
-    preferred_idx = QUALITY_ORDER.index(quality) if quality in QUALITY_ORDER else 0
-    search_order = QUALITY_ORDER[preferred_idx:] + QUALITY_ORDER[:preferred_idx]
+
+    def _build_quality_search_order(selected_quality: str) -> List[str]:
+        tiers = ["ULTRA", "HIGH", "MID", "LOW"]
+        selected = (selected_quality or "ULTRA_HD").upper()
+
+        if selected.endswith("_HD"):
+            selected_tier = selected[:-3]
+            prefer_hd_first = True
+        else:
+            selected_tier = selected
+            prefer_hd_first = False
+
+        if selected_tier not in tiers:
+            selected_tier = "ULTRA"
+
+        start_idx = tiers.index(selected_tier)
+        ordered_tiers = tiers[start_idx:]
+
+        order: List[str] = []
+        for tier in ordered_tiers:
+            if prefer_hd_first:
+                order.extend([f"{tier}_HD", tier])
+            else:
+                order.extend([tier, f"{tier}_HD"])
+
+        # Ensure uniqueness while preserving order
+        deduped: List[str] = []
+        for item in order:
+            if item in QUALITY_ORDER and item not in deduped:
+                deduped.append(item)
+        return deduped
+
+    search_order = _build_quality_search_order(quality)
     for q in search_order:
         if q in video_urls_by_quality:
             video_url = video_urls_by_quality[q]
@@ -552,26 +583,8 @@ def download_files(
         if target.exists():
             target.unlink()
 
-        # V1 parity: if requested-quality video is unavailable, reuse another local gameplay webm.
-        if selected_video_fname and fname == selected_video_fname:
-            existing_webms = [
-                p for p in download_path.glob("*.webm")
-                if p.name != fname
-                and "mappreview" not in p.name.lower()
-                and "videopreview" not in p.name.lower()
-                and p.is_file()
-                and p.stat().st_size > 1024
-            ]
-            if existing_webms:
-                existing_webms.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-                chosen = existing_webms[0]
-                logger.info(
-                    "Reusing existing video %s instead of downloading %s",
-                    chosen.name,
-                    fname,
-                )
-                downloaded[fname] = str(chosen)
-                continue
+        # Respect selected tier: do not silently substitute a different cached
+        # gameplay quality when the requested file is missing.
 
         # Check if already installed
         codename = download_path.name
@@ -605,6 +618,21 @@ def download_files(
             progress_callback(fname, idx + 1, total)
 
         success = False
+        prefer_curl_resolve = "cdn-jdhelper.ramaprojects.ru" in url.lower()
+        if prefer_curl_resolve:
+            logger.info("Using curl --resolve as primary downloader for %s", fname)
+            if _download_with_curl_resolve(url, target, config.download_timeout_s):
+                if is_nohud_video and not _is_valid_webm_file(target, config):
+                    logger.warning("curl --resolve primary download produced corrupt NOHUD video %s", fname)
+                    target.unlink(missing_ok=True)
+                else:
+                    success = True
+
+        if success:
+            downloaded[fname] = str(target)
+            time.sleep(config.inter_request_delay_s)
+            continue
+
         for attempt in range(1, config.max_retries + 1):
             try:
                 with session.get(url, stream=True, timeout=config.download_timeout_s) as r:
@@ -670,7 +698,7 @@ def download_files(
         if success:
             downloaded[fname] = str(target)
         else:
-            if "cdn-jdhelper.ramaprojects.ru" in url.lower():
+            if prefer_curl_resolve:
                 logger.warning("Trying curl --resolve fallback download for %s", fname)
                 if _download_with_curl_resolve(url, target, config.download_timeout_s):
                     if is_nohud_video and not _is_valid_webm_file(target, config):

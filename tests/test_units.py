@@ -7,9 +7,12 @@ from PyQt6.QtWidgets import QApplication
 from jd2021_installer.core.models import NormalizedMapData, SongDescription, MusicTrackStructure, MapMedia
 from jd2021_installer.core.config import AppConfig
 from jd2021_installer.installers import media_processor
+from jd2021_installer.parsers.normalizer import _find_source_trk_path, normalize_sync
+from jd2021_installer.parsers.normalizer import _infer_coach_count_from_media
 from jd2021_installer.ui.widgets.preview_widget import PreviewWidget
 from jd2021_installer.ui.widgets.bundle_dialog import BundleSelectDialog
 from jd2021_installer.ui.workers.pipeline_workers import BatchInstallWorker
+from jd2021_installer.extractors import web_playwright
 
 _RUN_QT_WIDGET_TESTS = os.environ.get("JD2021_RUN_QT_WIDGET_TESTS") == "1"
 
@@ -123,6 +126,90 @@ def test_preview_probe_duration_audio_fallback_from_ckd(monkeypatch):
     assert any(path.lower().endswith("audio.wav") for path in attempted)
 
 
+def test_find_source_trk_path_accepts_jdnext_variant_name(tmp_path: Path):
+    source_dir = tmp_path / "source"
+    audio_dir = source_dir / "Audio"
+    audio_dir.mkdir(parents=True)
+    trk_path = audio_dir / "mapname_musictrack.trk"
+    trk_path.write_text("videoStartTime = -2.145000\n", encoding="utf-8")
+
+    found = _find_source_trk_path(source_dir, "mapname")
+    assert found == trk_path
+
+
+def test_normalize_sync_inherits_video_from_variant_trk_name(tmp_path: Path):
+    source_dir = tmp_path / "source"
+    audio_dir = source_dir / "Audio"
+    audio_dir.mkdir(parents=True)
+    trk_path = audio_dir / "jdnext_map_musictrack.trk"
+    trk_path.write_text("videoStartTime = -1.750000\n", encoding="utf-8")
+
+    mt = MusicTrackStructure(
+        markers=[0, 48000],
+        signatures=[],
+        sections=[],
+        start_beat=0,
+        end_beat=1,
+        video_start_time=0.0,
+    )
+
+    found = _find_source_trk_path(source_dir, "jdnext_map")
+    assert found == trk_path
+
+    sync = normalize_sync(mt, is_html_source=False, existing_trk_path=found)
+    assert sync.audio_ms == pytest.approx(0.0)
+    assert sync.video_ms == pytest.approx(-1750.0)
+
+
+def test_infer_coach_count_from_media_supports_variant_names():
+    media = MapMedia(
+        coach_images=[
+            Path("TelephoneALT_coach1.png"),
+            Path("TelephoneALT_coach_2.png"),
+        ]
+    )
+    assert _infer_coach_count_from_media(media) == 2
+
+
+def test_download_prefers_curl_resolve_for_jdhelper(monkeypatch, tmp_path: Path):
+    url = (
+        "https://cdn-jdhelper.ramaprojects.ru/private/jdnext/maps/x/"
+        "video_ULTRA.vp9.webm/hash.webm?auth=token"
+    )
+
+    monkeypatch.setattr(web_playwright, "_classify_urls", lambda urls, quality: {
+        "video": url,
+        "audio": None,
+        "mainscene": None,
+        "others": [],
+    })
+
+    calls = {"curl": 0, "session_get": 0}
+
+    def _fake_curl(download_url, target, timeout_s):
+        calls["curl"] += 1
+        target.write_bytes(b"\x1a\x45\xdf\xa3" + b"0" * 2048)
+        return True
+
+    class _FakeSession:
+        headers = {}
+
+        def get(self, *args, **kwargs):
+            calls["session_get"] += 1
+            raise AssertionError("requests session should not run when curl primary succeeds")
+
+    monkeypatch.setattr(web_playwright, "_download_with_curl_resolve", _fake_curl)
+    monkeypatch.setattr(web_playwright, "_is_valid_webm_file", lambda path, config: True)
+    monkeypatch.setattr(web_playwright.requests, "Session", lambda: _FakeSession())
+
+    cfg = AppConfig()
+    result = web_playwright.download_files([url], tmp_path, config=cfg)
+
+    assert calls["curl"] == 1
+    assert calls["session_get"] == 0
+    assert result
+
+
 def test_preview_probe_duration_handles_positive_video_offset(monkeypatch):
     def fake_check_output(cmd, text=True, creationflags=0):
         target = str(cmd[-1]).lower()
@@ -144,34 +231,27 @@ def test_preview_probe_duration_handles_positive_video_offset(monkeypatch):
     assert duration == pytest.approx(102.0, abs=1e-3)
 
 
-def test_copy_video_transcodes_non_vp9(monkeypatch, tmp_path: Path):
+def test_copy_video_preserves_webm_without_reencode(monkeypatch, tmp_path: Path):
     src = tmp_path / "src.webm"
     dst = tmp_path / "dst.webm"
-    src.write_bytes(b"data")
-
-    class _Probe:
-        stdout = "vp8\nyuv420p\n"
+    src.write_bytes(b"original_webm_data")
 
     called: dict[str, bool] = {"ffmpeg": False}
 
-    def _fake_run_ffprobe(args, config=None, timeout=30):
-        return _Probe()
-
     def _fake_run_ffmpeg(args, config=None, timeout=300):
         called["ffmpeg"] = True
-        dst.write_bytes(b"converted")
         class _Ok:
             returncode = 0
         return _Ok()
 
-    monkeypatch.setattr(media_processor, "run_ffprobe", _fake_run_ffprobe)
     monkeypatch.setattr(media_processor, "run_ffmpeg", _fake_run_ffmpeg)
 
     out = media_processor.copy_video(src, dst)
 
     assert out == dst
-    assert called["ffmpeg"] is True
+    assert called["ffmpeg"] is False
     assert dst.exists()
+    assert dst.read_bytes() == b"original_webm_data"
 
 
 def test_copy_video_keeps_vp9_yuv420p(monkeypatch, tmp_path: Path):
@@ -229,6 +309,20 @@ def test_copy_video_force_reencode_even_if_vp9(monkeypatch, tmp_path: Path):
     assert out == dst
     assert called["ffmpeg"] is True
     assert dst.exists()
+
+
+def test_classify_urls_prefers_ultra_then_ultra_hd():
+    urls = [
+        "https://example.com/private/map/x/video_ULTRA.hd.webm/hash.webm",
+        "https://example.com/private/map/x/video_ULTRA.vp9.webm/hash.webm",
+        "https://example.com/private/map/x/video_HIGH.hd.webm/hash.webm",
+    ]
+
+    classified = web_playwright._classify_urls(urls, "ULTRA")
+    selected = classified.get("video")
+
+    assert isinstance(selected, str)
+    assert "video_ULTRA.vp9.webm" in selected
 
 
 @pytest.mark.skipif(not _RUN_QT_WIDGET_TESTS, reason="Set JD2021_RUN_QT_WIDGET_TESTS=1 to run Qt widget behavior tests.")

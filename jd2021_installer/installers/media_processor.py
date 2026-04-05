@@ -168,8 +168,8 @@ def copy_video(
 ) -> Path:
     """Copy a video file to the destination, creating dirs as needed.
 
-    For WebM inputs, normalize unsupported variants to VP9 + yuv420p so
-    in-game playback remains compatible across source packs.
+    Keep source video bytes unchanged unless re-encoding is explicitly forced
+    or the destination extension requires format conversion.
     """
     src = Path(src_path)
     dst = Path(dst_path)
@@ -178,51 +178,30 @@ def copy_video(
     if not src.exists():
         raise MediaProcessingError(f"Source video not found: {src}")
 
-    # Best-effort codec compatibility normalization.
-    if src.suffix.lower() == ".webm":
-        needs_transcode = force_reencode
-        try:
-            probe = run_ffprobe(
-                [
-                    "-v", "error",
-                    "-select_streams", "v:0",
-                    "-show_entries", "stream=codec_name,pix_fmt",
-                    "-of", "default=nw=1:nk=1",
-                    str(src),
-                ],
-                config=config,
-            )
-            lines = [ln.strip().lower() for ln in (probe.stdout or "").splitlines() if ln.strip()]
-            codec = lines[0] if lines else ""
-            pix_fmt = lines[1] if len(lines) > 1 else ""
-            if not force_reencode:
-                needs_transcode = codec != "vp9" or pix_fmt != "yuv420p"
-        except Exception:
-            # If probing fails, normalize defensively.
-            needs_transcode = True
+    same_extension = src.suffix.lower() == dst.suffix.lower()
+    if not force_reencode and same_extension:
+        shutil.copy2(src, dst)
+        logger.info("Copied video: %s -> %s", src.name, dst)
+        return dst
 
-        if needs_transcode:
-            logger.info("Normalizing video codec for compatibility: %s", src.name)
-            run_ffmpeg(
-                [
-                    "-y",
-                    "-i", str(src),
-                    "-an",
-                    # Prefer fast VP8 WebM output for JDU/X360-like compatibility.
-                    "-c:v", "libvpx",
-                    "-pix_fmt", "yuv420p",
-                    "-deadline", "realtime",
-                    "-cpu-used", "8",
-                    "-b:v", "2500k",
-                    str(dst),
-                ],
-                config=config,
-            )
-            logger.info("Converted video: %s -> %s", src.name, dst)
-            return dst
-
-    shutil.copy2(src, dst)
-    logger.info("Copied video: %s -> %s", src.name, dst)
+    # Conversion path is only used when caller explicitly requests it or when
+    # output container differs from the source extension.
+    logger.info("Converting video to target format: %s -> %s", src.name, dst.name)
+    run_ffmpeg(
+        [
+            "-y",
+            "-i", str(src),
+            "-an",
+            "-c:v", "libvpx",
+            "-pix_fmt", "yuv420p",
+            "-deadline", "realtime",
+            "-cpu-used", "8",
+            "-b:v", "2500k",
+            str(dst),
+        ],
+        config=config,
+    )
+    logger.info("Converted video: %s -> %s", src.name, dst)
     return dst
 
 

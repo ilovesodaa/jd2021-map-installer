@@ -1249,9 +1249,11 @@ def install_map_to_game(
         if progress_callback: progress_callback(50)
         from jd2021_installer.installers.media_processor import copy_video
         video_dst = map_target / "videoscoach" / f"{codename}.webm"
-        # Preserve the gameplay video exactly as downloaded/extracted.
-        # Hardware acceleration / transcoding is reserved for preview-only flows.
-        shutil.copy2(media.video_path, video_dst)
+        copy_video(
+            media.video_path,
+            video_dst,
+            config=config,
+        )
         if media.map_preview_video and media.map_preview_video.exists():
             preview_dst = map_target / "videoscoach" / f"{codename}_MapPreview.webm"
             copy_video(media.map_preview_video, preview_dst, config=config)
@@ -1287,15 +1289,21 @@ def install_map_to_game(
             shutil.copy2(src_path, textures_dir / dst_name)
     
     def _extract_coach_index(path: Path) -> int:
-        match = re.search(r"coach_(\d+)", path.name.lower())
+        match = re.search(r"coach[_-]?(\d+)", path.name.lower())
         return int(match.group(1)) if match else 0
 
     # Coaches are now separated into main and phone lists in normalize_sync.
     # We use the index from the filename to ensure correct mapping even if some are missing.
+    fallback_idx = 1
+    used_indices: set[int] = set()
     for coach_img in media.coach_images:
         if coach_img.exists():
             idx = _extract_coach_index(coach_img)
-            if idx == 0: continue # Skip if no index found
+            if idx == 0:
+                while fallback_idx in used_indices:
+                    fallback_idx += 1
+                idx = fallback_idx
+            used_indices.add(idx)
             
             suffix = coach_img.suffix.lower()
             if coach_img.name.lower().endswith(".tga.ckd"):
@@ -1308,7 +1316,8 @@ def install_map_to_game(
     for phone_img in media.coach_phone_images:
         if phone_img.exists():
             idx = _extract_coach_index(phone_img)
-            if idx == 0: continue
+            if idx == 0:
+                continue
             
             ext = ".png" # Phone assets are usually PNG
             if phone_img.name.lower().endswith(".tga.ckd"):
