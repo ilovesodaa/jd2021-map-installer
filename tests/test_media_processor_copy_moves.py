@@ -61,3 +61,49 @@ def test_copy_moves_rejects_text_like_or_tiny_gesture_files(tmp_path: Path) -> N
     assert not (pc / "tiny_bad.gesture").exists()
     assert not (pc / "text_bad.gesture").exists()
     assert copied == 1
+
+
+def test_copy_moves_synthesizes_fallback_gestures_when_none_survive(tmp_path: Path) -> None:
+    game_root = tmp_path / "maps_root"
+    target = game_root / "jdnext_map"
+
+    src = tmp_path / "source_moves"
+    scarlett = src / "scarlett"
+    durango = src / "durango"
+    scarlett.mkdir(parents=True)
+    durango.mkdir(parents=True)
+
+    # Unsupported platform gestures are collected as expected names.
+    _write_binary_gesture(scarlett / "jdnext_a.gesture")
+    _write_binary_gesture(scarlett / "jdnext_b.gesture")
+
+    # MSM-only moves should also get a paired gesture fallback.
+    (durango / "jdnext_c.msm").write_text("msm", encoding="utf-8")
+
+    copied = copy_moves(src, target)
+    pc = target / "timeline" / "moves" / "pc"
+
+    assert (pc / "jdnext_a.gesture").exists()
+    assert (pc / "jdnext_b.gesture").exists()
+    assert (pc / "jdnext_c.gesture").exists()
+    assert (pc / "jdnext_c.msm").exists()
+    assert copied == 4
+
+
+def test_copy_moves_uses_bundled_generic_template(tmp_path: Path) -> None:
+    src = tmp_path / "source_moves"
+    scarlett = src / "scarlett"
+    scarlett.mkdir(parents=True)
+    _write_binary_gesture(scarlett / "need_fallback.gesture")
+
+    target = tmp_path / "game_map"
+    copied = copy_moves(src, target)
+
+    pc = target / "timeline" / "moves" / "pc"
+    out = pc / "need_fallback.gesture"
+    assert out.exists()
+    assert copied == 1
+
+    bundled = Path(__file__).resolve().parents[1] / "assets" / "gesture_templates" / "discorope.gesture"
+    assert bundled.exists()
+    assert out.read_bytes() == bundled.read_bytes()

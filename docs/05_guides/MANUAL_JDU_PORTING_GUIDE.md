@@ -92,6 +92,7 @@ A complete JD2021 map requires the following structure under `World/MAPS/[MapNam
 │   └── Moves/
 │       ├── PC/             # Must contain the union of all platform gesture files
 │       ├── DURANGO/        # Xbox One Kinect .gesture files
+│       ├── X360/           # Xbox 360 Kinect v1 .gesture files
 │       ├── ORBIS/          # PS4 .gesture files (incompatible format with PC)
 │       └── WIIU/           # .msm skeleton files
 │
@@ -258,7 +259,7 @@ The first sample of the WAV corresponds to marker 0 = beat `startBeat`. If `star
 | **Black Video** | Incorrect DASH MPD | Ensure namespace is `urn:mpeg:DASH:schema:MPD:2011` |
 | **Missing Title** | SkuScene Registration | Verify the map entry in `SkuScene_Maps_PC_All.isc` |
 | **Autodance error after Apply** | Sync refinement regenerated empty stub over converted data | Reinstall the map; the pipeline now protects autodance files from overwrite |
-| **Kinect gesture load failure** | ORBIS (PS4) `.gesture` files copied to PC/ | Only use `.gesture` files from DURANGO/SCARLETT (Kinect format); substitute ORBIS-exclusive variants with the base Kinect gesture |
+| **Kinect gesture load failure / coach-select freeze** | Non-Kinect or newer-schema `.gesture` files copied to PC/ (including camera-scoring style gesture payloads) | Only use `.gesture` files from X360/DURANGO (Kinect v1/v2 format). Treat unknown/new-schema gesture payloads as incompatible with JD2021 PC and skip them. |
 | **"Can't find gesture resource"** | Missing gesture file in PC/ Moves folder | Ensure PC/ contains the union of `.gesture` (from DURANGO) and `.msm` (from WIIU) files from all platforms |
 | **Preview/decode failures for some maps** | Missing FFmpeg/FFprobe or missing vgmstream runtime | Re-run dependency setup and confirm both toolchains are available before reinstall/readjust |
 

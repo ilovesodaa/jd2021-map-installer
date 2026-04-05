@@ -1032,6 +1032,7 @@ def copy_moves(
 
     pc_moves_dir = Path(target_dir) / "timeline" / "moves" / "pc"
     total_copied = 0
+    skipped_gesture_names: set[str] = set()
 
     KINECT_GESTURE_PLATFORMS = {"DURANGO", "X360"}
 
@@ -1046,6 +1047,7 @@ def copy_moves(
             for gesture_file in plat_dir.glob("*.gesture"):
                 is_valid, reason = _is_probably_valid_kinect_gesture(gesture_file)
                 if not is_valid:
+                    skipped_gesture_names.add(gesture_file.name)
                     logger.warning(
                         "Skipping incompatible gesture '%s' from %s: %s",
                         gesture_file.name,
@@ -1059,8 +1061,10 @@ def copy_moves(
                     shutil.copy2(gesture_file, dest)
                     total_copied += 1
         else:
-            gesture_count = sum(1 for _ in plat_dir.glob("*.gesture"))
+            unsupported_gestures = list(plat_dir.glob("*.gesture"))
+            gesture_count = len(unsupported_gestures)
             if gesture_count:
+                skipped_gesture_names.update(g.name for g in unsupported_gestures)
                 logger.info(
                     "Skipping %d gesture file(s) from unsupported platform '%s'",
                     gesture_count,
@@ -1098,6 +1102,79 @@ def copy_moves(
                 pc_moves_dir.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(sub_src, pc_moves_dir / fname)
                 total_copied += 1
+
+    # JDNext recovery path: if zero compatible gestures survived, synthesize expected
+    # classifier names from a known-good Kinect template (prefer discorope).
+    pc_gestures = {f.name for f in pc_moves_dir.glob("*.gesture")}
+    if not pc_gestures:
+        expected_names: set[str] = set(skipped_gesture_names)
+        for plat_dir in src_root.iterdir():
+            if not plat_dir.is_dir():
+                continue
+            for msm_file in plat_dir.glob("*.msm"):
+                expected_names.add(f"{msm_file.stem}.gesture")
+
+        expected_names = {
+            name
+            for name in expected_names
+            if name and not (pc_moves_dir / name).exists()
+        }
+
+        if expected_names:
+            def _pick_template_gesture() -> Optional[Path]:
+                bundled_candidates = [
+                    Path(__file__).resolve().parents[2] / "assets" / "gesture_templates" / "discorope.gesture",
+                ]
+                for candidate in bundled_candidates:
+                    if candidate.exists():
+                        ok, _ = _is_probably_valid_kinect_gesture(candidate)
+                        if ok:
+                            return candidate
+
+                explicit_candidates: list[Path] = []
+                for plat_dir in src_root.iterdir():
+                    if not plat_dir.is_dir():
+                        continue
+                    explicit_candidates.extend([
+                        plat_dir / "discorop.gesture",
+                        plat_dir / "Discorop.gesture",
+                        plat_dir / "discorope.gesture",
+                        plat_dir / "Discorope.gesture",
+                        plat_dir / "generic.gesture",
+                        plat_dir / "Generic.gesture",
+                    ])
+
+                for candidate in explicit_candidates:
+                    if candidate.exists():
+                        ok, _ = _is_probably_valid_kinect_gesture(candidate)
+                        if ok:
+                            return candidate
+
+                return None
+
+            template = _pick_template_gesture()
+            if template is None:
+                logger.warning(
+                    "No valid gesture template found; cannot synthesize %d missing gesture file(s).",
+                    len(expected_names),
+                )
+            else:
+                pc_moves_dir.mkdir(parents=True, exist_ok=True)
+                created = 0
+                for name in sorted(expected_names):
+                    dest = pc_moves_dir / name
+                    if dest.exists():
+                        continue
+                    shutil.copy2(template, dest)
+                    created += 1
+
+                if created:
+                    total_copied += created
+                    logger.info(
+                        "Synthesized %d fallback gesture file(s) from template '%s'.",
+                        created,
+                        template.name,
+                    )
 
     if total_copied:
         logger.info("Merged %d gesture/msm file(s) from %s into PC/", total_copied, src_root)
