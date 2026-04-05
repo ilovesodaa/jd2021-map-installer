@@ -882,6 +882,7 @@ class MainWindow(QMainWindow):
             MODE_FETCH,
             MODE_JDNEXT,
             MODE_HTML,
+            MODE_HTML_JDNEXT,
             MODE_IPK,
             MODE_BATCH,
             MODE_MANUAL,
@@ -916,6 +917,18 @@ class MainWindow(QMainWindow):
                 issues.append(f"Asset HTML file was not found: {asset_html}")
             if not Path(nohud_html).is_file():
                 issues.append(f"NOHUD HTML file was not found: {nohud_html}")
+            if not issues:
+                self._current_target = asset_html
+            return issues
+
+        if idx == MODE_HTML_JDNEXT:
+            html_jdnext_fields = fields.get("html_jdnext", {}) if isinstance(fields, dict) else {}
+            asset_html = str(html_jdnext_fields.get("asset", "")).strip()
+            if not asset_html:
+                issues.append("Asset HTML file is required for HTML Files JDNext mode.")
+                return issues
+            if not Path(asset_html).is_file():
+                issues.append(f"Asset HTML file was not found: {asset_html}")
             if not issues:
                 self._current_target = asset_html
             return issues
@@ -2508,6 +2521,7 @@ class MainWindow(QMainWindow):
             MODE_FETCH,
             MODE_JDNEXT,
             MODE_HTML,
+            MODE_HTML_JDNEXT,
             MODE_IPK,
             MODE_BATCH,
             MODE_MANUAL,
@@ -2563,6 +2577,25 @@ class MainWindow(QMainWindow):
             return WebPlaywrightExtractor(
                 asset_html=asset_html,
                 nohud_html=nohud_html,
+                source_game="jdu",
+                config=self._config,
+                quality=self._config.video_quality,
+            )
+
+        if idx == MODE_HTML_JDNEXT:
+            from jd2021_installer.extractors.web_playwright import WebPlaywrightExtractor
+
+            html_jdnext_fields = source_fields.get("html_jdnext", {}) if isinstance(source_fields, dict) else {}
+            asset_html = str(html_jdnext_fields.get("asset", ""))
+
+            if not asset_html:
+                QMessageBox.warning(self, "Missing File", "Please select the JDNext Asset HTML file.")
+                return None
+
+            return WebPlaywrightExtractor(
+                asset_html=asset_html,
+                nohud_html=None,
+                source_game="jdnext",
                 config=self._config,
                 quality=self._config.video_quality,
             )

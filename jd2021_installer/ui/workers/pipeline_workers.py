@@ -741,6 +741,17 @@ class BatchInstallWorker(QObject):
 
                 return asset, nohud
 
+            def detect_html_source_game(asset_html: Optional[Path]) -> str:
+                if asset_html is None or not asset_html.is_file():
+                    return "jdu"
+                try:
+                    content = asset_html.read_text(encoding="utf-8", errors="ignore").lower()
+                except OSError:
+                    return "jdu"
+                if "/jdnext/maps/" in content or "server:jdnext" in content:
+                    return "jdnext"
+                return "jdu"
+
             def looks_like_prepared_map_dir(folder: Path) -> bool:
                 if not folder.is_dir():
                     return False
@@ -794,14 +805,16 @@ class BatchInstallWorker(QObject):
                     candidates.append({"kind": "ipk", "path": self._source_dir})
                 elif self._source_dir.is_dir():
                     root_asset, root_nohud = find_html_pair(self._source_dir)
-                    if root_asset and root_nohud:
+                    root_source_game = detect_html_source_game(root_asset)
+                    if root_asset and (root_nohud or root_source_game == "jdnext"):
                         candidates.append(
                             {
-                                "kind": "html",
+                                "kind": "html_jdnext" if root_source_game == "jdnext" else "html",
                                 "path": self._source_dir,
                                 "name": self._source_dir.name,
                                 "asset": root_asset,
                                 "nohud": root_nohud,
+                                "source_game": root_source_game,
                             }
                         )
 
@@ -814,14 +827,16 @@ class BatchInstallWorker(QObject):
                                 continue
 
                             asset_html, nohud_html = find_html_pair(path)
-                            if asset_html and nohud_html:
+                            source_game = detect_html_source_game(asset_html)
+                            if asset_html and (nohud_html or source_game == "jdnext"):
                                 candidates.append(
                                     {
-                                        "kind": "html",
+                                        "kind": "html_jdnext" if source_game == "jdnext" else "html",
                                         "path": path,
                                         "name": path.name,
                                         "asset": asset_html,
                                         "nohud": nohud_html,
+                                        "source_game": source_game,
                                     }
                                 )
             
@@ -847,7 +862,7 @@ class BatchInstallWorker(QObject):
                     from jd2021_installer.extractors.archive_ipk import inspect_ipk
                     maps_in_ipk = inspect_ipk(cpath)
                     map_names.extend(maps_in_ipk or [cpath.stem])
-                elif kind == "html":
+                elif kind in {"html", "html_jdnext"}:
                     map_names.append(str(candidate.get("name") or cpath.name))
                 else:
                     map_names.append(cpath.name)
@@ -888,7 +903,11 @@ class BatchInstallWorker(QObject):
             batch_cache.mkdir(parents=True, exist_ok=True)
 
             # V1-style parity: prepare all HTML-sourced maps first while links are fresh.
-            html_candidates = [c for c in candidates if str(c["kind"]) == "html"]
+            html_candidates = [
+                c
+                for c in candidates
+                if str(c["kind"]) in {"html", "html_jdnext"}
+            ]
             if html_candidates:
                 self.status.emit("Phase 1/2: Preparing HTML-sourced batch maps...")
                 for idx, candidate in enumerate(html_candidates, start=1):
@@ -896,7 +915,9 @@ class BatchInstallWorker(QObject):
                     if selected_lookup and map_name.lower() not in selected_lookup:
                         continue
                     asset_html = Path(candidate["asset"])
-                    nohud_html = Path(candidate["nohud"])
+                    raw_nohud = candidate.get("nohud")
+                    nohud_html = Path(raw_nohud) if raw_nohud else None
+                    source_game = str(candidate.get("source_game") or "jdu").strip().lower() or "jdu"
 
                     self.status.emit(
                         f"[{idx}/{len(html_candidates)}] Downloading/Preparing HTML map {map_name}..."
@@ -906,7 +927,8 @@ class BatchInstallWorker(QObject):
 
                         extractor = WebPlaywrightExtractor(
                             asset_html=str(asset_html),
-                            nohud_html=str(nohud_html),
+                            nohud_html=str(nohud_html) if nohud_html else None,
+                            source_game=source_game,
                             quality=self._config.video_quality,
                             config=self._config,
                         )
@@ -916,7 +938,11 @@ class BatchInstallWorker(QObject):
                         logger.warning("Failed HTML prepare for %s: %s", map_name, e)
                         self.status.emit(f"Warning: Failed HTML prepare for {map_name} ({str(e)[:40]})")
 
-            process_candidates = [c for c in candidates if str(c["kind"]) != "html"]
+            process_candidates = [
+                c
+                for c in candidates
+                if str(c["kind"]) not in {"html", "html_jdnext"}
+            ]
 
             self.status.emit("Phase 2/2: Installing prepared maps...")
 
