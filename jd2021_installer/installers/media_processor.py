@@ -1095,39 +1095,37 @@ def copy_moves(
 
     # Pass 2: Substitute non-Kinect naming variants with already accepted gestures
     # (disabled when gesture import is explicitly skipped)
-    if skip_gestures:
-        if total_copied:
-            logger.info("Merged %d move file(s) from %s into PC/ (gestures intentionally skipped)", total_copied, src_root)
-        return total_copied
+    if not skip_gestures:
+        pc_gestures = {f.name for f in pc_moves_dir.glob("*.gesture")}
 
-    pc_gestures = {f.name for f in pc_moves_dir.glob("*.gesture")}
-
-    for plat_dir in src_root.iterdir():
-        if (
-            not plat_dir.is_dir()
-            or plat_dir.name.upper() in KINECT_GESTURE_PLATFORMS
-            or plat_dir.name.upper() == "PC"
-        ):
-            continue
-
-        for gesture_file in plat_dir.glob("*.gesture"):
-            fname = gesture_file.name
-            if fname in pc_gestures or (pc_moves_dir / fname).exists():
+        for plat_dir in src_root.iterdir():
+            if (
+                not plat_dir.is_dir()
+                or plat_dir.name.upper() in KINECT_GESTURE_PLATFORMS
+                or plat_dir.name.upper() == "PC"
+            ):
                 continue
 
-            stem = gesture_file.stem
-            base = stem.rstrip("0123456789")
-            sub_src = pc_moves_dir / (base + ".gesture")
+            for gesture_file in plat_dir.glob("*.gesture"):
+                fname = gesture_file.name
+                if fname in pc_gestures or (pc_moves_dir / fname).exists():
+                    continue
 
-            if base != stem and sub_src.exists():
-                pc_moves_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(sub_src, pc_moves_dir / fname)
-                total_copied += 1
+                stem = gesture_file.stem
+                base = stem.rstrip("0123456789")
+                sub_src = pc_moves_dir / (base + ".gesture")
 
-    # JDNext recovery path: if zero compatible gestures survived, synthesize expected
-    # classifier names from a known-good Kinect template (prefer discorope).
+                if base != stem and sub_src.exists():
+                    pc_moves_dir.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(sub_src, pc_moves_dir / fname)
+                    total_copied += 1
+
+    # Recovery path: synthesize expected classifier names from a known-good
+    # Kinect template (prefer discorope). For skip_gestures mode this is the
+    # primary path, ensuring all mentioned gesture names are generated.
     pc_gestures = {f.name for f in pc_moves_dir.glob("*.gesture")}
-    if not pc_gestures:
+    should_synthesize = skip_gestures or not pc_gestures
+    if should_synthesize:
         expected_names: set[str] = set(skipped_gesture_names)
         for plat_dir in src_root.iterdir():
             if not plat_dir.is_dir():
