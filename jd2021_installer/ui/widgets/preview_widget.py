@@ -28,11 +28,12 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import QObject, QThread, Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, QThread, QTimer, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QSlider,
     QSizePolicy,
@@ -132,10 +133,16 @@ class _FrameReaderWorker(QObject):
                 creationflags=_CFLAGS,
             )
 
+            wall_start = 0.0
+
             while not self._stop_flag.is_set():
                 data = b""
+                ffmpeg_stdout = self._ffmpeg.stdout if self._ffmpeg else None
+                if ffmpeg_stdout is None:
+                    self.playback_ended.emit()
+                    return
                 while len(data) < frame_size:
-                    chunk = self._ffmpeg.stdout.read(frame_size - len(data))
+                    chunk = ffmpeg_stdout.read(frame_size - len(data))
                     if not chunk:
                         # EOF — video over
                         self.playback_ended.emit()
@@ -143,27 +150,25 @@ class _FrameReaderWorker(QObject):
                     data += chunk
 
                 frames_read += 1
-                position += 1.0 / self._fps
 
-                # Launch audio once the first video frame is available.
-                # This keeps AV startup aligned when ffmpeg decode has warm-up delay.
-                if frames_read == 1 and self._ffplay_cmd:
-                    try:
-                        self._ffplay = subprocess.Popen(
-                            self._ffplay_cmd,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            creationflags=_CFLAGS,
-                        )
-                    except FileNotFoundError:
-                        logger.warning("ffplay not found — audio preview disabled.")
-                        self.ffplay_missing.emit()
-                    except Exception as exc:
-                        logger.error("Could not launch ffplay: %s", exc)
-
-                if frames_read == 1 and wall_start <= 0:
-                    # Optional startup bias to emulate older preview pacing behavior.
+                if frames_read == 1:
+                    # Anchor both audio and video timing to first decoded frame.
+                    # This avoids per-timestamp drift where some seek targets need
+                    # more decode warm-up before video output becomes available.
                     wall_start = time.time() + self._startup_compensation_s
+                    if self._ffplay_cmd:
+                        try:
+                            self._ffplay = subprocess.Popen(
+                                self._ffplay_cmd,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                creationflags=_CFLAGS,
+                            )
+                        except FileNotFoundError:
+                            logger.warning("ffplay not found — audio preview disabled.")
+                            self.ffplay_missing.emit()
+                        except Exception as exc:
+                            logger.error("Could not launch ffplay: %s", exc)
 
                 if self._stop_flag.is_set():
                     return
@@ -179,11 +184,14 @@ class _FrameReaderWorker(QObject):
                 pixmap = QPixmap.fromImage(q_img.copy())  # .copy() — data outlives loop
                 self.frame_ready.emit(pixmap)
 
-                # Emit position every 12 frames (~0.5 s)
-                if frames_read % 12 == 0:
-                    self.position_updated.emit(position)
+                if wall_start > 0:
+                    position = self._start_position + max(0.0, time.time() - wall_start)
 
-                # Simple wall-clock throttle to the active preview FPS
+                # Emit position every frame so seek/relaunch operations use
+                # up-to-date timestamps instead of 0.5s-quantized values.
+                self.position_updated.emit(position)
+
+                # Keep preview rendering near target FPS without relying on ffmpeg -re.
                 if wall_start > 0:
                     expected = frames_read / float(self._fps)
                     now = time.time()
@@ -199,7 +207,10 @@ class _FrameReaderWorker(QObject):
     # -- internal ----------------------------------------------------------
 
     def _cleanup(self) -> None:
-        for proc, label in [(self._ffmpeg, "ffmpeg"), (self._ffplay, "ffplay")]:
+        for proc, label in [
+            (self._ffmpeg, "ffmpeg"),
+            (self._ffplay, "ffplay"),
+        ]:
             if proc is None:
                 continue
             try:
@@ -264,7 +275,11 @@ class PreviewWidget(QWidget):
         self._preview_fps_default: float = float(PREVIEW_FPS)
         self._playback_fps: float = float(PREVIEW_FPS)
         self._preview_startup_compensation_ms: float = 100.0
+        self._startup_compensation_override_ms: Optional[float] = None
         self._preview_proxy_cache: dict[str, str] = {}
+        self._repeat_seek_timer = QTimer(self)
+        self._repeat_seek_timer.setInterval(900)
+        self._repeat_seek_timer.timeout.connect(self._on_repeat_seek_tick)
 
         self._build_ui()
 
@@ -358,6 +373,38 @@ class PreviewWidget(QWidget):
         btn_row.addStretch()
         root.addLayout(btn_row)
 
+        # -- Timestamp test tools ------------------------------------------
+        test_row = QHBoxLayout()
+        test_row.setContentsMargins(4, 0, 4, 0)
+
+        test_label = QLabel("Test:")
+        test_label.setObjectName("previewTestTimestampLabel")
+        test_row.addWidget(test_label)
+
+        self._timestamp_input = QLineEdit()
+        self._timestamp_input.setObjectName("previewTestTimestampInput")
+        self._timestamp_input.setPlaceholderText("3.0 or 0:03.250")
+        self._timestamp_input.setToolTip("Timestamp for quick sync testing")
+        self._timestamp_input.setMinimumWidth(120)
+        self._timestamp_input.returnPressed.connect(self._go_to_test_timestamp)
+        test_row.addWidget(self._timestamp_input)
+
+        self._btn_go_timestamp = QPushButton("Go")
+        self._btn_go_timestamp.setObjectName("previewGoTimestampButton")
+        self._btn_go_timestamp.setToolTip("Jump to test timestamp")
+        self._btn_go_timestamp.clicked.connect(self._go_to_test_timestamp)
+        test_row.addWidget(self._btn_go_timestamp)
+
+        self._btn_repeat_timestamp = QPushButton("Repeat Off")
+        self._btn_repeat_timestamp.setObjectName("previewRepeatTimestampButton")
+        self._btn_repeat_timestamp.setCheckable(True)
+        self._btn_repeat_timestamp.setToolTip("Repeatedly jump to test timestamp")
+        self._btn_repeat_timestamp.toggled.connect(self._on_repeat_seek_toggled)
+        test_row.addWidget(self._btn_repeat_timestamp)
+
+        test_row.addStretch()
+        root.addLayout(test_row)
+
     # ==================================================================
     # PUBLIC API
     # ==================================================================
@@ -399,6 +446,7 @@ class PreviewWidget(QWidget):
         loop_start: float = 0.0,
         loop_end: float = 0.0,
         preview_fps: Optional[float] = None,
+        startup_compensation_ms: Optional[float] = None,
     ) -> None:
         """Start (or restart) embedded preview playback.
 
@@ -423,6 +471,14 @@ class PreviewWidget(QWidget):
                 fps_val = self._preview_fps_default
             effective_fps = fps_val if fps_val > 0 else self._preview_fps_default
 
+        if startup_compensation_ms is None:
+            effective_startup_compensation_ms = self._preview_startup_compensation_ms
+        else:
+            try:
+                effective_startup_compensation_ms = max(0.0, float(startup_compensation_ms))
+            except (TypeError, ValueError):
+                effective_startup_compensation_ms = self._preview_startup_compensation_ms
+
         resolved_video_path = self._resolve_preview_video_path(video_path)
         resolved_audio_path = self._resolve_preview_audio_path(audio_path)
 
@@ -434,6 +490,7 @@ class PreviewWidget(QWidget):
         self._loop_start = max(0.0, loop_start)
         self._loop_end = max(0.0, loop_end)
         self._playback_fps = effective_fps
+        self._startup_compensation_override_ms = startup_compensation_ms
         self._stop_requested = False
 
         # Kill previous, but keep position if we are just restarting/seeking
@@ -472,21 +529,29 @@ class PreviewWidget(QWidget):
         vid_seek += start_time
         aud_seek += start_time
 
-        vf_chain = (
-            f"scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos,"
-            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black"
-        )
+        coarse_video_seek = 0
+        fine_video_seek = max(0.0, vid_seek)
+
+        vf_filters: list[str] = []
+        if fine_video_seek > 1e-6:
+            vf_filters.extend([
+                f"trim=start={fine_video_seek:.6f}",
+                "setpts=PTS-STARTPTS",
+            ])
         if video_delay_s > 0:
-            vf_chain = f"tpad=start_duration={video_delay_s:.6f}," + vf_chain
+            vf_filters.append(f"tpad=start_duration={video_delay_s:.6f}")
+        vf_filters.append(
+            f"scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos"
+        )
+        vf_filters.append(f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black")
+        vf_chain = ",".join(vf_filters)
 
         fps_arg = str(int(effective_fps)) if abs(effective_fps - round(effective_fps)) < 1e-6 else f"{effective_fps:.6f}"
 
         ffmpeg_cmd: list[str] = [self._ffmpeg_path, "-loglevel", "error"]
         if self._ffmpeg_hwaccel == "auto":
             ffmpeg_cmd += ["-hwaccel", "auto"]
-        if vid_seek > 0:
-            # Fast seek keeps scrubbing responsive for frequent preview jumps.
-            ffmpeg_cmd += ["-ss", f"{vid_seek:.6f}"]
+        # Accuracy-first preview seek: avoid input-seek keyframe snapping.
         ffmpeg_cmd += [
             "-i", resolved_video_path,
             "-vf", vf_chain,
@@ -499,14 +564,20 @@ class PreviewWidget(QWidget):
         ffplay_cmd: list[str] = [
             self._ffplay_path, "-nodisp", "-autoexit", "-loglevel", "quiet",
         ]
-        if aud_seek > 0:
-            # Keep audio seek fast for rapid seek/preview interactions.
-            ffplay_cmd += ["-ss", f"{aud_seek:.6f}"]
+        fine_audio_seek = max(0.0, aud_seek)
         ffplay_cmd += ["-i", resolved_audio_path]
+
+        afilters: list[str] = []
+        if fine_audio_seek > 1e-6:
+            # Fine decoder-side trim preserves fractional precision after coarse seek.
+            afilters.extend([
+                f"atrim=start={fine_audio_seek:.6f}",
+                "asetpts=PTS-STARTPTS",
+            ])
         if aud_delay_ms > 0:
-            ffplay_cmd += [
-                "-af", f"adelay={aud_delay_ms}|{aud_delay_ms},asetpts=PTS-STARTPTS",
-            ]
+            afilters.append(f"adelay={aud_delay_ms}|{aud_delay_ms}")
+        if afilters:
+            ffplay_cmd += ["-af", ",".join(afilters)]
 
         # Build worker + thread
         self._position = start_time
@@ -519,7 +590,7 @@ class PreviewWidget(QWidget):
             ffplay_cmd=ffplay_cmd,
             start_position=start_time,
             fps=effective_fps,
-            startup_compensation_ms=self._preview_startup_compensation_ms,
+            startup_compensation_ms=effective_startup_compensation_ms,
         )
         thread = QThread()
         worker.moveToThread(thread)
@@ -547,6 +618,7 @@ class PreviewWidget(QWidget):
             reset_position: If True, sets _position back to 0.0 and clears labels.
             clear_canvas: If True, clears the preview canvas to "No Preview".
         """
+        self._set_repeat_seek_enabled(False)
         self._stop_requested = True
         if self._worker is not None:
             self._worker.request_stop()
@@ -636,6 +708,7 @@ class PreviewWidget(QWidget):
                 loop_start=self._loop_start,
                 loop_end=self._loop_end,
                 preview_fps=self._playback_fps,
+                startup_compensation_ms=self._startup_compensation_override_ms,
             )
             return
 
@@ -659,6 +732,84 @@ class PreviewWidget(QWidget):
             self.stop(reset_position=False, clear_canvas=False)
         else:
             self._relaunch(self._position)
+
+    def _parse_timestamp_input(self) -> Optional[float]:
+        raw = self._timestamp_input.text().strip() if hasattr(self, "_timestamp_input") else ""
+        if not raw:
+            return None
+
+        try:
+            if ":" in raw:
+                parts = raw.split(":")
+                if len(parts) != 2:
+                    return None
+                mins = float(parts[0])
+                secs = float(parts[1])
+                value = (mins * 60.0) + secs
+            else:
+                value = float(raw)
+        except ValueError:
+            return None
+
+        return max(0.0, value)
+
+    def _jump_to_timestamp(self, target: float) -> None:
+        if self._duration > 0:
+            target = min(target, self._duration)
+
+        self._position = target
+        self.position_changed.emit(self._position)
+        self._lbl_time.setText(self._fmt(target))
+
+        if self._duration > 0:
+            pct = int((target / self._duration) * 1000)
+            self._seek_slider.blockSignals(True)
+            self._seek_slider.setValue(min(max(pct, 0), 1000))
+            self._seek_slider.blockSignals(False)
+
+        if self._playing:
+            self._relaunch(target)
+
+    def _go_to_test_timestamp(self) -> None:
+        target = self._parse_timestamp_input()
+        if target is None:
+            logger.warning("Invalid preview test timestamp input: '%s'", self._timestamp_input.text().strip())
+            return
+        self._jump_to_timestamp(target)
+
+    def _set_repeat_seek_enabled(self, enabled: bool) -> None:
+        if enabled:
+            self._repeat_seek_timer.start()
+        else:
+            self._repeat_seek_timer.stop()
+
+        if self._btn_repeat_timestamp.isChecked() != enabled:
+            self._btn_repeat_timestamp.blockSignals(True)
+            self._btn_repeat_timestamp.setChecked(enabled)
+            self._btn_repeat_timestamp.blockSignals(False)
+        self._btn_repeat_timestamp.setText("Repeat On" if enabled else "Repeat Off")
+
+    def _on_repeat_seek_toggled(self, enabled: bool) -> None:
+        if enabled:
+            target = self._parse_timestamp_input()
+            if target is None:
+                logger.warning("Repeat seek ignored due to invalid timestamp input.")
+                self._set_repeat_seek_enabled(False)
+                return
+            self._jump_to_timestamp(target)
+            self._set_repeat_seek_enabled(True)
+            return
+
+        self._set_repeat_seek_enabled(False)
+
+    def _on_repeat_seek_tick(self) -> None:
+        if not self._playing:
+            return
+        target = self._parse_timestamp_input()
+        if target is None:
+            self._set_repeat_seek_enabled(False)
+            return
+        self._jump_to_timestamp(target)
 
     def _seek_relative(self, delta: float) -> None:
         new_pos = max(0.0, min(self._position + delta, self._duration))
@@ -706,20 +857,62 @@ class PreviewWidget(QWidget):
                 loop_start=self._loop_start,
                 loop_end=self._loop_end,
                 preview_fps=self._playback_fps,
+                startup_compensation_ms=self._startup_compensation_override_ms,
             )
 
     # ==================================================================
     # HELPERS
     # ==================================================================
 
-    @staticmethod
-    def _resolve_preview_audio_path(audio_path: str) -> str:
+    def _resolve_preview_audio_path(self, audio_path: str) -> str:
         """Resolve a preview-playable audio path.
 
         Preview input may be a cooked `.wav.ckd` path that ffplay cannot decode.
         Prefer existing decoded siblings first, then try a one-time decode fallback.
         """
         path = Path(audio_path)
+
+        # Convert streaming formats to a seek-friendly PCM WAV cache for stable preview jumps.
+        if path.suffix.lower() in {".ogg", ".opus"}:
+            try:
+                stat = path.stat()
+                cache_key_src = f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}"
+                cache_key = hashlib.sha1(cache_key_src.encode("utf-8")).hexdigest()
+                cache_dir = Path(tempfile.gettempdir()) / "jd2021_preview_audio_cache"
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                cached_wav = cache_dir / f"{path.stem}_{cache_key[:10]}_seek.wav"
+                if cached_wav.exists() and cached_wav.stat().st_size > 1024:
+                    return str(cached_wav)
+
+                cmd = [
+                    self._ffmpeg_path,
+                    "-y",
+                    "-v",
+                    "error",
+                    "-i",
+                    str(path),
+                    "-ac",
+                    "2",
+                    "-ar",
+                    "48000",
+                    "-c:a",
+                    "pcm_s16le",
+                    str(cached_wav),
+                ]
+                completed = subprocess.run(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=_CFLAGS,
+                    timeout=120,
+                    check=False,
+                )
+                if completed.returncode == 0 and cached_wav.exists() and cached_wav.stat().st_size > 1024:
+                    logger.info("Preview audio cache created: %s", cached_wav.name)
+                    return str(cached_wav)
+            except Exception as exc:
+                logger.debug("Preview audio cache conversion skipped for %s: %s", path.name, exc)
+
         if path.suffix.lower() != ".ckd":
             return audio_path
 

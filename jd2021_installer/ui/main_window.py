@@ -1460,6 +1460,9 @@ class MainWindow(QMainWindow):
         nudge_ms = float(getattr(self._config, "preview_only_audio_offset_ms", 0.0) or 0.0)
 
         if self._is_jdnext_source_map(map_data):
+            # Fetch/HTML normalization includes +85ms engine calibration for install-time
+            # behavior. Preview runs through ffplay and should not keep that engine bias.
+            nudge_ms -= 85.0
             beat_nudge = float(getattr(self._config, "jdnext_preview_beat_nudge", 0.0) or 0.0)
             if abs(beat_nudge) > 1e-9:
                 beat_ms = self._estimate_ms_per_beat(map_data)
@@ -2168,13 +2171,15 @@ class MainWindow(QMainWindow):
                 a_offset += preview_nudge_s
                 loop_start, loop_end = self._get_preview_loop_seconds(self._current_map)
                 preview_fps = self._get_preview_fps_for_map(self._current_map)
+                startup_compensation_ms: Optional[float] = 0.0 if self._is_jdnext_source_map(self._current_map) else None
                 
                 logger.debug(
-                    "Preview launch: v_override=%.3f, a_offset=%.3f, preview_nudge=%.3f, fps=%.3f",
+                    "Preview launch: v_override=%.3f, a_offset=%.3f, preview_nudge=%.3f, fps=%.3f, startup_comp_ms=%s",
                     v_override,
                     a_offset,
                     preview_nudge_s,
                     preview_fps,
+                    "0.0" if startup_compensation_ms == 0.0 else "default",
                 )
 
                 self._preview_widget.launch(
@@ -2184,6 +2189,7 @@ class MainWindow(QMainWindow):
                     loop_start=loop_start,
                     loop_end=loop_end,
                     preview_fps=preview_fps,
+                    startup_compensation_ms=startup_compensation_ms,
                 )
             else:
                 self.append_log("No video available for preview.")
@@ -2232,8 +2238,12 @@ class MainWindow(QMainWindow):
             a_offset += preview_nudge_s
             loop_start, loop_end = self._get_preview_loop_seconds(self._current_map)
             preview_fps = self._get_preview_fps_for_map(self._current_map)
+            startup_compensation_ms: Optional[float] = 0.0 if self._is_jdnext_source_map(self._current_map) else None
             
-            logger.debug("Debounced preview restart...")
+            logger.debug(
+                "Debounced preview restart (startup_comp_ms=%s)...",
+                "0.0" if startup_compensation_ms == 0.0 else "default",
+            )
             self._preview_widget.launch(
                 str(self._current_map.media.video_path),
                 str(self._current_map.media.audio_path),
@@ -2243,6 +2253,7 @@ class MainWindow(QMainWindow):
                 loop_start=loop_start,
                 loop_end=loop_end,
                 preview_fps=preview_fps,
+                startup_compensation_ms=startup_compensation_ms,
             )
 
     def _on_pad_audio(self) -> None:
