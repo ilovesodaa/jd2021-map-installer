@@ -1460,9 +1460,8 @@ class MainWindow(QMainWindow):
         nudge_ms = float(getattr(self._config, "preview_only_audio_offset_ms", 0.0) or 0.0)
 
         if self._is_jdnext_source_map(map_data):
-            # Fetch/HTML normalization includes +85ms engine calibration for install-time
-            # behavior. Preview runs through ffplay and should not keep that engine bias.
-            nudge_ms -= 85.0
+            # JDNext preview-only correction. This never affects install/in-game offsets.
+            nudge_ms += float(getattr(self._config, "jdnext_preview_only_audio_offset_ms", -85.0) or 0.0)
             beat_nudge = float(getattr(self._config, "jdnext_preview_beat_nudge", 0.0) or 0.0)
             if abs(beat_nudge) > 1e-9:
                 beat_ms = self._estimate_ms_per_beat(map_data)
