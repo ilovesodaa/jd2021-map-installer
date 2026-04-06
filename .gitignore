@@ -17,6 +17,7 @@ docs/sessions/
 tools/
 .venv/
 map_readjust_index.json
+jdnext_songdb_synth*
 3rdPartyTools/
 jd2021-map-installer.code-workspace
 .github/

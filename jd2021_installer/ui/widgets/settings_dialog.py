@@ -8,6 +8,7 @@ from typing import Optional
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
+    QApplication,
     QDialog,
     QCheckBox,
     QComboBox,
@@ -20,6 +21,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QFileDialog,
     QMessageBox,
+    QProgressDialog,
     QSpinBox,
     QWidget,
     QSizePolicy,
@@ -29,6 +31,10 @@ from jd2021_installer.core.config import AppConfig
 from jd2021_installer.core.localization_update import (
     resolve_console_save_path,
     update_console_localization,
+)
+from jd2021_installer.core.songdb_update import (
+    resolve_songdb_synth_path,
+    synthesize_jdnext_songdb,
 )
 
 logger = logging.getLogger("jd2021.ui.widgets.settings_dialog")
@@ -348,6 +354,14 @@ class SettingsDialog(QDialog):
         localization_row.addStretch()
         integrations_layout.addLayout(localization_row)
 
+        songdb_row = QHBoxLayout()
+        songdb_row.addWidget(QLabel("Update JDNext song database cache from JSON:"))
+        self.btn_update_songdb = QPushButton("Update Song Database...")
+        self.btn_update_songdb.clicked.connect(self._on_update_songdb)
+        songdb_row.addWidget(self.btn_update_songdb)
+        songdb_row.addStretch()
+        integrations_layout.addLayout(songdb_row)
+
         integrations_layout.addStretch()
 
         tabs.addTab(tab_integrations, "Integrations")
@@ -451,6 +465,75 @@ class SettingsDialog(QDialog):
             f"Updated IDs: {result.updated_existing}\n"
             f"New IDs: {result.added_new}\n\n"
             f"Backup: {result.backup_path}",
+        )
+
+    def _on_update_songdb(self) -> None:
+        default_dir = str(Path.cwd())
+        selected_file, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select JDNext song database JSON",
+            default_dir,
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not selected_file:
+            return
+
+        output_path = resolve_songdb_synth_path()
+        confirm = QMessageBox.question(
+            self,
+            "Confirm Song Database Update",
+            "Use this file to synthesize the local JDNext song database cache?\n\n"
+            f"Source: {selected_file}\n"
+            f"Output: {output_path}\n\n"
+            "This cache helps metadata fallback when source extraction is incomplete.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        progress = QProgressDialog("Synthesizing JDNext song database cache...", "", 0, 0, self)
+        progress.setWindowTitle("Updating Song Database")
+        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        progress.setMinimumDuration(0)
+        progress.setCancelButton(None)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.show()
+        QApplication.processEvents()
+
+        try:
+            logger.info("Starting JDNext song database synthesis from %s", selected_file)
+            result = synthesize_jdnext_songdb(Path(selected_file), output_dir=output_path.parent)
+            logger.info(
+                "JDNext song database synthesized: source=%s usable=%s keys=%s output=%s",
+                result.source_entries,
+                result.usable_entries,
+                result.index_keys,
+                result.output_path,
+            )
+        except Exception as exc:
+            logger.exception("Song database synthesis failed: %s", exc)
+            QMessageBox.critical(
+                self,
+                "Song Database Update Failed",
+                f"Could not synthesize JDNext song database cache:\n{exc}",
+            )
+            return
+        finally:
+            progress.close()
+
+        backup_line = f"Backup: {result.backup_path}\n" if result.backup_path else ""
+        QMessageBox.information(
+            self,
+            "Song Database Updated",
+            "JDNext song database cache created successfully.\n\n"
+            f"Source entries: {result.source_entries}\n"
+            f"Usable entries: {result.usable_entries}\n"
+            f"Indexed keys: {result.index_keys}\n\n"
+            f"Output: {result.output_path}\n"
+            f"{backup_line}"
+            "If this cache is missing later, installer fallback remains active.",
         )
 
     def get_config(self) -> AppConfig:

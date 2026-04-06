@@ -914,6 +914,9 @@ class BatchInstallWorker(QObject):
                     map_name = str(candidate.get("name") or Path(candidate["path"]).name)
                     if selected_lookup and map_name.lower() not in selected_lookup:
                         continue
+                    # Reserve an early progress slice for HTML/JDNext preparation so UI does not appear stalled.
+                    phase1_progress = 3 + int((idx / max(len(html_candidates), 1)) * 17)
+                    emit_progress(min(20, phase1_progress))
                     asset_html = Path(candidate["asset"])
                     raw_nohud = candidate.get("nohud")
                     nohud_html = Path(raw_nohud) if raw_nohud else None
@@ -937,6 +940,8 @@ class BatchInstallWorker(QObject):
                     except Exception as e:
                         logger.warning("Failed HTML prepare for %s: %s", map_name, e)
                         self.status.emit(f"Warning: Failed HTML prepare for {map_name} ({str(e)[:40]})")
+
+                emit_progress(20)
 
             process_candidates = [
                 c

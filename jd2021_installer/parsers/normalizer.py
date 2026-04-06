@@ -35,11 +35,16 @@ from jd2021_installer.core.models import (
     SoundSetClip,
     TapeReferenceClip,
 )
+from jd2021_installer.core.songdb_update import (
+    find_songdb_entry,
+    resolve_songdb_synth_path,
+)
 from jd2021_installer.parsers.binary_ckd import parse_binary_ckd
 
 logger = logging.getLogger("jd2021.parsers.normalizer")
 
 JDU_AUDIO_CALIBRATION_MS = 85.0
+_SONGDB_SYNTH_MISSING_WARNED = False
 
 
 def _is_jdnext_source(source_dir: Path, media: MapMedia) -> bool:
@@ -654,6 +659,155 @@ def _apply_jdnext_metadata_songdesc_overrides(
     coach_count = _to_int(other_info.get("coach_count"))
     if coach_count is not None and coach_count > 0 and coach_count > song_desc.num_coach:
         song_desc.num_coach = coach_count
+
+
+def _apply_jdnext_songdb_cache_overrides(
+    codename: str,
+    song_desc: SongDescription,
+    music_track: Optional[MusicTrackStructure],
+) -> None:
+    """Overlay synthesized JDNext songdb cache values when available.
+
+    This cache is optional. If missing, normalizer keeps existing behavior.
+    """
+    global _SONGDB_SYNTH_MISSING_WARNED
+
+    synth_path = resolve_songdb_synth_path()
+    if not synth_path.exists():
+        if not _SONGDB_SYNTH_MISSING_WARNED:
+            logger.warning(
+                "JDNext songdb cache not found at %s. Continuing with default metadata fallback.",
+                synth_path,
+            )
+            _SONGDB_SYNTH_MISSING_WARNED = True
+        return
+
+    entry = find_songdb_entry(
+        codename=codename,
+        map_name=song_desc.map_name,
+        title=song_desc.title,
+        synth_path=synth_path,
+    )
+    if not entry:
+        logger.debug(
+            "JDNext songdb cache lookup miss for codename='%s' map_name='%s' title='%s'",
+            codename,
+            song_desc.map_name,
+            song_desc.title,
+        )
+        return
+
+    logger.debug(
+        "JDNext songdb cache lookup hit for codename='%s' (entry_id=%s)",
+        codename,
+        entry.get("entry_id"),
+    )
+
+    applied_fields: list[str] = []
+
+    def _as_int(value: object) -> Optional[int]:
+        if value is None or isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            return None
+
+    def _as_float(value: object) -> Optional[float]:
+        if value is None or isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
+    tags = entry.get("tags")
+    if isinstance(tags, list):
+        cleaned_tags = [str(t).strip() for t in tags if str(t).strip()]
+        if cleaned_tags and (not song_desc.tags or song_desc.tags == ["Main"]):
+            song_desc.tags = cleaned_tags
+            applied_fields.append("tags")
+
+    credits = str(entry.get("credits", "") or "").strip()
+    if credits and not str(song_desc.credits or "").strip():
+        song_desc.credits = credits
+        applied_fields.append("credits")
+
+    mapped_title = str(entry.get("title", "") or "").strip()
+    if mapped_title and (not str(song_desc.title or "").strip() or song_desc.title == song_desc.map_name):
+        song_desc.title = mapped_title
+        applied_fields.append("title")
+
+    mapped_artist = str(entry.get("artist", "") or "").strip()
+    if mapped_artist and not str(song_desc.artist or "").strip():
+        song_desc.artist = mapped_artist
+        applied_fields.append("artist")
+
+    difficulty = _as_int(entry.get("difficulty"))
+    if difficulty is not None and song_desc.difficulty in (0, 2):
+        song_desc.difficulty = difficulty
+        applied_fields.append("difficulty")
+
+    sweat_difficulty = _as_int(entry.get("sweat_difficulty"))
+    if sweat_difficulty is not None and song_desc.sweat_difficulty in (0, 1):
+        song_desc.sweat_difficulty = sweat_difficulty
+        applied_fields.append("sweat_difficulty")
+
+    coach_count = _as_int(entry.get("coach_count"))
+    if coach_count is not None and coach_count > 0 and coach_count > song_desc.num_coach:
+        song_desc.num_coach = coach_count
+        applied_fields.append("coach_count")
+
+    original_ver = _as_int(entry.get("original_jd_version"))
+    if original_ver is not None and song_desc.original_jd_version in (0, 2021):
+        song_desc.original_jd_version = original_ver
+        applied_fields.append("original_jd_version")
+
+    if not music_track:
+        return
+
+    preview_entry = _as_float(entry.get("preview_entry"))
+    preview_loop_start = _as_float(entry.get("preview_loop_start"))
+    preview_loop_end = _as_float(entry.get("preview_loop_end"))
+    video_start_time = _as_float(entry.get("video_start_time"))
+
+    if preview_entry is not None and music_track.preview_entry <= 0:
+        music_track.preview_entry = preview_entry
+        applied_fields.append("preview_entry")
+    if preview_loop_start is not None and music_track.preview_loop_start <= 0:
+        music_track.preview_loop_start = preview_loop_start
+        applied_fields.append("preview_loop_start")
+    if preview_loop_end is not None and (
+        music_track.preview_loop_end <= 0
+        or music_track.preview_loop_end <= music_track.preview_loop_start
+    ):
+        music_track.preview_loop_end = preview_loop_end
+        applied_fields.append("preview_loop_end")
+    if video_start_time is not None and music_track.video_start_time == 0.0:
+        music_track.video_start_time = video_start_time
+        applied_fields.append("video_start_time")
+
+    if applied_fields:
+        logger.info(
+            "Applied JDNext songdb cache overrides for '%s': %s",
+            codename,
+            ", ".join(applied_fields),
+        )
+    else:
+        logger.debug(
+            "JDNext songdb cache entry found for '%s' but no overrides were needed",
+            codename,
+        )
 
 
 def _extract_dance_tape(
@@ -1316,7 +1470,9 @@ def normalize(
         music_track = None
 
     song_desc = _extract_song_desc(source_root_str, codename)
+    effective_codename = codename or song_desc.map_name
     _apply_jdnext_metadata_songdesc_overrides(source_root_str, song_desc)
+    _apply_jdnext_songdb_cache_overrides(effective_codename, song_desc, music_track)
     dance_tape = _extract_dance_tape(source_root_str, codename)
     karaoke_tape = _extract_karaoke_tape(source_root_str, codename)
     cinematic_tape = _extract_cinematic_tape(source_root_str, codename)
