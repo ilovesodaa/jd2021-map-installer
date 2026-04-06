@@ -12,6 +12,8 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QLineEdit,
+    QFormLayout,
+    QTabWidget,
     QVBoxLayout,
     QHBoxLayout,
     QPushButton,
@@ -37,8 +39,8 @@ class SettingsDialog(QDialog):
 
     def __init__(self, config: AppConfig, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Installer Settings")
-        self.setMinimumSize(560, 520)
+        self.setWindowTitle("Settings")
+        self.setMinimumSize(780, 620)
         self.setModal(True)
         
         # We work on a copy of the config, and only return it if Save is clicked.
@@ -53,6 +55,21 @@ class SettingsDialog(QDialog):
 
         self._build_ui()
 
+    @staticmethod
+    def _set_combo_from_value(combo: QComboBox, value: str) -> None:
+        idx = combo.findData(value)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+            return
+
+        text_idx = combo.findText(value)
+        combo.setCurrentIndex(text_idx if text_idx >= 0 else 0)
+
+    @staticmethod
+    def _combo_value(combo: QComboBox) -> str:
+        data = combo.currentData()
+        return str(data) if data is not None else combo.currentText()
+
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -63,67 +80,72 @@ class SettingsDialog(QDialog):
         title.setObjectName("settingsDialogTitle")
         layout.addWidget(title)
 
+        subtitle = QLabel("These settings control installer behavior, defaults, and UI appearance.")
+        subtitle.setObjectName("settingsDialogSubtitle")
+        layout.addWidget(subtitle)
+
+        tabs = QTabWidget()
+        tabs.setObjectName("settingsDialogTabs")
+        layout.addWidget(tabs, 1)
+
+        # ----- General tab -----
+        tab_general = QWidget()
+        general_layout = QVBoxLayout(tab_general)
+        general_layout.setContentsMargins(10, 10, 10, 10)
+        general_layout.setSpacing(10)
+
         # skip_preflight
-        self.cb_skip_preflight = QCheckBox("Skip pre-flight checks")
+        self.cb_skip_preflight = QCheckBox("Skip startup pre-flight checks")
         self.cb_skip_preflight.setChecked(self._config.skip_preflight)
         self.cb_skip_preflight.setToolTip(
-            "Skip pre-flight checks if they've already passed.\n"
-            "The Install button will be enabled immediately on launch."
+            "Skip the pre-flight check on app launch.\n"
+            "Use this only when your setup is stable and already validated."
         )
-        layout.addWidget(self.cb_skip_preflight)
+        general_layout.addWidget(self.cb_skip_preflight)
 
         # suppress_offset_notification
-        self.cb_suppress = QCheckBox("Suppress offset refinement notification")
+        self.cb_suppress = QCheckBox("Hide post-install offset refinement reminder")
         self.cb_suppress.setChecked(self._config.suppress_offset_notification)
         self.cb_suppress.setToolTip(
-            "Don't show the 'offset refinement is needed' popup\n"
-            "after the installation pipeline completes."
+            "Do not show the reminder popup about offset refinement\n"
+            "after install completes."
         )
-        layout.addWidget(self.cb_suppress)
+        general_layout.addWidget(self.cb_suppress)
 
-        # cleanup_behavior
-        cleanup_row = QHBoxLayout()
-        cleanup_label = QLabel("After Apply & Finish:")
-        cleanup_row.addWidget(cleanup_label)
+        general_form = QFormLayout()
+        general_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        general_form.setHorizontalSpacing(12)
+        general_form.setVerticalSpacing(10)
         
         self.combo_cleanup = QComboBox()
-        self.combo_cleanup.addItems(["ask", "delete", "keep"])
-        self.combo_cleanup.setCurrentText(self._config.cleanup_behavior)
+        self.combo_cleanup.addItem("Ask every time", "ask")
+        self.combo_cleanup.addItem("Always delete temporary files", "delete")
+        self.combo_cleanup.addItem("Keep temporary files", "keep")
+        self._set_combo_from_value(self.combo_cleanup, self._config.cleanup_behavior)
         self.combo_cleanup.setToolTip(
-            "ask: show prompt after apply\n"
-            "delete: auto-delete intermediate files immediately\n"
-            "keep: keep files and never show cleanup prompt"
+            "Choose what happens to installer temp files after install."
         )
-        cleanup_row.addWidget(self.combo_cleanup)
-        cleanup_row.addStretch()
-        layout.addLayout(cleanup_row)
-
-        # locked_status_behavior
-        locked_row = QHBoxLayout()
-        locked_label = QLabel("Non-3 song status handling:")
-        locked_row.addWidget(locked_label)
+        general_form.addRow("After install cleanup:", self.combo_cleanup)
 
         self.combo_locked_status = QComboBox()
-        self.combo_locked_status.addItems(["ask", "force3", "keep"])
-        self.combo_locked_status.setCurrentText(self._config.locked_status_behavior)
+        self.combo_locked_status.addItem("Ask when needed", "ask")
+        self.combo_locked_status.addItem("Always force status to 3 (unlocked)", "force3")
+        self.combo_locked_status.addItem("Keep original status values", "keep")
+        self._set_combo_from_value(self.combo_locked_status, self._config.locked_status_behavior)
         self.combo_locked_status.setToolTip(
-            "ask: prompt when any song status other than 3 is detected\n"
-            "force3: always force non-3 statuses to 3 (already unlocked)\n"
-            "keep: always keep the original status value\n"
-            "Status meaning labels are editable in code: jd2021_installer/ui/main_window.py (_SONG_STATUS_MEANINGS)."
+            "Controls how the installer treats locked-song status values\n"
+            "when importing maps."
         )
-        locked_row.addWidget(self.combo_locked_status)
-        locked_row.addStretch()
-        layout.addLayout(locked_row)
+        general_form.addRow("Song unlock status:", self.combo_locked_status)
 
         # show_preflight_success_popup
-        self.cb_preflight_popup = QCheckBox("Show 'Pre-flight passed' popup")
+        self.cb_preflight_popup = QCheckBox("Show pre-flight success popup")
         self.cb_preflight_popup.setChecked(self._config.show_preflight_success_popup)
         self.cb_preflight_popup.setToolTip(
-            "If disabled, passing pre-flight will only enable the Install button\n"
-            "without opening a popup."
+            "If disabled, passing pre-flight only enables Install\n"
+            "without opening a confirmation popup."
         )
-        layout.addWidget(self.cb_preflight_popup)
+        general_layout.addWidget(self.cb_preflight_popup)
 
         self.cb_install_summary = QCheckBox("Show installation summary popup")
         self.cb_install_summary.setChecked(getattr(self._config, "show_install_summary_popup", True))
@@ -131,50 +153,47 @@ class SettingsDialog(QDialog):
             "Shows a checklist-style summary at the end of install with\n"
             "required/optional files, counts, and warnings."
         )
-        layout.addWidget(self.cb_install_summary)
+        general_layout.addWidget(self.cb_install_summary)
 
         # show_quickstart_on_launch
-        self.cb_quickstart = QCheckBox("Show quick-start hint on launch")
+        self.cb_quickstart = QCheckBox("Show quick-start help on launch")
         self.cb_quickstart.setChecked(self._config.show_quickstart_on_launch)
         self.cb_quickstart.setToolTip(
             "Shows a short beginner guide at startup.\n"
             "Helpful for users who skip documentation."
         )
-        layout.addWidget(self.cb_quickstart)
-
-        # log_detail_level
-        log_row = QHBoxLayout()
-        log_label = QLabel("Log detail level:")
-        log_row.addWidget(log_label)
+        general_layout.addWidget(self.cb_quickstart)
 
         self.combo_log_detail = QComboBox()
-        self.combo_log_detail.addItems(["quiet", "user", "detailed", "developer"])
-        self.combo_log_detail.setCurrentText(self._config.log_detail_level)
+        self.combo_log_detail.addItem("Quiet (warnings and errors only)", "quiet")
+        self.combo_log_detail.addItem("Normal (recommended)", "user")
+        self.combo_log_detail.addItem("Detailed (extra debug in logs)", "detailed")
+        self.combo_log_detail.addItem("Developer (maximum verbosity)", "developer")
+        self._set_combo_from_value(self.combo_log_detail, self._config.log_detail_level)
         self.combo_log_detail.setToolTip(
-            "quiet: show warnings/errors only\n"
-            "user: normal user-facing progress and issues\n"
-            "detailed: normal output + debug details in install log files\n"
-            "developer: full debug output in UI and logs"
+            "Controls how much detail appears in the app and log files."
         )
-        log_row.addWidget(self.combo_log_detail)
-        log_row.addStretch()
-        layout.addLayout(log_row)
-
-        # theme
-        theme_row = QHBoxLayout()
-        theme_label = QLabel("Theme:")
-        theme_row.addWidget(theme_label)
+        general_form.addRow("Log detail level:", self.combo_log_detail)
 
         self.combo_theme = QComboBox()
-        self.combo_theme.addItems(["light", "dark"])
-        self.combo_theme.setCurrentText(self._config.theme)
+        self.combo_theme.addItem("Light", "light")
+        self.combo_theme.addItem("Dark", "dark")
+        self._set_combo_from_value(self.combo_theme, self._config.theme)
         self.combo_theme.setToolTip(
-            "light: default system-friendly theme\n"
-            "dark: premium dark theme"
+            "Pick the installer color theme."
         )
-        theme_row.addWidget(self.combo_theme)
-        theme_row.addStretch()
-        layout.addLayout(theme_row)
+        general_form.addRow("Theme:", self.combo_theme)
+
+        general_layout.addLayout(general_form)
+        general_layout.addStretch()
+
+        tabs.addTab(tab_general, "General")
+
+        # ----- Window tab -----
+        tab_window = QWidget()
+        window_layout = QVBoxLayout(tab_window)
+        window_layout.setContentsMargins(10, 10, 10, 10)
+        window_layout.setSpacing(10)
 
         # minimum window size policy
         self.cb_enforce_min_size = QCheckBox("Enforce minimum window size")
@@ -182,10 +201,15 @@ class SettingsDialog(QDialog):
         self.cb_enforce_min_size.setToolTip(
             "When disabled, the main window can be resized smaller than the default minimum."
         )
-        layout.addWidget(self.cb_enforce_min_size)
+        window_layout.addWidget(self.cb_enforce_min_size)
+
+        window_form = QFormLayout()
+        window_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        window_form.setHorizontalSpacing(12)
+        window_form.setVerticalSpacing(10)
 
         min_size_row = QHBoxLayout()
-        min_size_row.addWidget(QLabel("Minimum window size:"))
+        min_size_row.setSpacing(8)
 
         self.spin_min_width = QSpinBox()
         self.spin_min_width.setRange(640, 3840)
@@ -201,7 +225,11 @@ class SettingsDialog(QDialog):
         self.spin_min_height.setSuffix(" px")
         min_size_row.addWidget(self.spin_min_height)
         min_size_row.addStretch()
-        layout.addLayout(min_size_row)
+
+        min_size_widget = QWidget()
+        min_size_widget.setLayout(min_size_row)
+        window_form.addRow("Minimum window size:", min_size_widget)
+        window_layout.addLayout(window_form)
 
         def _toggle_min_size_inputs(enabled: bool) -> None:
             self.spin_min_width.setEnabled(enabled)
@@ -217,7 +245,7 @@ class SettingsDialog(QDialog):
         self.cb_size_overlay.setToolTip(
             "Displays an overlay like 1280 x 720 when you resize the main window."
         )
-        layout.addWidget(self.cb_size_overlay)
+        window_layout.addWidget(self.cb_size_overlay)
 
         self.cb_style_debug = QCheckBox("Enable Style Debug Mode (outline sections)")
         self.cb_style_debug.setChecked(
@@ -228,27 +256,29 @@ class SettingsDialog(QDialog):
             "While enabled, stylesheet edits auto-reload as you save.\n"
             "Use while tuning colors, then disable for normal appearance."
         )
-        layout.addWidget(self.cb_style_debug)
+        window_layout.addWidget(self.cb_style_debug)
+        window_layout.addStretch()
 
-        # video_quality
-        quality_row = QHBoxLayout()
-        quality_label = QLabel("Default video quality:")
-        quality_row.addWidget(quality_label)
-        
+        tabs.addTab(tab_window, "Window")
+
+        # ----- Media tab -----
+        tab_media = QWidget()
+        media_layout = QVBoxLayout(tab_media)
+        media_layout.setContentsMargins(10, 10, 10, 10)
+        media_layout.setSpacing(10)
+
+        media_form = QFormLayout()
+        media_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        media_form.setHorizontalSpacing(12)
+        media_form.setVerticalSpacing(10)
+
         self.combo_quality = QComboBox()
         self.combo_quality.addItems([
             "ULTRA_HD", "ULTRA", "HIGH_HD", "HIGH",
             "MID_HD", "MID", "LOW_HD", "LOW"
         ])
         self.combo_quality.setCurrentText(self._config.video_quality)
-        quality_row.addWidget(self.combo_quality)
-        quality_row.addStretch()
-        layout.addLayout(quality_row)
-
-        # ffmpeg_hwaccel
-        hw_row = QHBoxLayout()
-        hw_label = QLabel("FFmpeg acceleration:")
-        hw_row.addWidget(hw_label)
+        media_form.addRow("Default download quality:", self.combo_quality)
 
         self.combo_hwaccel = QComboBox()
         self.combo_hwaccel.addItems(["auto", "none"])
@@ -257,30 +287,47 @@ class SettingsDialog(QDialog):
             "auto: let FFmpeg pick available hardware decoding acceleration\n"
             "none: disable hardware acceleration"
         )
-        hw_row.addWidget(self.combo_hwaccel)
-        hw_row.addStretch()
-        layout.addLayout(hw_row)
+        media_form.addRow("FFmpeg acceleration:", self.combo_hwaccel)
 
-        # preview_video_mode
-        preview_row = QHBoxLayout()
-        preview_label = QLabel("Preview video mode:")
-        preview_row.addWidget(preview_label)
+        self.combo_vp9_mode = QComboBox()
+        self.combo_vp9_mode.addItem("Re-encode VP9 to VP8 (best compatibility)", "reencode_to_vp8")
+        self.combo_vp9_mode.addItem("Use next compatible quality down (no re-encode)", "fallback_compatible_down")
+        current_vp9_mode = getattr(self._config, "vp9_handling_mode", "reencode_to_vp8")
+        vp9_idx = self.combo_vp9_mode.findData(current_vp9_mode)
+        self.combo_vp9_mode.setCurrentIndex(vp9_idx if vp9_idx >= 0 else 0)
+        self.combo_vp9_mode.setToolTip(
+            "Re-encode VP9 to VP8: keeps requested tier but may reduce quality.\n"
+            "Next compatible down: skips VP9 tiers and picks a lower HD-compatible tier."
+        )
+        media_form.addRow("VP9 handling:", self.combo_vp9_mode)
 
         self.combo_preview_mode = QComboBox()
-        self.combo_preview_mode.addItems(["proxy_low", "original"])
-        self.combo_preview_mode.setCurrentText(getattr(self._config, "preview_video_mode", "proxy_low"))
-        self.combo_preview_mode.setToolTip(
-            "proxy_low: create and use a low-resolution proxy for smoother preview seeking\n"
-            "original: use the original video file for preview"
+        self.combo_preview_mode.addItem("Low-res proxy (faster and smoother)", "proxy_low")
+        self.combo_preview_mode.addItem("Original video file", "original")
+        self._set_combo_from_value(
+            self.combo_preview_mode,
+            getattr(self._config, "preview_video_mode", "proxy_low"),
         )
-        preview_row.addWidget(self.combo_preview_mode)
-        preview_row.addStretch()
-        layout.addLayout(preview_row)
+        self.combo_preview_mode.setToolTip(
+            "Choose whether preview uses a generated proxy or the source file."
+        )
+        media_form.addRow("Preview source:", self.combo_preview_mode)
 
-        # discord_channel_url
-        discord_row = QHBoxLayout()
-        discord_label = QLabel("Discord Channel URL:")
-        discord_row.addWidget(discord_label)
+        media_layout.addLayout(media_form)
+        media_layout.addStretch()
+
+        tabs.addTab(tab_media, "Media")
+
+        # ----- Integrations tab -----
+        tab_integrations = QWidget()
+        integrations_layout = QVBoxLayout(tab_integrations)
+        integrations_layout.setContentsMargins(10, 10, 10, 10)
+        integrations_layout.setSpacing(10)
+
+        integrations_form = QFormLayout()
+        integrations_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        integrations_form.setHorizontalSpacing(12)
+        integrations_form.setVerticalSpacing(10)
 
         self.txt_discord_url = QLineEdit()
         self.txt_discord_url.setText(self._config.discord_channel_url)
@@ -290,24 +337,28 @@ class SettingsDialog(QDialog):
             "Required for Fetch (Codename) mode.\n"
             "Copy from your browser's address bar while in the channel."
         )
-        discord_row.addWidget(self.txt_discord_url)
-        layout.addLayout(discord_row)
+        integrations_form.addRow("Discord channel URL:", self.txt_discord_url)
+        integrations_layout.addLayout(integrations_form)
 
         localization_row = QHBoxLayout()
-        localization_row.addWidget(QLabel("Localization:"))
+        localization_row.addWidget(QLabel("Update in-game localization from JSON:"))
         self.btn_update_localization = QPushButton("Update In-Game Localization...")
         self.btn_update_localization.clicked.connect(self._on_update_localization)
         localization_row.addWidget(self.btn_update_localization)
         localization_row.addStretch()
-        layout.addLayout(localization_row)
+        integrations_layout.addLayout(localization_row)
 
-        layout.addStretch()
+        integrations_layout.addStretch()
+
+        tabs.addTab(tab_integrations, "Integrations")
+
+        tabs.setCurrentIndex(0)
 
         # Buttons
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        btn_save = QPushButton("Save")
+        btn_save = QPushButton("Save Settings")
         btn_save.setMinimumWidth(80)
         btn_save.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         btn_save.clicked.connect(self._on_save)
@@ -324,13 +375,13 @@ class SettingsDialog(QDialog):
     def _on_save(self) -> None:
         self._config.skip_preflight = self.cb_skip_preflight.isChecked()
         self._config.suppress_offset_notification = self.cb_suppress.isChecked()
-        self._config.cleanup_behavior = self.combo_cleanup.currentText()
-        self._config.locked_status_behavior = self.combo_locked_status.currentText()
+        self._config.cleanup_behavior = self._combo_value(self.combo_cleanup)
+        self._config.locked_status_behavior = self._combo_value(self.combo_locked_status)
         self._config.show_preflight_success_popup = self.cb_preflight_popup.isChecked()
         self._config.show_install_summary_popup = self.cb_install_summary.isChecked()
         self._config.show_quickstart_on_launch = self.cb_quickstart.isChecked()
-        self._config.log_detail_level = self.combo_log_detail.currentText()
-        self._config.theme = self.combo_theme.currentText()
+        self._config.log_detail_level = self._combo_value(self.combo_log_detail)
+        self._config.theme = self._combo_value(self.combo_theme)
         self._config.enforce_min_window_size = self.cb_enforce_min_size.isChecked()
         self._config.min_window_width = self.spin_min_width.value()
         self._config.min_window_height = self.spin_min_height.value()
@@ -338,7 +389,8 @@ class SettingsDialog(QDialog):
         self._config.style_debug_mode = self.cb_style_debug.isChecked()
         self._config.video_quality = self.combo_quality.currentText()
         self._config.ffmpeg_hwaccel = self.combo_hwaccel.currentText()
-        self._config.preview_video_mode = self.combo_preview_mode.currentText()
+        self._config.vp9_handling_mode = str(self.combo_vp9_mode.currentData())
+        self._config.preview_video_mode = self._combo_value(self.combo_preview_mode)
         self._config.discord_channel_url = self.txt_discord_url.text().strip()
         
         self.accept()

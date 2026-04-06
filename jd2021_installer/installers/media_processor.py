@@ -196,11 +196,20 @@ def copy_video(
         raise MediaProcessingError(f"Source video not found: {src}")
 
     same_extension = src.suffix.lower() == dst.suffix.lower()
+    cfg = config or AppConfig()
+    vp9_mode = getattr(cfg, "vp9_handling_mode", "reencode_to_vp8")
     src_codec = _get_video_codec(src, config=config)
     looks_like_vp9_variant = src.name.lower().endswith(".vp9.webm")
-    requires_vp9_compat_transcode = src_codec == "vp9" or looks_like_vp9_variant
+    source_is_vp9 = src_codec == "vp9" or looks_like_vp9_variant
+    requires_vp9_compat_transcode = source_is_vp9 and vp9_mode == "reencode_to_vp8"
 
     if not force_reencode and same_extension and not requires_vp9_compat_transcode:
+        if source_is_vp9 and vp9_mode == "fallback_compatible_down":
+            logger.warning(
+                "VP9 source reached install with fallback_compatible_down mode; "
+                "copying original file unchanged: %s",
+                src.name,
+            )
         shutil.copy2(src, dst)
         logger.info("Copied video: %s -> %s", src.name, dst)
         return dst
@@ -211,17 +220,23 @@ def copy_video(
     logger.info("Converting video to target format: %s -> %s", src.name, dst.name)
     run_ffmpeg(
         [
-            "-y",
+           "-y",
             "-hwaccel", "auto",
             "-i", str(src),
             "-an",
             "-c:v", "libvpx",
             "-pix_fmt", "yuv420p",
-            "-row-mt", "1",
-            "-deadline", "good",
-            "-cpu-used", "4",
-            "-b:v", "0",
-            "-crf", "10",
+            # --- THE CHANGES START HERE ---
+            "-deadline", "good",      # 'best' is overkill; 'good' is the standard high-quality
+            "-cpu-used", "2",          # 0-1 is extremely slow. 2 is the "sweet spot" for quality/speed
+            "-row-mt", "1",            # CRITICAL: Enables multithreading for VP8
+            "-threads", "0",           # Use all available CPU cores
+            # ------------------------------
+            "-b:v", "8500k",
+            "-maxrate", "11000k",
+            "-bufsize", "22000k",
+            "-qmin", "4",
+            "-qmax", "32",
             "-g", "25",
             "-keyint_min", "25",
             "-sc_threshold", "0",

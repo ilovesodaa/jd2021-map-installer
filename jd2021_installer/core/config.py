@@ -19,6 +19,7 @@ class AppConfig(BaseModel):
     download_root: Path = Path("./mapDownloads")
     cache_directory: Path = Path("./cache")
     temp_directory: Path = Path("./temp")
+    app_icon_path: Path = Path("./assets/app_icon.jpg")
 
     # Video quality preference (descending fallback)
     video_quality: str = Field(
@@ -59,13 +60,13 @@ class AppConfig(BaseModel):
     ticks_per_ms: int = 48
     max_jd_version: int = 2021
     min_jd_version: int = 2014
-    preview_fps: int = 24
+    preview_fps: int = 25
     preview_only_audio_offset_ms: float = 0.0
     jdnext_preview_beat_nudge: float = 0.0
     audio_preview_fade_s: float = 2.0
 
     # Discord Fetch Mode (replaces Node.js JDH_Downloader)
-    discord_channel_url: str = ""
+    discord_channel_url: str = "https://discord.com/channels/0000000000000000000/0000000000000000000"
     browser_profile_dir: Path = Path("./.browser-profile")
     fetch_login_timeout_s: int = 300
     fetch_bot_response_timeout_s: int = 60
@@ -74,7 +75,11 @@ class AppConfig(BaseModel):
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
     ffmpeg_hwaccel: str = Field(default="auto", pattern=r"^(auto|none)$")
-    preview_video_mode: str = Field(default="proxy_low", pattern=r"^(proxy_low|original)$")
+    vp9_handling_mode: str = Field(
+        default="fallback_compatible_down",
+        pattern=r"^(reencode_to_vp8|fallback_compatible_down)$",
+    )
+    preview_video_mode: str = Field(default="original", pattern=r"^(proxy_low|original)$")
 
     class Config:
         env_prefix = "JD2021_"

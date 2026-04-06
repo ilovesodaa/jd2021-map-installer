@@ -189,6 +189,50 @@ QLabel#settingsDialogTitle {
 	font-size: 14px;
 }
 
+QWidget#settingsDialog {
+	background-color: #181c24;
+}
+
+QLabel#settingsDialogSubtitle {
+	color: #a8b2c6;
+	font-size: 9.5pt;
+	padding: 0 0 2px 0;
+}
+
+QLabel[settingsSectionTitle="true"] {
+	color: #e3ebff;
+	font-size: 10.5pt;
+	font-weight: 700;
+	padding-top: 6px;
+	padding-bottom: 3px;
+	border-bottom: 1px solid #2d3648;
+}
+
+QTabWidget#settingsDialogTabs::pane {
+	border: 1px solid #2b3445;
+	border-radius: 6px;
+	background-color: #151923;
+	top: -1px;
+}
+
+QTabBar::tab {
+	background: #232b3b;
+	color: #cfd8ea;
+	border: 1px solid #2e3950;
+	padding: 6px 12px;
+	min-width: 100px;
+}
+
+QTabBar::tab:selected {
+	background: #2f3d56;
+	color: #f0f5ff;
+	border-bottom-color: #2f3d56;
+}
+
+QTabBar::tab:!selected {
+	margin-top: 2px;
+}
+
 QLabel#modeFetchWarningLabel,
 QLabel#modeHtmlWarningLabel,
 QLabel#modeIpkWarningLabel,

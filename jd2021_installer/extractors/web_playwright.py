@@ -406,7 +406,7 @@ def _extract_jdnext_aux_texture_bundles(
 # ---------------------------------------------------------------------------
 
 def _classify_urls(
-    urls: List[str], quality: str
+    urls: List[str], quality: str, config: Optional[AppConfig] = None
 ) -> Dict[str, object]:
     """Classify URLs into video, audio, mainscene, and other assets."""
     jdnext_video_re = re.compile(r"/video_(ultra|high|mid|low)\.(hd|vp8|vp9)\.webm/", re.IGNORECASE)
@@ -478,16 +478,28 @@ def _classify_urls(
     def _build_quality_search_order(selected_quality: str) -> List[str]:
         tiers = ["ULTRA", "HIGH", "MID", "LOW"]
         selected = (selected_quality or "ULTRA_HD").upper()
+        cfg = config or AppConfig()
+        vp9_mode = getattr(cfg, "vp9_handling_mode", "reencode_to_vp8")
 
         if selected.endswith("_HD"):
             selected_tier = selected[:-3]
-            prefer_hd_first = True
+            selected_is_hd = True
         else:
             selected_tier = selected
-            prefer_hd_first = False
+            selected_is_hd = False
 
         if selected_tier not in tiers:
             selected_tier = "ULTRA"
+
+        # Compatibility mode requested by user: avoid VP9 tiers entirely and
+        # pick the next compatible HD tier down.
+        if vp9_mode == "fallback_compatible_down":
+            start_idx = tiers.index(selected_tier)
+            if not selected_is_hd:
+                start_idx = min(start_idx + 1, len(tiers) - 1)
+            return [f"{tier}_HD" for tier in tiers[start_idx:]]
+
+        prefer_hd_first = selected_is_hd
 
         start_idx = tiers.index(selected_tier)
         ordered_tiers = tiers[start_idx:]
@@ -556,7 +568,7 @@ def download_files(
     download_path = Path(download_dir)
     download_path.mkdir(parents=True, exist_ok=True)
 
-    classified = _classify_urls(urls, quality)
+    classified = _classify_urls(urls, quality, config)
     important_urls: List[str] = []
     for key in ("video", "audio", "mainscene"):
         value = cast(Optional[str], classified.get(key))
@@ -1104,7 +1116,7 @@ class WebPlaywrightExtractor(BaseExtractor):
             raise WebExtractionError("No URLs provided for extraction")
 
         # V1-style guardrails: fail fast if key media links are missing.
-        classified_required = _classify_urls(all_urls, self._quality)
+        classified_required = _classify_urls(all_urls, self._quality, self._config)
         missing_required: list[str] = []
         if not classified_required.get("mainscene"):
             if self._source_game == "jdnext":
@@ -1150,7 +1162,7 @@ class WebPlaywrightExtractor(BaseExtractor):
         
         # 1b. Check for missing critical files (possible link expiration)
         missing_critical = False
-        classified = _classify_urls(all_urls, self._quality)
+        classified = _classify_urls(all_urls, self._quality, self._config)
         for key in ("video", "audio", "mainscene"):
             url = classified[key]
             if url:
@@ -1172,7 +1184,7 @@ class WebPlaywrightExtractor(BaseExtractor):
                 downloaded.update(refreshed)
 
         # V1 parity: fail fast when critical assets remain unavailable.
-        classified = _classify_urls(all_urls, self._quality)
+        classified = _classify_urls(all_urls, self._quality, self._config)
         still_missing: list[str] = []
         for key in ("video", "audio", "mainscene"):
             url = classified.get(key)
