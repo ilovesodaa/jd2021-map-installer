@@ -156,6 +156,23 @@ def get_video_duration(video_path: str | Path, config: Optional[AppConfig] = Non
         raise MediaProcessingError(f"Cannot determine duration of {video_path}")
 
 
+def _get_video_codec(video_path: str | Path, config: Optional[AppConfig] = None) -> str:
+    """Return the primary video codec name in lowercase, or empty string."""
+    result = run_ffprobe(
+        [
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=codec_name",
+            "-of", "default=nokey=1:noprint_wrappers=1",
+            str(video_path),
+        ],
+        config=config,
+    )
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip().lower()
+
+
 # ---------------------------------------------------------------------------
 # Video processing
 # ---------------------------------------------------------------------------
@@ -179,24 +196,35 @@ def copy_video(
         raise MediaProcessingError(f"Source video not found: {src}")
 
     same_extension = src.suffix.lower() == dst.suffix.lower()
-    if not force_reencode and same_extension:
+    src_codec = _get_video_codec(src, config=config)
+    looks_like_vp9_variant = src.name.lower().endswith(".vp9.webm")
+    requires_vp9_compat_transcode = src_codec == "vp9" or looks_like_vp9_variant
+
+    if not force_reencode and same_extension and not requires_vp9_compat_transcode:
         shutil.copy2(src, dst)
         logger.info("Copied video: %s -> %s", src.name, dst)
         return dst
 
     # Conversion path is only used when caller explicitly requests it or when
-    # output container differs from the source extension.
+    # output container differs from the source extension. We also transcode VP9
+    # sources to VP8 for better JD2021 runtime compatibility.
     logger.info("Converting video to target format: %s -> %s", src.name, dst.name)
     run_ffmpeg(
         [
             "-y",
+            "-hwaccel", "auto",
             "-i", str(src),
             "-an",
             "-c:v", "libvpx",
             "-pix_fmt", "yuv420p",
-            "-deadline", "realtime",
-            "-cpu-used", "8",
-            "-b:v", "2500k",
+            "-row-mt", "1",
+            "-deadline", "good",
+            "-cpu-used", "4",
+            "-b:v", "0",
+            "-crf", "10",
+            "-g", "25",
+            "-keyint_min", "25",
+            "-sc_threshold", "0",
             str(dst),
         ],
         config=config,

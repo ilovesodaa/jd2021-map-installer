@@ -1047,7 +1047,7 @@ def normalize_sync(
         if is_html_source:
             # Fetch/HTML mode (OGG)
             # V1 parity: marker-based sync for HTML mode.
-            # Audio keeps a constant +85ms calibration in all JDU branches.
+            # Audio keeps a constant +85ms calibration in all Fetch/HTML branches.
             prms_video = calculate_marker_preroll(
                 music_track.markers,
                 music_track.start_beat,
@@ -1060,14 +1060,7 @@ def normalize_sync(
             )
 
             metadata_ms = music_track.video_start_time * 1000.0
-            if is_jdnext_source:
-                # JDNext should still use marker/metadata-based audio alignment,
-                # but without the JDU-specific +85ms calibration.
-                if prms_audio is not None:
-                    audio_ms = -prms_audio
-                else:
-                    audio_ms = metadata_ms
-            elif prms_audio is not None:
+            if prms_audio is not None:
                 audio_ms = -prms_audio + JDU_AUDIO_CALIBRATION_MS
             else:
                 audio_ms = metadata_ms + JDU_AUDIO_CALIBRATION_MS

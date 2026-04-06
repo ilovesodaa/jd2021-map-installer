@@ -409,10 +409,10 @@ def _classify_urls(
     urls: List[str], quality: str
 ) -> Dict[str, object]:
     """Classify URLs into video, audio, mainscene, and other assets."""
-    jdnext_video_re = re.compile(r"/video_(ultra|high|mid|low)\.(hd|vp8)\.webm/", re.IGNORECASE)
-    jdnext_vp9_re = re.compile(r"/video_(ultra|high|mid|low)\.vp9\.webm/", re.IGNORECASE)
+    jdnext_video_re = re.compile(r"/video_(ultra|high|mid|low)\.(hd|vp8|vp9)\.webm/", re.IGNORECASE)
 
     video_urls_by_quality: Dict[str, str] = {}
+    jdnext_variant_by_quality: Dict[str, str] = {}
     audio_url: Optional[str] = None
     scene_zips: Dict[str, str] = {}
     other_urls: List[str] = []
@@ -422,24 +422,37 @@ def _classify_urls(
         if any(token in u_low for token in ("audiopreview", "videopreview", "mappreview")):
             continue
 
-        # Temporary compatibility policy for older JD2021 runtime builds:
-        # ignore JDNext VP9 variants and use HD/VP8 variants only.
-        if jdnext_vp9_re.search(u):
-            continue
-
         jdnext_q: Optional[str] = None
+        jdnext_variant: Optional[str] = None
         m = jdnext_video_re.search(u)
         if m:
             tier = m.group(1).upper()
             variant = m.group(2).lower()
-            # JDNext compatibility mode: HD and VP8 map to the HD slot.
-            jdnext_q = f"{tier}_HD" if variant in ("hd", "vp8") else tier
+            jdnext_variant = variant
+            # JDNext tier mapping:
+            # - *_HD tiers use .hd variants
+            # - non-HD tiers use .vp9 variants (later converted to VP8 on install)
+            # - .vp8 is treated as fallback for *_HD only
+            if variant == "hd":
+                jdnext_q = f"{tier}_HD"
+            elif variant == "vp9":
+                jdnext_q = tier
+            elif variant == "vp8":
+                jdnext_q = f"{tier}_HD"
         for q, pattern in QUALITY_PATTERNS.items():
             if pattern in u:
                 video_urls_by_quality[q] = u
                 break
         if jdnext_q:
-            video_urls_by_quality[jdnext_q] = u
+            existing_variant = jdnext_variant_by_quality.get(jdnext_q)
+            if existing_variant is None:
+                video_urls_by_quality[jdnext_q] = u
+                if jdnext_variant:
+                    jdnext_variant_by_quality[jdnext_q] = jdnext_variant
+            elif jdnext_variant == "hd" and existing_variant == "vp8":
+                # Prefer .hd when both .hd and .vp8 are present for the HD slot.
+                video_urls_by_quality[jdnext_q] = u
+                jdnext_variant_by_quality[jdnext_q] = jdnext_variant
         if (
             (
                 ".ogg" in u

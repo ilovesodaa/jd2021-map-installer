@@ -198,8 +198,8 @@ class TestNormalizerMusicTrack:
             assert abs(res.video_start_time - expected) < 0.0001
 
 
-    def test_html_source_forces_marker_sync(self):
-        """Metadata vst should be ignored for HTML sources (V1 Parity)."""
+    def test_html_source_applies_85ms_audio_calibration(self):
+        """HTML sources apply +85ms audio calibration while preserving non-zero metadata video offset."""
         from jd2021_installer.parsers.normalizer import normalize_sync
         from jd2021_installer.core.models import MusicTrackStructure
         import unittest
@@ -216,11 +216,29 @@ class TestNormalizerMusicTrack:
         
         # Expected:
         # prms = 54687 / 48 = 1139.3125
-        # video_ms = -1139.3125
-        # audio_ms = -(1139.3125 + 85) = -1224.3125
+        # video_ms preserves metadata = -2658.0
+        # audio_ms = -(1139.3125) + 85 = -1054.3125
         case = unittest.TestCase()
-        case.assertAlmostEqual(sync.video_ms, -1139.3125, places=3)
-        case.assertAlmostEqual(sync.audio_ms, -1224.3125, places=3)
+        case.assertAlmostEqual(sync.video_ms, -2658.0, places=3)
+        case.assertAlmostEqual(sync.audio_ms, -1054.3125, places=3)
+
+    def test_html_jdnext_source_applies_85ms_audio_calibration(self):
+        """JDNext HTML sources should use the same +85ms audio calibration as JDU."""
+        from jd2021_installer.parsers.normalizer import normalize_sync
+        from jd2021_installer.core.models import MusicTrackStructure
+        import unittest
+
+        mt = MusicTrackStructure(
+            markers=[0, 10000, 20000, 40000, 54687],
+            start_beat=-4,
+            video_start_time=-2.658,
+        )
+
+        sync = normalize_sync(mt, is_html_source=True, is_jdnext_source=True)
+
+        case = unittest.TestCase()
+        case.assertAlmostEqual(sync.video_ms, -2658.0, places=3)
+        case.assertAlmostEqual(sync.audio_ms, -1054.3125, places=3)
 
     def test_ipk_source_preserves_vst(self):
         """Metadata vst should be preserved for IPK sources if non-zero."""
