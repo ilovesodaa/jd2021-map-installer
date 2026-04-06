@@ -55,13 +55,13 @@ def _write_json(path: Path, data: dict) -> None:
 
 def _run_assetstudio_export(bundle_path: Path, output_dir: Path, unity_version: str) -> Path:
     candidates = [
-        Path("D:/jd2021pc/3rdPartyTools/Unity2UbiArt/bin/AssetStudioModCLI/AssetStudioModCLI.exe"),
+        Path("3rdPartyTools/Unity2UbiArt/bin/AssetStudioModCLI/AssetStudioModCLI.exe"),
         Path("3rdPartyTools/JDNextTools/AssetStudio/AssetStudioModCLI.exe"),
         Path("3rdPartyTools/AssetStudio/AssetStudioModCLI.exe"),
     ]
     cli_path = next((p for p in candidates if p.exists()), None)
     if cli_path is None:
-        raise FileNotFoundError("AssetStudioModCLI.exe not found in known locations")
+        raise FileNotFoundError("AssetStudioModCLI.exe not found under 3rdPartyTools")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
