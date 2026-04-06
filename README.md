@@ -8,6 +8,7 @@ A Windows-first, pure Python GUI application built on **PyQt6** for extracting, 
 - **Intro AMB is temporarily disabled** — the current pipeline intentionally forces silent intro placeholder behavior as a mitigation while AMB reliability is being redesigned.
 - **IPK video offset remains approximate** — Xbox 360 binary CKDs do not reliably preserve lead-in timing. Manual sync tuning is expected for many IPK installs.
 - **External tools are required for full fidelity** — FFmpeg/FFprobe and vgmstream availability directly affects media decode, conversion, and preview behavior.
+- **JDNext support is still in active integration** — current JDNext extraction relies on third-party toolchain assets under `3rdPartyTools/`.
 
 ## Features
 
@@ -89,6 +90,7 @@ RUN.bat
 - **Some background AMB sounds remain silent** — mid-song AMB sounds hosted only on JDU servers cannot be downloaded in all cases.
 - **JDHelper required for HTML modes** — asset Fetch/HTML mode files must be exported from the JDHelper Discord bot. Links expire quickly after the bot responds.
 - **Toolchain completeness affects results** — missing FFmpeg/FFprobe or vgmstream can degrade decode/conversion paths, previews, and fallback behavior.
+- **JDNext mapPackage extraction depends on local third-party tool staging** — if `AssetStudioModCLI.exe` is missing under `3rdPartyTools`, JDNext extraction may fail or fall back to reduced coverage.
 
 ## Credits
 
@@ -101,5 +103,8 @@ This project utilizes several essential third-party tools from the Just Dance mo
 - **[ferris_dancing](https://github.com/Kriskras99/ferris_dancing)** — Rust-based binary CKD parser used as a reference for field order validation.
 - **[UBIART-AMB-CUTTER](https://github.com/RN-JK/UBIART-AMB-CUTTER)** — AMB extraction algorithm reference.
 - **Just Dance Helper** — For providing JDU assets and NOHUD videos from Discord. Built by [rama0dev](https://github.com/rama0dev).
+- **[AssetStudioMod](https://github.com/aelurum/AssetStudio)** / **AssetStudioModCLI** - JDNext bundle extraction and asset export tooling used to unpack mapPackage content during setup.
+- **[Unity2UbiArt](https://github.com/Itaybl14/Unity2UbiArt)** - Source for the Unity-to-UbiArt conversion workflow used by the local JDNext toolchain staging area.
+- **[UnityPy](https://github.com/K0lb3/UnityPy)** - Python-based Unity asset parsing reference used for JDNext bundle inspection and fallback extraction.
 
 Special thanks to the authors and contributors of these tools for making Just Dance modding possible.

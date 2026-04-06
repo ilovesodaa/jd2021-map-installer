@@ -68,6 +68,12 @@ Do these once before first install:
    - `vgmstream-cli` (important for some decode paths)
 5. For Fetch mode only, confirm Playwright Chromium is installed.
 
+If you are testing JDNext mapPackage flows, also confirm:
+
+1. `3rdPartyTools/JDNextTools/AssetStudio` exists.
+2. `3rdPartyTools/JDNextTools/UnityPy` exists.
+3. `3rdPartyTools/Unity2UbiArt/bin/AssetStudioModCLI/AssetStudioModCLI.exe` exists.
+
 Recommended safety checks before every install:
 
 1. Run **Pre-flight Check**.

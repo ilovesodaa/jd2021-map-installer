@@ -40,7 +40,16 @@ What `setup.bat` handles:
 
 1. Python package install from `requirements.txt`
 2. Playwright Chromium install (Fetch mode runtime)
-3. Runtime tooling bootstrap used by this project (including vgmstream pathing)
+3. Clone/update of JDNext third-party source trees under `3rdPartyTools/`:
+   - `3rdPartyTools/JDNextTools/AssetStudio`
+   - `3rdPartyTools/JDNextTools/UnityPy`
+   - `3rdPartyTools/Unity2UbiArt`
+4. Runtime tooling bootstrap used by this project (including vgmstream pathing)
+
+Important JDNext note:
+
+- `AssetStudioModCLI` runtime binaries are not distributed in this repository.
+- For JDNext mapPackage workflows, stage the extracted CLI bundle under `3rdPartyTools/Unity2UbiArt/bin/AssetStudioModCLI/`.
 
 If `setup.bat` fails or you want full control, follow **Manual Setup**.
 
@@ -162,6 +171,8 @@ Timing notes:
    Re-run `python -m playwright install chromium`.
 4. Media output is missing or degraded:
    Confirm all three tools resolve: ffmpeg, ffprobe, vgmstream-cli.
+5. JDNext extract fails with `AssetStudioModCLI.exe not found under 3rdPartyTools`:
+   Ensure the CLI bundle is present at `3rdPartyTools/Unity2UbiArt/bin/AssetStudioModCLI/`.
 
 ---
 
