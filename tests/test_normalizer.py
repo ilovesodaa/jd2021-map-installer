@@ -322,6 +322,161 @@ class TestNormalizerMusicTrack:
         assert result.song_desc.title == "A QUEDA"
         assert result.song_desc.artist == "Gloria Groove"
 
+    def test_missing_songdesc_uses_map_json_songdesc_fallback(self, tmp_path: Path) -> None:
+        import json
+
+        mt_data = {
+            "COMPONENTS": [{
+                "trackData": {
+                    "structure": {
+                        "markers": [0, 2400, 4800],
+                        "signatures": [{"beats": 4, "marker": 0}],
+                        "sections": [{"sectionType": 0, "marker": 0}],
+                        "startBeat": 0,
+                        "endBeat": 2,
+                        "videoStartTime": 0.0,
+                    }
+                }
+            }]
+        }
+        map_json = {
+            "MapName": "SweetButPsycho",
+            "SongDesc": {
+                "MapName": "SweetButPsycho",
+                "JDVersion": 2024,
+                "OriginalJDVersion": 2024,
+                "Artist": "Ava Max",
+                "DancerName": "Coach",
+                "Title": "Sweet but Psycho",
+                "Credits": "Test Credits",
+                "NumCoach": 1,
+                "MainCoach": 0,
+                "Difficulty": 3,
+                "SweatDifficulty": 2,
+            },
+        }
+
+        (tmp_path / "SweetButPsycho_musictrack.tpl.ckd").write_text(json.dumps(mt_data), encoding="utf-8")
+        mono = tmp_path / "monobehaviour"
+        mono.mkdir(parents=True, exist_ok=True)
+        (mono / "map.json").write_text(json.dumps(map_json), encoding="utf-8")
+
+        result = normalize(tmp_path, codename="SweetButPsycho")
+
+        assert result.song_desc.title == "Sweet but Psycho"
+        assert result.song_desc.artist == "Ava Max"
+        assert result.song_desc.credits == "Test Credits"
+        assert result.song_desc.main_coach == 0
+        assert result.song_desc.difficulty == 3
+        assert result.song_desc.sweat_difficulty == 2
+        assert result.song_desc.jd_version == 2024
+        assert result.song_desc.original_jd_version == 2024
+
+    def test_map_json_songdesc_blank_text_fields_use_assets_html(self, tmp_path: Path) -> None:
+        import json
+
+        mt_data = {
+            "COMPONENTS": [{
+                "trackData": {
+                    "structure": {
+                        "markers": [0, 2400, 4800],
+                        "signatures": [{"beats": 4, "marker": 0}],
+                        "sections": [{"sectionType": 0, "marker": 0}],
+                        "startBeat": 0,
+                        "endBeat": 2,
+                        "videoStartTime": 0.0,
+                    }
+                }
+            }]
+        }
+        map_json = {
+            "MapName": "AQueda",
+            "SongDesc": {
+                "MapName": "AQueda",
+                "Artist": "",
+                "Title": "",
+                "NumCoach": 1,
+                "MainCoach": 0,
+                "Difficulty": 4,
+                "SweatDifficulty": 3,
+            },
+        }
+
+        (tmp_path / "AQueda_musictrack.tpl.ckd").write_text(json.dumps(mt_data), encoding="utf-8")
+        mono = tmp_path / "monobehaviour"
+        mono.mkdir(parents=True, exist_ok=True)
+        (mono / "map.json").write_text(json.dumps(map_json), encoding="utf-8")
+        (tmp_path / "assets.html").write_text(
+            '<div class="embedTitle__x"><span>A QUEDA</span></div>'
+            '<div class="embedDescription__x"><span>by Gloria Groove</span></div>',
+            encoding="utf-8",
+        )
+
+        result = normalize(tmp_path, codename="AQueda")
+
+        assert result.song_desc.title == "A QUEDA"
+        assert result.song_desc.artist == "Gloria Groove"
+        assert result.song_desc.difficulty == 4
+        assert result.song_desc.sweat_difficulty == 3
+
+    def test_jdnext_metadata_json_overlays_jd2021_relevant_fields(self, tmp_path: Path) -> None:
+        import json
+
+        mt_data = {
+            "COMPONENTS": [{
+                "trackData": {
+                    "structure": {
+                        "markers": [0, 2400, 4800],
+                        "signatures": [{"beats": 4, "marker": 0}],
+                        "sections": [{"sectionType": 0, "marker": 0}],
+                        "startBeat": 0,
+                        "endBeat": 2,
+                        "videoStartTime": 0.0,
+                    }
+                }
+            }]
+        }
+        map_json = {
+            "MapName": "SweetButPsycho",
+            "SongDesc": {
+                "MapName": "SweetButPsycho",
+                "Artist": "Ava Max",
+                "Title": "Sweet but Psycho",
+                "NumCoach": 1,
+                "MainCoach": 0,
+                "Difficulty": 2,
+                "SweatDifficulty": 1,
+                "OriginalJDVersion": 2021,
+                "Credits": "",
+            },
+        }
+        jdnext_metadata = {
+            "tags": ["Pop", "Main"],
+            "credits": "License holder credits",
+            "other_info": {
+                "difficulty": "Extreme",
+                "sweat_difficulty": "Hard",
+                "coach_count": "4",
+                "original_jd_version": "2023",
+                "camera_support": True,
+            },
+        }
+
+        (tmp_path / "SweetButPsycho_musictrack.tpl.ckd").write_text(json.dumps(mt_data), encoding="utf-8")
+        mono = tmp_path / "monobehaviour"
+        mono.mkdir(parents=True, exist_ok=True)
+        (mono / "map.json").write_text(json.dumps(map_json), encoding="utf-8")
+        (tmp_path / "jdnext_metadata.json").write_text(json.dumps(jdnext_metadata), encoding="utf-8")
+
+        result = normalize(tmp_path, codename="SweetButPsycho")
+
+        assert result.song_desc.tags == ["Pop", "Main"]
+        assert result.song_desc.credits == "License holder credits"
+        assert result.song_desc.difficulty == 4
+        assert result.song_desc.sweat_difficulty == 3
+        assert result.song_desc.num_coach == 4
+        assert result.song_desc.original_jd_version == 2023
+
     def test_synthesized_tapes_with_top_level_clips_are_counted(self, tmp_path: Path) -> None:
         import json
 

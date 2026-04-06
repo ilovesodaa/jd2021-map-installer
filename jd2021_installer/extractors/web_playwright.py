@@ -12,6 +12,7 @@ the Qt event loop.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import platform
@@ -27,6 +28,7 @@ import zipfile
 from pathlib import Path
 from typing import Dict, List, Optional, Set, cast
 from urllib.parse import unquote, urlparse
+from html import unescape
 
 from jd2021_installer.core.config import (
     QUALITY_ORDER,
@@ -51,6 +53,7 @@ ssl._create_default_https_context = ssl._create_unverified_context
 _SEL_TEXTBOX = '[role="textbox"][data-slate-editor="true"]'
 _SEL_AUTOCOMPLETE_OPTION = '[role="option"]'
 _SEL_MESSAGE_ACCESSORIES = 'div[id^="message-accessories-"]'
+_SEL_MESSAGE_LIST_ITEMS = 'li[id^="chat-messages-"]'
 
 # CDN link validation patterns
 _UBI_CDN_HOST_PATTERN = re.compile(r"https?://[^\s\"']*(?:cdn\.ubi\.com|cdn\.ubisoft\.cn)", re.IGNORECASE)
@@ -795,6 +798,99 @@ async def _get_last_accessory_id(page) -> Optional[str]:
     return await accessories.nth(count - 1).get_attribute("id")
 
 
+async def _get_last_message_id(page) -> Optional[str]:
+    """Return the DOM id of the last message list item."""
+    messages = page.locator(_SEL_MESSAGE_LIST_ITEMS)
+    count = await messages.count()
+    if count == 0:
+        return None
+    return await messages.nth(count - 1).get_attribute("id")
+
+
+async def _wait_for_new_message(
+    page, previous_last_message_id: Optional[str], timeout_s: int = 60
+) -> str:
+    """Poll for a newly appended message list item."""
+    logger.info("Waiting for bot message response...")
+    deadline = asyncio.get_event_loop().time() + timeout_s
+
+    while asyncio.get_event_loop().time() < deadline:
+        result = await page.evaluate(
+            """(prevId) => {
+                const all = document.querySelectorAll('li[id^="chat-messages-"]');
+                if (all.length === 0) return null;
+                const last = all[all.length - 1];
+                const textContent = last.textContent || '';
+                const hasContent = !!last.querySelector('[id^="message-content-"]');
+                const hasAccessories = !!last.querySelector('[id^="message-accessories-"]');
+                return {
+                    id: last.id,
+                    hasContent,
+                    hasAccessories,
+                    isLoading: textContent.includes('Loading'),
+                };
+            }""",
+            previous_last_message_id,
+        )
+
+        if (
+            result
+            and result["id"] != previous_last_message_id
+            and (result["hasContent"] or result["hasAccessories"])
+            and not result["isLoading"]
+        ):
+            stable = True
+            for _ in range(3):
+                await page.wait_for_timeout(350)
+                latest = await page.evaluate(
+                    """() => {
+                        const all = document.querySelectorAll('li[id^="chat-messages-"]');
+                        if (all.length === 0) return null;
+                        const last = all[all.length - 1];
+                        return {
+                            id: last.id,
+                            isLoading: (last.textContent || '').includes('Loading'),
+                        };
+                    }"""
+                )
+                if not latest or latest["id"] != result["id"] or latest["isLoading"]:
+                    stable = False
+                    break
+            if stable:
+                logger.info("Bot message response detected (%s).", result["id"])
+                return result["id"]
+
+        await page.wait_for_timeout(400)
+
+    raise WebExtractionError(
+        "Timed out waiting for bot message response. "
+        "The bot might be offline or the button interaction failed."
+    )
+
+
+async def _extract_message_payload(page, message_id: str) -> Dict[str, str]:
+    """Extract message content/accessories payload for a message list item."""
+    payload = await page.evaluate(
+        """(msgId) => {
+            const root = document.getElementById(msgId);
+            if (!root) return null;
+            const content = root.querySelector('[id^="message-content-"]');
+            const accessories = root.querySelector('[id^="message-accessories-"]');
+            return {
+                message_id: msgId,
+                content_html: content ? content.innerHTML : '',
+                content_text: content ? (content.textContent || '') : '',
+                accessories_html: accessories ? accessories.outerHTML : '',
+                combined_html: root.outerHTML,
+            };
+        }""",
+        message_id,
+    )
+    if not payload:
+        raise WebExtractionError(f"Could not extract payload for message id: {message_id}")
+    return cast(Dict[str, str], payload)
+
+
 async def _send_slash_command(
     page, *, command: str, choices: List[str], codename: str
 ) -> None:
@@ -986,6 +1082,253 @@ def _is_valid_embed_response(html: str, require_gameplay_video: bool = False) ->
     if require_gameplay_video and not _has_gameplay_video_links(html):
         return False
     return True
+
+
+def _strip_html_tags(value: str) -> str:
+    return re.sub(r"<[^>]+>", "", value)
+
+
+def _extract_embed_fields_from_html(html: str) -> Dict[str, str]:
+    """Extract Discord embed field name/value pairs from an accessory HTML block."""
+    fields: Dict[str, str] = {}
+    pattern = re.compile(
+        r'<div class="embedFieldName[^\"]*">\s*<span>(.*?)</span>\s*</div>\s*'
+        r'<div class="embedFieldValue[^\"]*">(.*?)</div>',
+        re.IGNORECASE | re.DOTALL,
+    )
+    for raw_name, raw_value in pattern.findall(html):
+        name = unescape(_strip_html_tags(raw_name)).strip().rstrip(":")
+        value = unescape(_strip_html_tags(raw_value)).strip()
+        if not name:
+            continue
+        if name in fields:
+            fields[name] = f"{fields[name]}\n{value}".strip()
+        else:
+            fields[name] = value
+    return fields
+
+
+def _parse_bool_text(value: str) -> Optional[bool]:
+    v = (value or "").strip().lower()
+    # Keep numeric strings (0/1) numeric; coach_count uses these values.
+    if v in {"true", "yes", "on"}:
+        return True
+    if v in {"false", "no", "off"}:
+        return False
+    return None
+
+
+def _canonicalize_other_info_field(name: str) -> Optional[str]:
+    k = re.sub(r"[^a-z0-9]+", "", name.lower())
+    if "sweat" in k and "difficulty" in k:
+        return "sweat_difficulty"
+    if "difficulty" in k:
+        return "difficulty"
+    if "additionaltitle" in k:
+        return "additional_title"
+    if "camera" in k and "support" in k:
+        return "camera_support"
+    if "lyrics" in k and "color" in k:
+        return "lyrics_color"
+    if "title" in k and "logo" in k:
+        return "title_logo"
+    if "map" in k and "length" in k:
+        return "map_length"
+    if "original" in k and "version" in k:
+        return "original_jd_version"
+    if "coach" in k and "count" in k:
+        return "coach_count"
+    return None
+
+
+def _extract_kv_pairs_from_text(text: str) -> Dict[str, str]:
+    """Extract key/value pairs from plain text response lines (Key: Value)."""
+    result: Dict[str, str] = {}
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if not line or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        if key in result and value:
+            result[key] = f"{result[key]}\n{value}".strip()
+        else:
+            result[key] = value
+    return result
+
+
+def _extract_labeled_value(text: str, label_pattern: str) -> str:
+    """Return the last "<label>: <value>" match from flattened message text."""
+    src = re.sub(r"\s+", " ", text or "").strip()
+    if not src:
+        return ""
+
+    matches = list(
+        re.finditer(rf"{label_pattern}\s*:\s*(.+?)(?=$)", src, re.IGNORECASE)
+    )
+    if not matches:
+        return ""
+    return matches[-1].group(1).strip()
+
+
+def _parse_jdnext_button_payloads(metadata_payloads: Dict[str, Dict[str, str]]) -> Dict[str, object]:
+    """Parse button response payloads into a structured metadata dict."""
+    sections: Dict[str, Dict[str, object]] = {}
+    parsed: Dict[str, object] = {
+        "sections": sections,
+        "tags": [],
+        "coach_names": [],
+        "credits": "",
+        "other_info": {},
+    }
+
+    for key, payload in metadata_payloads.items():
+        html_src = str(payload.get("accessories_html") or payload.get("content_html") or "")
+        text_src = str(payload.get("content_text") or "")
+        html_fields = _extract_embed_fields_from_html(html_src)
+        text_fields = _extract_kv_pairs_from_text(text_src)
+        merged_fields = dict(html_fields)
+        for field_name, field_value in text_fields.items():
+            if field_name in merged_fields and field_value:
+                merged_fields[field_name] = f"{merged_fields[field_name]}\n{field_value}".strip()
+            else:
+                merged_fields[field_name] = field_value
+
+        combined_text = unescape(_strip_html_tags(payload.get("combined_html", "")))
+        combined_text = re.sub(r"\s+", " ", combined_text).strip()
+        sections[key] = {
+            "fields": merged_fields,
+            "text": combined_text,
+            "message_id": payload.get("message_id", ""),
+        }
+
+    # Tags
+    tag_fields = sections.get("tags", {}).get("fields", {}) if sections.get("tags") else {}
+    tags: List[str] = []
+    for _, value in cast(Dict[str, str], tag_fields).items():
+        for token in re.split(r"[,/\\|\n]", value):
+            tag = token.strip()
+            if tag and tag.lower() not in {"tags", "tag"}:
+                tags.append(tag)
+
+    if not tags and sections.get("tags"):
+        tag_text = str(sections.get("tags", {}).get("text", "") or "")
+        tail = _extract_labeled_value(tag_text, r"tags")
+        if tail:
+            for token in re.split(r"[,/\\|\n]", tail):
+                tag = token.strip()
+                if tag and tag.lower() not in {"tags", "tag"}:
+                    tags.append(tag)
+    parsed["tags"] = list(dict.fromkeys(tags))
+
+    # Coaches (preserve order from Coach 1..4 when present)
+    coach_fields = sections.get("coaches", {}).get("fields", {}) if sections.get("coaches") else {}
+    coach_ordered: List[str] = []
+    indexed: List[tuple[int, str]] = []
+    for name, value in cast(Dict[str, str], coach_fields).items():
+        m = re.search(r"(\d+)", name)
+        if m:
+            indexed.append((int(m.group(1)), value.strip()))
+        elif value.strip():
+            coach_ordered.append(value.strip())
+    if indexed:
+        for _, value in sorted(indexed, key=lambda pair: pair[0]):
+            if value:
+                coach_ordered.append(value)
+
+    if not coach_ordered and sections.get("coaches"):
+        coach_text = str(sections.get("coaches", {}).get("text", "") or "")
+        tail = _extract_labeled_value(coach_text, r"coaches?\s*'?\s*names")
+        if tail:
+            for token in re.split(r"[,/\\|\n]", tail):
+                coach = token.strip()
+                if coach:
+                    coach_ordered.append(coach)
+    parsed["coach_names"] = list(dict.fromkeys([v for v in coach_ordered if v]))
+
+    # Credits
+    credit_fields = sections.get("credits", {}).get("fields", {}) if sections.get("credits") else {}
+    if credit_fields:
+        parsed["credits"] = "\n".join(
+            [v for v in cast(Dict[str, str], credit_fields).values() if v]
+        ).strip()
+    if not parsed["credits"] and sections.get("credits"):
+        credit_text = str(sections.get("credits", {}).get("text", "") or "")
+        parsed["credits"] = _extract_labeled_value(credit_text, r"credits")
+
+    # Other info
+    other_fields = sections.get("other_info", {}).get("fields", {}) if sections.get("other_info") else {}
+    other_info: Dict[str, object] = {}
+    for name, value in cast(Dict[str, str], other_fields).items():
+        canonical = _canonicalize_other_info_field(name)
+        if not canonical:
+            continue
+        bool_val = _parse_bool_text(value)
+        other_info[canonical] = bool_val if bool_val is not None else value.strip()
+    parsed["other_info"] = other_info
+
+    return parsed
+
+
+async def _click_button_from_accessory(
+    page,
+    *,
+    accessory_id: str,
+    label_patterns: List[re.Pattern[str]],
+) -> bool:
+    """Click a button within a specific message accessory by label pattern."""
+    base = page.locator(f"#{accessory_id} button")
+    for pattern in label_patterns:
+        candidate = base.filter(has_text=pattern).first
+        try:
+            if await candidate.count() > 0:
+                await candidate.click()
+                return True
+        except Exception:
+            continue
+    return False
+
+
+async def _fetch_jdnext_button_metadata(
+    page,
+    *,
+    assets_accessory_id: str,
+    timeout_s: int,
+) -> Dict[str, Dict[str, str]]:
+    """Click JDNext metadata buttons and capture each reply message payload."""
+    button_map: Dict[str, List[re.Pattern[str]]] = {
+        "tags": [re.compile(r"^\s*tags\s*$", re.IGNORECASE)],
+        "coaches": [
+            re.compile(r"coach(?:es)?\s*'?\s*names", re.IGNORECASE),
+            re.compile(r"coach\s*names", re.IGNORECASE),
+        ],
+        "credits": [re.compile(r"^\s*credits\s*$", re.IGNORECASE)],
+        "other_info": [
+            re.compile(r"other\s*info", re.IGNORECASE),
+            re.compile(r"other\s*information", re.IGNORECASE),
+        ],
+    }
+    payloads: Dict[str, Dict[str, str]] = {}
+
+    for key, patterns in button_map.items():
+        pre_msg_id = await _get_last_message_id(page)
+        clicked = await _click_button_from_accessory(
+            page,
+            accessory_id=assets_accessory_id,
+            label_patterns=patterns,
+        )
+        if not clicked:
+            logger.warning("Could not find JDNext metadata button for %s", key)
+            continue
+
+        response_msg_id = await _wait_for_new_message(page, pre_msg_id, timeout_s=timeout_s)
+        payloads[key] = await _extract_message_payload(page, response_msg_id)
+        await page.wait_for_timeout(300)
+
+    return payloads
 
 
 async def _fetch_command_with_retry(
@@ -1385,6 +1728,7 @@ class WebPlaywrightExtractor(BaseExtractor):
                 bot_timeout = self._config.fetch_bot_response_timeout_s
 
                 nohud_html: Optional[str] = None
+                jdnext_metadata_payloads: Dict[str, Dict[str, str]] = {}
                 if self._source_game == "jdnext":
                     logger.info("[1/1] /asset server:jdnext %s", codename)
                     assets_html = await _fetch_command_with_retry(
@@ -1396,6 +1740,16 @@ class WebPlaywrightExtractor(BaseExtractor):
                         bot_timeout_s=bot_timeout,
                         require_gameplay_video=True,
                     )
+                    assets_accessory_id = await _get_last_accessory_id(page)
+                    if assets_accessory_id:
+                        try:
+                            jdnext_metadata_payloads = await _fetch_jdnext_button_metadata(
+                                page,
+                                assets_accessory_id=assets_accessory_id,
+                                timeout_s=bot_timeout,
+                            )
+                        except Exception as meta_exc:
+                            logger.warning("JDNext metadata button capture failed: %s", meta_exc)
                 else:
                     # Step 1: /assets jdu <codename>
                     logger.info("[1/2] /assets jdu %s", codename)
@@ -1428,6 +1782,23 @@ class WebPlaywrightExtractor(BaseExtractor):
                 (output_dir / "assets.html").write_text(assets_html, encoding="utf-8")
                 if nohud_html is not None:
                     (output_dir / "nohud.html").write_text(nohud_html, encoding="utf-8")
+                if self._source_game == "jdnext" and jdnext_metadata_payloads:
+                    meta_dir = output_dir / "jdnext_metadata"
+                    meta_dir.mkdir(parents=True, exist_ok=True)
+                    for key, payload in jdnext_metadata_payloads.items():
+                        (meta_dir / f"{key}.message.html").write_text(
+                            payload.get("combined_html", ""),
+                            encoding="utf-8",
+                        )
+                        (meta_dir / f"{key}.content.txt").write_text(
+                            payload.get("content_text", ""),
+                            encoding="utf-8",
+                        )
+                    metadata_summary = _parse_jdnext_button_payloads(jdnext_metadata_payloads)
+                    (output_dir / "jdnext_metadata.json").write_text(
+                        json.dumps(metadata_summary, indent=2, sort_keys=True),
+                        encoding="utf-8",
+                    )
                 logger.info("Saved HTML to %s", output_dir)
 
             finally:

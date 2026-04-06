@@ -392,6 +392,54 @@ def _extract_song_desc(
     directory: str, codename: Optional[str] = None
 ) -> SongDescription:
     """Find and parse a songdesc CKD → SongDescription."""
+    def _songdesc_from_map_json_fallback() -> Optional[SongDescription]:
+        """Best-effort SongDesc metadata from JDNext MonoBehaviour map.json."""
+
+        def _coerce_int(value: object, default: int) -> int:
+            try:
+                return int(value)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                return default
+
+        map_json_candidates = sorted(Path(directory).rglob("monobehaviour/map.json"))
+        if not map_json_candidates:
+            map_json_candidates = sorted(Path(directory).rglob("map.json"))
+
+        codename_low = (codename or "").strip().lower()
+
+        for map_json_path in map_json_candidates:
+            try:
+                payload = json.loads(map_json_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+
+            if not isinstance(payload, dict):
+                continue
+
+            sd = payload.get("SongDesc")
+            if not isinstance(sd, dict):
+                continue
+
+            map_name = str(sd.get("MapName") or payload.get("MapName") or codename or "Unknown")
+            if codename_low and map_name.lower() != codename_low:
+                continue
+
+            return SongDescription(
+                map_name=map_name,
+                title=str(sd.get("Title", codename or map_name or "Unknown") or ""),
+                artist=str(sd.get("Artist", "Unknown Artist") or ""),
+                dancer_name=str(sd.get("DancerName", "Unknown Dancer") or "Unknown Dancer"),
+                credits=str(sd.get("Credits", "") or ""),
+                num_coach=_coerce_int(sd.get("NumCoach", 1), 1),
+                main_coach=_coerce_int(sd.get("MainCoach", -1), -1),
+                difficulty=_coerce_int(sd.get("Difficulty", 2), 2),
+                sweat_difficulty=_coerce_int(sd.get("SweatDifficulty", 1), 1),
+                jd_version=_coerce_int(sd.get("JDVersion", 2021), 2021),
+                original_jd_version=_coerce_int(sd.get("OriginalJDVersion", 2021), 2021),
+            )
+
+        return None
+
     def _songdesc_from_html_fallback() -> SongDescription:
         """Best-effort SongDesc metadata from downloaded embed HTML."""
         title = codename or "Unknown"
@@ -444,6 +492,17 @@ def _extract_song_desc(
     ckd_paths = _find_ckd_files(directory, "*songdesc*.tpl.ckd", codename)
 
     if not ckd_paths:
+        map_json_songdesc = _songdesc_from_map_json_fallback()
+        if map_json_songdesc is not None:
+            if not str(map_json_songdesc.title or "").strip() or not str(map_json_songdesc.artist or "").strip():
+                html_fallback = _songdesc_from_html_fallback()
+                if not str(map_json_songdesc.title or "").strip() and str(html_fallback.title or "").strip():
+                    map_json_songdesc.title = html_fallback.title
+                if not str(map_json_songdesc.artist or "").strip() and str(html_fallback.artist or "").strip():
+                    map_json_songdesc.artist = html_fallback.artist
+            logger.info("songdesc.tpl.ckd not found; recovered SongDesc from map.json fallback")
+            return map_json_songdesc
+
         logger.warning("songdesc.tpl.ckd not found; using fallback metadata")
         return _songdesc_from_html_fallback()
 
@@ -504,6 +563,97 @@ def _extract_song_desc(
         return song_desc
     except (KeyError, IndexError, TypeError) as exc:
         raise NormalizationError(f"Invalid songdesc JSON: {exc}") from exc
+
+
+def _apply_jdnext_metadata_songdesc_overrides(
+    directory: str,
+    song_desc: SongDescription,
+) -> None:
+    """Overlay JDNext fetch metadata onto SongDescription when useful.
+
+    Uses only fields relevant to JD2021 output generation and keeps existing
+    SongDesc values when they appear authoritative.
+    """
+
+    def _to_int(value: object) -> Optional[int]:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            return None
+
+    def _to_difficulty(value: object) -> Optional[int]:
+        as_int = _to_int(value)
+        if as_int is not None:
+            return as_int
+
+        text = str(value or "").strip().lower()
+        if not text:
+            return None
+        mapping = {
+            "easy": 1,
+            "medium": 2,
+            "normal": 2,
+            "hard": 3,
+            "extreme": 4,
+        }
+        return mapping.get(text)
+
+    root = Path(directory)
+    candidates = sorted(root.rglob("jdnext_metadata.json"))
+    if not candidates:
+        return
+
+    metadata: Optional[dict] = None
+    for path in candidates:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            metadata = payload
+            break
+
+    if not metadata:
+        return
+
+    tags = metadata.get("tags")
+    if isinstance(tags, list):
+        cleaned_tags = [str(t).strip() for t in tags if str(t).strip()]
+        if cleaned_tags and (not song_desc.tags or song_desc.tags == ["Main"]):
+            song_desc.tags = cleaned_tags
+
+    credits = str(metadata.get("credits", "") or "").strip()
+    if credits and not str(song_desc.credits or "").strip():
+        song_desc.credits = credits
+
+    other_info = metadata.get("other_info")
+    if not isinstance(other_info, dict):
+        return
+
+    difficulty = _to_difficulty(other_info.get("difficulty"))
+    if difficulty is not None and song_desc.difficulty in (0, 2):
+        song_desc.difficulty = difficulty
+
+    sweat_difficulty = _to_difficulty(other_info.get("sweat_difficulty"))
+    if sweat_difficulty is not None and song_desc.sweat_difficulty in (0, 1):
+        song_desc.sweat_difficulty = sweat_difficulty
+
+    original_ver = _to_int(other_info.get("original_jd_version"))
+    if original_ver is not None and song_desc.original_jd_version in (0, 2021):
+        song_desc.original_jd_version = original_ver
+
+    coach_count = _to_int(other_info.get("coach_count"))
+    if coach_count is not None and coach_count > 0 and coach_count > song_desc.num_coach:
+        song_desc.num_coach = coach_count
 
 
 def _extract_dance_tape(
@@ -1166,6 +1316,7 @@ def normalize(
         music_track = None
 
     song_desc = _extract_song_desc(source_root_str, codename)
+    _apply_jdnext_metadata_songdesc_overrides(source_root_str, song_desc)
     dance_tape = _extract_dance_tape(source_root_str, codename)
     karaoke_tape = _extract_karaoke_tape(source_root_str, codename)
     cinematic_tape = _extract_cinematic_tape(source_root_str, codename)
