@@ -558,6 +558,7 @@ class MainWindow(QMainWindow):
                 ffmpeg_hwaccel=getattr(self._config, "ffmpeg_hwaccel", "auto"),
                 preview_video_mode=getattr(self._config, "preview_video_mode", "proxy_low"),
                 preview_fps=getattr(self._config, "preview_fps", 24),
+                preview_startup_compensation_ms=getattr(self._config, "preview_startup_compensation_ms", 100.0),
             )
 
         if persist and updated:
@@ -711,6 +712,7 @@ class MainWindow(QMainWindow):
             ffmpeg_hwaccel=getattr(self._config, "ffmpeg_hwaccel", "auto"),
             preview_video_mode=getattr(self._config, "preview_video_mode", "proxy_low"),
             preview_fps=getattr(self._config, "preview_fps", 24),
+            preview_startup_compensation_ms=getattr(self._config, "preview_startup_compensation_ms", 100.0),
         )
         self._preview_widget.setObjectName("mainWindowPreviewWidget")
         self._preview_widget.setMinimumHeight(300)

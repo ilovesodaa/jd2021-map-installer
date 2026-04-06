@@ -96,6 +96,7 @@ class _FrameReaderWorker(QObject):
         ffplay_cmd: Optional[list[str]] = None,
         start_position: float = 0.0,
         fps: float = PREVIEW_FPS,
+        startup_compensation_ms: float = 0.0,
     ) -> None:
         super().__init__()
         self._ffmpeg_cmd = ffmpeg_cmd
@@ -104,6 +105,7 @@ class _FrameReaderWorker(QObject):
         self._height = height
         self._start_position = start_position
         self._fps = max(1.0, float(fps))
+        self._startup_compensation_s = max(0.0, float(startup_compensation_ms) / 1000.0)
         self._stop_flag = threading.Event()
         self._ffmpeg: Optional[subprocess.Popen] = None
         self._ffplay: Optional[subprocess.Popen] = None
@@ -130,22 +132,6 @@ class _FrameReaderWorker(QObject):
                 creationflags=_CFLAGS,
             )
 
-            # Start audio as close as possible to ffmpeg launch to reduce AV skew.
-            if self._ffplay_cmd:
-                try:
-                    self._ffplay = subprocess.Popen(
-                        self._ffplay_cmd,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        creationflags=_CFLAGS,
-                    )
-                except FileNotFoundError:
-                    logger.warning("ffplay not found — audio preview disabled.")
-                    self.ffplay_missing.emit()
-                except Exception as exc:
-                    logger.error("Could not launch ffplay: %s", exc)
-            wall_start = time.time()
-
             while not self._stop_flag.is_set():
                 data = b""
                 while len(data) < frame_size:
@@ -158,6 +144,26 @@ class _FrameReaderWorker(QObject):
 
                 frames_read += 1
                 position += 1.0 / self._fps
+
+                # Launch audio once the first video frame is available.
+                # This keeps AV startup aligned when ffmpeg decode has warm-up delay.
+                if frames_read == 1 and self._ffplay_cmd:
+                    try:
+                        self._ffplay = subprocess.Popen(
+                            self._ffplay_cmd,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            creationflags=_CFLAGS,
+                        )
+                    except FileNotFoundError:
+                        logger.warning("ffplay not found — audio preview disabled.")
+                        self.ffplay_missing.emit()
+                    except Exception as exc:
+                        logger.error("Could not launch ffplay: %s", exc)
+
+                if frames_read == 1 and wall_start <= 0:
+                    # Optional startup bias to emulate older preview pacing behavior.
+                    wall_start = time.time() + self._startup_compensation_s
 
                 if self._stop_flag.is_set():
                     return
@@ -257,6 +263,7 @@ class PreviewWidget(QWidget):
         self._preview_video_mode: str = "proxy_low"
         self._preview_fps_default: float = float(PREVIEW_FPS)
         self._playback_fps: float = float(PREVIEW_FPS)
+        self._preview_startup_compensation_ms: float = 100.0
         self._preview_proxy_cache: dict[str, str] = {}
 
         self._build_ui()
@@ -363,6 +370,7 @@ class PreviewWidget(QWidget):
         ffmpeg_hwaccel: str = "auto",
         preview_video_mode: str = "proxy_low",
         preview_fps: int = PREVIEW_FPS,
+        preview_startup_compensation_ms: float = 100.0,
     ) -> None:
         """Update ffmpeg tool paths used by preview subprocesses."""
         self._ffmpeg_path = ffmpeg_path or "ffmpeg"
@@ -375,6 +383,11 @@ class PreviewWidget(QWidget):
         except (TypeError, ValueError):
             fps = float(PREVIEW_FPS)
         self._preview_fps_default = fps if fps > 0 else float(PREVIEW_FPS)
+        try:
+            compensation_ms = float(preview_startup_compensation_ms)
+        except (TypeError, ValueError):
+            compensation_ms = 100.0
+        self._preview_startup_compensation_ms = max(0.0, compensation_ms)
 
     def launch(
         self,
@@ -506,6 +519,7 @@ class PreviewWidget(QWidget):
             ffplay_cmd=ffplay_cmd,
             start_position=start_time,
             fps=effective_fps,
+            startup_compensation_ms=self._preview_startup_compensation_ms,
         )
         thread = QThread()
         worker.moveToThread(thread)
@@ -621,6 +635,7 @@ class PreviewWidget(QWidget):
                 start_time=self._loop_start,
                 loop_start=self._loop_start,
                 loop_end=self._loop_end,
+                preview_fps=self._playback_fps,
             )
             return
 
