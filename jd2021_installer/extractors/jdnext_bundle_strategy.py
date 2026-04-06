@@ -54,10 +54,11 @@ def _write_json(path: Path, data: dict) -> None:
 
 
 def _run_assetstudio_export(bundle_path: Path, output_dir: Path, unity_version: str) -> Path:
+    repo_root = Path(__file__).resolve().parents[2]
     candidates = [
-        Path("3rdPartyTools/Unity2UbiArt/bin/AssetStudioModCLI/AssetStudioModCLI.exe"),
-        Path("3rdPartyTools/JDNextTools/AssetStudio/AssetStudioModCLI.exe"),
-        Path("3rdPartyTools/AssetStudio/AssetStudioModCLI.exe"),
+        repo_root / "3rdPartyTools" / "Unity2UbiArt" / "bin" / "AssetStudioModCLI" / "AssetStudioModCLI.exe",
+        repo_root / "3rdPartyTools" / "JDNextTools" / "AssetStudio" / "AssetStudioModCLI.exe",
+        repo_root / "3rdPartyTools" / "AssetStudio" / "AssetStudioModCLI.exe",
     ]
     cli_path = next((p for p in candidates if p.exists()), None)
     if cli_path is None:
@@ -429,25 +430,33 @@ def run_jdnext_bundle_strategy(
     unitypy_summary: JDNextUnpackSummary | None = None
     assetstudio_success = False
     unitypy_success = False
+    assetstudio_error: Exception | None = None
+    unitypy_error: Exception | None = None
 
     if strategy == "assetstudio_first":
         try:
             _run_assetstudio_export(bundle, assetstudio_out, unity_version)
             assetstudio_success = True
-        except Exception:
-            pass
+        except Exception as exc:
+            assetstudio_error = exc
         if not assetstudio_success:
-            unitypy_summary = _run_unitypy(bundle, unitypy_out)
-            unitypy_success = True
+            try:
+                unitypy_summary = _run_unitypy(bundle, unitypy_out)
+                unitypy_success = True
+            except Exception as exc:
+                unitypy_error = exc
     elif strategy == "unitypy_first":
         try:
             unitypy_summary = _run_unitypy(bundle, unitypy_out)
             unitypy_success = True
-        except Exception:
-            pass
+        except Exception as exc:
+            unitypy_error = exc
         if not unitypy_success:
-            _run_assetstudio_export(bundle, assetstudio_out, unity_version)
-            assetstudio_success = True
+            try:
+                _run_assetstudio_export(bundle, assetstudio_out, unity_version)
+                assetstudio_success = True
+            except Exception as exc:
+                assetstudio_error = exc
     else:
         raise ValueError(f"Unsupported strategy: {strategy}")
 
@@ -458,7 +467,11 @@ def run_jdnext_bundle_strategy(
         mapped_summary = None
         winner = "unitypy"
     else:
-        raise RuntimeError("Both AssetStudio and UnityPy extraction paths failed")
+        raise RuntimeError(
+            "Both AssetStudio and UnityPy extraction paths failed. "
+            f"AssetStudio error: {assetstudio_error!s}; "
+            f"UnityPy error: {unitypy_error!s}"
+        )
 
     summary = JDNextStrategySummary(
         bundle_path=str(bundle),

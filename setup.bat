@@ -1,42 +1,68 @@
 @echo off
-echo [1/6] Installing Python dependencies...
+setlocal
+
+pushd "%~dp0"
+if errorlevel 1 (
+	echo [ERROR] Failed to switch to repo root.
+	exit /b 1
+)
+
+echo [1/7] Installing Python dependencies...
 pip install -r requirements.txt
 if errorlevel 1 (
 	echo.
 	echo [ERROR] Python dependency installation failed.
 	echo Re-run setup after fixing the issue above.
+	popd
 	exit /b 1
 )
 
 echo.
-echo [2/6] Installing Chromium for Playwright...
+echo [2/7] Installing Chromium for Playwright...
 python -m playwright install chromium
 if errorlevel 1 (
 	echo.
 	echo [ERROR] Playwright Chromium installation failed.
 	echo Re-run setup after fixing the issue above.
+	popd
 	exit /b 1
 )
 
 echo.
-echo [3/6] Cloning AssetStudio
+echo [3/7] Cloning AssetStudio
 if not exist 3rdPartyTools\JDNextTools mkdir 3rdPartyTools\JDNextTools
 
 call :ensure_git_clone https://github.com/Perfare/AssetStudio.git 3rdPartyTools\JDNextTools\AssetStudio master
-if errorlevel 1 exit /b 1
+if errorlevel 1 (
+	popd
+	endlocal
+	exit /b 1
+)
 
 echo.
-echo [4/6] Cloning UnityPy
+echo [4/7] Cloning UnityPy
 call :ensure_git_clone https://github.com/K0lb3/UnityPy.git 3rdPartyTools\JDNextTools\UnityPy master
-if errorlevel 1 exit /b 1
+if errorlevel 1 (
+	popd
+	endlocal
+	exit /b 1
+)
 
 echo.
-echo [5/6] Cloning Unity2UbiArt
+echo [5/7] Cloning Unity2UbiArt
 call :ensure_git_clone https://github.com/Itaybl14/Unity2UbiArt.git 3rdPartyTools\Unity2UbiArt main
-if errorlevel 1 exit /b 1
+if errorlevel 1 (
+	popd
+	endlocal
+	exit /b 1
+)
 
 echo.
-echo [6/6] Installing vgmstream toolchain...
+echo [6/7] Staging AssetStudioModCLI runtime...
+call :install_assetstudio_cli
+
+echo.
+echo [7/7] Installing vgmstream toolchain...
 if not exist tools\vgmstream mkdir tools\vgmstream
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $zip='tools/vgmstream/vgmstream-win64.zip'; $extract='tools/vgmstream/_extract'; if (Test-Path $extract) { Remove-Item -Recurse -Force $extract }; Invoke-WebRequest -Uri 'https://github.com/vgmstream/vgmstream-releases/releases/download/nightly/vgmstream-win64.zip' -OutFile $zip; Expand-Archive -Path $zip -DestinationPath $extract -Force; $bin = Get-ChildItem -Path $extract -Recurse -File | Where-Object { $_.Name -in @('vgmstream-cli.exe','vgmstream.exe') } | Select-Object -First 1; if (-not $bin) { throw 'vgmstream executable not found in archive' }; $runtimeRoot = $bin.Directory.FullName; Get-ChildItem -Path $runtimeRoot -Force | ForEach-Object { Copy-Item -Path $_.FullName -Destination 'tools/vgmstream' -Recurse -Force }; Remove-Item -Recurse -Force $extract; Remove-Item -Force $zip"
@@ -51,6 +77,9 @@ if errorlevel 1 (
 echo.
 echo Setup complete!
 timeout /t 5
+
+popd
+endlocal
 
 goto :eof
 
@@ -74,6 +103,33 @@ git clone --depth 1 --branch %REPO_BRANCH% %REPO_URL% "%DEST_DIR%"
 if errorlevel 1 (
 	echo [ERROR] Failed to clone %REPO_URL%
 	exit /b 1
+)
+
+exit /b 0
+
+:install_assetstudio_cli
+set "CLI_DIR=3rdPartyTools\Unity2UbiArt\bin\AssetStudioModCLI"
+set "CLI_EXE=%CLI_DIR%\AssetStudioModCLI.exe"
+
+if exist "%CLI_EXE%" (
+	echo [OK] AssetStudioModCLI already present at %CLI_EXE%
+	exit /b 0
+)
+
+if not exist "3rdPartyTools\Unity2UbiArt\bin" mkdir "3rdPartyTools\Unity2UbiArt\bin"
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $api='https://api.github.com/repos/aelurum/AssetStudio/releases/latest'; $headers=@{'User-Agent'='jd2021-map-installer-setup'}; $release=Invoke-RestMethod -Headers $headers -Uri $api; $asset=$release.assets | Where-Object { $_.name -match 'AssetStudio.*(CLI|cmd|console).*win.*\.(zip|7z)$' } | Select-Object -First 1; if (-not $asset) { $asset=$release.assets | Where-Object { $_.name -match 'AssetStudio.*CLI.*\.(zip|7z)$' } | Select-Object -First 1 }; if (-not $asset) { throw 'Could not find a Windows AssetStudio CLI release asset.' }; $tmpRoot='3rdPartyTools/Unity2UbiArt/bin/_assetstudio_tmp'; if (Test-Path $tmpRoot) { Remove-Item -Recurse -Force $tmpRoot }; New-Item -ItemType Directory -Path $tmpRoot | Out-Null; $archive=Join-Path $tmpRoot $asset.name; Invoke-WebRequest -Headers $headers -Uri $asset.browser_download_url -OutFile $archive; if ($archive -like '*.zip') { Expand-Archive -Path $archive -DestinationPath $tmpRoot -Force } elseif ($archive -like '*.7z') { $sevenZip=(Get-Command 7z -ErrorAction SilentlyContinue); if (-not $sevenZip) { throw 'AssetStudio release is .7z, but 7z is not installed.' }; & $sevenZip.Source x $archive ('-o' + $tmpRoot) -y | Out-Null } else { throw 'Unsupported AssetStudio archive format.' }; $cli=(Get-ChildItem -Path $tmpRoot -Recurse -Filter AssetStudioModCLI.exe -File | Select-Object -First 1); if (-not $cli) { throw 'AssetStudioModCLI.exe not found in downloaded archive.' }; $root=$cli.Directory.FullName; $dest='3rdPartyTools/Unity2UbiArt/bin/AssetStudioModCLI'; if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }; New-Item -ItemType Directory -Path $dest | Out-Null; Get-ChildItem -Path $root -Force | ForEach-Object { Copy-Item -Path $_.FullName -Destination $dest -Recurse -Force }; Remove-Item -Recurse -Force $tmpRoot"
+
+if errorlevel 1 (
+	echo [WARNING] AssetStudioModCLI auto-install failed.
+	echo JDNext mapPackage extraction may fail until AssetStudioModCLI is staged in %CLI_DIR%.
+	exit /b 0
+)
+
+if exist "%CLI_EXE%" (
+	echo [OK] AssetStudioModCLI staged at %CLI_EXE%
+) else (
+	echo [WARNING] AssetStudioModCLI setup completed but executable was not found.
 )
 
 exit /b 0
