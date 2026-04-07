@@ -1258,6 +1258,7 @@ class MainWindow(QMainWindow):
             ),
             sync=MapSync(),
             source_dir=source_root,
+            has_autodance=False,
         )
         return map_data
 

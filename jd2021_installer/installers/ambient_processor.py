@@ -1,7 +1,8 @@
 """Ambient sound processor.
 
-Processes ambient sound templates (`amb_*.tpl.ckd`) into the
-corresponding engine-ready `.ilu` and `.tpl` Lua pairs.
+Processes ambient sound templates (`amb_*.tpl.ckd` and
+`set_amb_*.tpl.ckd`) into the corresponding engine-ready `.ilu`
+and `.tpl` Lua pairs.
 
 Ported from V1's ``ubiart_lua.py`` (`process_ambient_sound`).
 """
@@ -542,9 +543,11 @@ def process_ambient_directory(source_dir: Path, target_dir: Path, codename: str)
     count = 0
     generated_intro_base = f"amb_{codename.lower()}_intro"
 
-    # 1. Process existing .tpl.ckd templates
+    # 1. Process existing .tpl.ckd templates (amb_* and set_amb_*)
     tpl_bases = set()
-    for ckd in source_dir.rglob("amb_*.tpl.ckd"):
+    tpl_ckds = set(source_dir.rglob("amb_*.tpl.ckd"))
+    tpl_ckds.update(source_dir.rglob("set_amb_*.tpl.ckd"))
+    for ckd in sorted(tpl_ckds, key=lambda p: p.as_posix().lower()):
         if not (_path_has_codename_component(ckd, codename) or _filename_matches_codename(ckd, codename)):
             continue
         try:
@@ -561,7 +564,7 @@ def process_ambient_directory(source_dir: Path, target_dir: Path, codename: str)
             if ilu_c and tpl_c:
                 base_name = ckd.name.replace(".tpl.ckd", "")
                 tpl_bases.add(base_name.lower())
-                
+
                 ilu_path = amb_out_dir / f"{base_name}.ilu"
                 tpl_path = amb_out_dir / f"{base_name}.tpl"
 
@@ -598,7 +601,7 @@ def process_ambient_directory(source_dir: Path, target_dir: Path, codename: str)
                             wf.setframerate(48000)
                             wf.writeframes(b"\x00\x00" * 4800)
                         logger.info("Created silent AMB placeholder: %s", target_wav.name)
-                
+
                 logger.debug("Processed AMB template: %s", ckd.name)
                 count += 1
         except Exception as e:

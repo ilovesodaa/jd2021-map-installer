@@ -281,12 +281,18 @@ class ModeSelectorWidget(QWidget):
             src = Path(source_path)
             asset_guess, nohud_guess = self._find_html_pair(src.parent)
 
-            if is_asset and not self.inputs["html"]["nohud"].text().strip() and nohud_guess:
-                self.inputs["html"]["nohud"].setText(str(nohud_guess))
-                logger.info("Auto-detected NOHUD HTML: %s", nohud_guess)
-            elif not is_asset and not self.inputs["html"]["asset"].text().strip() and asset_guess:
-                self.inputs["html"]["asset"].setText(str(asset_guess))
-                logger.info("Auto-detected Asset HTML: %s", asset_guess)
+            if is_asset and nohud_guess:
+                current_nohud = self.inputs["html"]["nohud"].text().strip()
+                detected_nohud = str(nohud_guess)
+                if current_nohud != detected_nohud:
+                    self.inputs["html"]["nohud"].setText(detected_nohud)
+                    logger.info("Auto-detected NOHUD HTML: %s", nohud_guess)
+            elif not is_asset and asset_guess:
+                current_asset = self.inputs["html"]["asset"].text().strip()
+                detected_asset = str(asset_guess)
+                if current_asset != detected_asset:
+                    self.inputs["html"]["asset"].setText(detected_asset)
+                    logger.info("Auto-detected Asset HTML: %s", asset_guess)
 
             # Keep a valid target selected no matter which HTML field was browsed.
             target = self.inputs["html"]["asset"].text().strip() or source_path
