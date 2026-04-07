@@ -1038,7 +1038,8 @@ def write_game_files(
     try:
         setup_dirs(target)
 
-        # Determine coach count
+        # Determine coach count.
+        # JD2021 gameplay uses 4 player slots; maps with >4 coaches still map into 4 slots.
         num_coach = sd.num_coach
         if num_coach < 1:
             textures_dir = target / "MenuArt/textures"
@@ -1050,6 +1051,10 @@ def write_game_files(
                 num_coach = len(coach_imgs) if coach_imgs else 1
             else:
                 num_coach = 1
+
+        if num_coach > 4:
+            logger.info("Clamping NumCoach from %d to 4 (JD2021 player slot limit)", num_coach)
+            num_coach = 4
 
         media = map_data.media
         optional_arts: List[str] = []

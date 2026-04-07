@@ -1223,8 +1223,14 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
     media.cover_albumbkg_path = _get_best_asset("albumbkg", all_media_files, allow_optional_fallback=True)
     media.cover_albumcoach_path = _get_best_asset("albumcoach", all_media_files, allow_optional_fallback=True)
     
-    # Coaches are a list
-    all_coaches = [f for f in all_media_files if "coach_" in f.name.lower()]
+    # Coaches are a list. Accept coach_1 / coach1 / coach-1 variants.
+    # Avoid matching unrelated assets like albumcoach.
+    coach_name_pattern = re.compile(r"(?:^|[_-])coach(?:[_-]?\d+)?(?:[_-]|$)", re.IGNORECASE)
+    all_coaches = [
+        f
+        for f in all_media_files
+        if "albumcoach" not in f.stem.lower() and coach_name_pattern.search(f.stem.lower())
+    ]
     if codename_low:
         codename_coaches = [c for c in all_coaches if _filename_matches_codename(c)]
         if not codename_coaches:
