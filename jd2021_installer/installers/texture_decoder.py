@@ -17,6 +17,11 @@ import struct
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+
 logger = logging.getLogger("jd2021.installers.texture_decoder")
 
 CKD_HEADER_SIZE = 44
@@ -29,6 +34,37 @@ _X360_FMT_DXT1 = 0x52
 _X360_FMT_DXT3 = 0x53
 _X360_FMT_DXT5 = 0x54
 _X360_GPU_DESC_SIZE = 52
+
+
+def _save_picto_on_canvas(img, output_path: Path, canvas_size: Optional[int]) -> None:
+    """Save a pictogram either directly or centered on a transparent square canvas.
+
+    When ``canvas_size`` is provided, the image is never upscaled; if the
+    source exceeds the canvas, it is proportionally downscaled to fit.
+    The final image is placed bottom-center on the canvas.
+    """
+    if canvas_size is None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(output_path)
+        return
+
+    src = img.convert("RGBA")
+    width, height = src.size
+    if width <= 0 or height <= 0:
+        return
+
+    scale = min(1.0, float(canvas_size) / float(max(width, height)))
+    fit_width = max(1, int(round(width * scale)))
+    fit_height = max(1, int(round(height * scale)))
+    if (fit_width, fit_height) != (width, height):
+        src = src.resize((fit_width, fit_height), Image.Resampling.LANCZOS)
+
+    canvas = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
+    offset_x = max(0, (canvas_size - src.size[0]) // 2)
+    offset_y = max(0, canvas_size - src.size[1])
+    canvas.paste(src, (offset_x, offset_y), src)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(output_path)
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +199,7 @@ def x360_to_dds(payload: bytes) -> bytes:
     return _x360_build_dds(untiled, width, height, fourcc, block_bytes)
 
 
-def dds_to_image(dds_data: bytes, output_path: Path) -> bool:
+def dds_to_image(dds_data: bytes, output_path: Path, canvas_size: Optional[int] = None) -> bool:
     """Convert DDS data to TGA or PNG using Pillow."""
     try:
         from PIL import Image
@@ -177,8 +213,7 @@ def dds_to_image(dds_data: bytes, output_path: Path) -> bool:
     try:
         temp_dds.write_bytes(dds_data)
         img = Image.open(str(temp_dds))
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        img.save(str(output_path))
+        _save_picto_on_canvas(img, output_path, canvas_size)
         logger.debug("Saved texture: %s (%dx%d)", output_path.name, img.size[0], img.size[1])
         return True
     except Exception as e:
@@ -192,7 +227,11 @@ def dds_to_image(dds_data: bytes, output_path: Path) -> bool:
             temp_dds.unlink()
 
 
-def decode_ckd_texture(ckd_path: Path, output_path: Optional[Path] = None) -> bool:
+def decode_ckd_texture(
+    ckd_path: Path,
+    output_path: Optional[Path] = None,
+    canvas_size: Optional[int] = None,
+) -> bool:
     """Full pipeline: CKD → detect format → DDS → TGA/PNG.
 
     Args:
@@ -212,7 +251,7 @@ def decode_ckd_texture(ckd_path: Path, output_path: Optional[Path] = None) -> bo
         return False
 
     if fmt == 'dds':
-        return dds_to_image(raw_data, output_path)
+        return dds_to_image(raw_data, output_path, canvas_size=canvas_size)
 
     if fmt == 'x360':
         try:
@@ -220,7 +259,7 @@ def decode_ckd_texture(ckd_path: Path, output_path: Optional[Path] = None) -> bo
         except Exception as e:
             logger.error("X360 decode failed for %s: %s", ckd_path.name, e)
             return False
-        return dds_to_image(dds_data, output_path)
+        return dds_to_image(dds_data, output_path, canvas_size=canvas_size)
 
     # NX/Switch XTX format
     try:
@@ -249,14 +288,14 @@ def decode_ckd_texture(ckd_path: Path, output_path: Optional[Path] = None) -> bo
         xtx_path.write_bytes(raw_data)
         return False
 
-    return dds_to_image(dds_data, output_path)
+    return dds_to_image(dds_data, output_path, canvas_size=canvas_size)
 
 
 # ---------------------------------------------------------------------------
 # Batch decoders
 # ---------------------------------------------------------------------------
 
-def decode_pictograms(picto_dir: Path, output_dir: Path) -> int:
+def decode_pictograms(picto_dir: Path, output_dir: Path, canvas_size: Optional[int] = None) -> int:
     """Decode all pictogram CKD textures in a directory.
 
     Args:
@@ -279,7 +318,7 @@ def decode_pictograms(picto_dir: Path, output_dir: Path) -> int:
                 out_name += '.png'
         out_path = output_dir / out_name
 
-        if decode_ckd_texture(ckd, out_path):
+        if decode_ckd_texture(ckd, out_path, canvas_size=canvas_size):
             success += 1
 
     # Manual/IPK maps can ship already-decoded pictos (png/tga/jpg).
@@ -301,19 +340,21 @@ def decode_pictograms(picto_dir: Path, output_dir: Path) -> int:
 
         try:
             if ext == ".png":
-                shutil.copy2(src, out_path)
+                if Image is None:
+                    logger.warning("Pillow missing; skipping non-PNG picto %s", src.name)
+                    continue
+                with Image.open(src) as img:
+                    _save_picto_on_canvas(img, out_path, canvas_size)
                 success += 1
                 continue
 
             # Convert TGA/JPG to PNG when Pillow is available.
-            try:
-                from PIL import Image
-            except ImportError:
+            if Image is None:
                 logger.warning("Pillow missing; skipping non-PNG picto %s", src.name)
                 continue
 
             with Image.open(src) as img:
-                img.save(out_path)
+                _save_picto_on_canvas(img, out_path, canvas_size)
             success += 1
         except Exception as e:
             logger.warning("Failed to process loose picto %s: %s", src.name, e)

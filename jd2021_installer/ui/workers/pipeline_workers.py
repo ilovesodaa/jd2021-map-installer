@@ -1446,11 +1446,20 @@ def install_map_to_game(
             
         if status_callback: status_callback("Decode Pictograms")
         decoded_pictos = 0
+        picto_canvas_size = 512 if _is_jdnext_source_map() else None
         if map_data.source_dir and map_data.source_dir.exists():
             for picto_dir in _collect_pictogram_sources(map_data.source_dir, codename, preferred=picto_src):
-                decoded_pictos += decode_pictograms(picto_dir, map_target / "timeline" / "pictos")
+                decoded_pictos += decode_pictograms(
+                    picto_dir,
+                    map_target / "timeline" / "pictos",
+                    canvas_size=picto_canvas_size,
+                )
         elif picto_src and picto_src.exists():
-            decoded_pictos += decode_pictograms(picto_src, map_target / "timeline" / "pictos")
+            decoded_pictos += decode_pictograms(
+                picto_src,
+                map_target / "timeline" / "pictos",
+                canvas_size=picto_canvas_size,
+            )
 
         if decoded_pictos == 0:
             logger.warning(

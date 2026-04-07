@@ -46,6 +46,24 @@ logger = logging.getLogger("jd2021.parsers.normalizer")
 JDU_AUDIO_CALIBRATION_MS = 0.0
 _SONGDB_SYNTH_MISSING_WARNED = False
 
+_PLACEHOLDER_TEXT_VALUES = {
+    "unknown",
+    "unknown title",
+    "unknown artist",
+    "unknown dancer",
+    "empty credits",
+    "n/a",
+    "na",
+    "none",
+}
+
+
+def _is_effectively_missing_text(value: object) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return True
+    return text.lower() in _PLACEHOLDER_TEXT_VALUES
+
 
 def _is_jdnext_source(source_dir: Path, media: MapMedia) -> bool:
     """Best-effort detection for JDNext-origin maps in normalized sources."""
@@ -637,7 +655,7 @@ def _apply_jdnext_metadata_songdesc_overrides(
             song_desc.tags = cleaned_tags
 
     credits = str(metadata.get("credits", "") or "").strip()
-    if credits and not str(song_desc.credits or "").strip():
+    if credits and _is_effectively_missing_text(song_desc.credits):
         song_desc.credits = credits
 
     other_info = metadata.get("other_info")
@@ -653,7 +671,7 @@ def _apply_jdnext_metadata_songdesc_overrides(
         song_desc.sweat_difficulty = sweat_difficulty
 
     original_ver = _to_int(other_info.get("original_jd_version"))
-    if original_ver is not None and song_desc.original_jd_version in (0, 2021):
+    if original_ver is not None and song_desc.original_jd_version in (0, -1, 2021):
         song_desc.original_jd_version = original_ver
 
     coach_count = _to_int(other_info.get("coach_count"))
@@ -739,17 +757,20 @@ def _apply_jdnext_songdb_cache_overrides(
             applied_fields.append("tags")
 
     credits = str(entry.get("credits", "") or "").strip()
-    if credits and not str(song_desc.credits or "").strip():
+    if credits and _is_effectively_missing_text(song_desc.credits):
         song_desc.credits = credits
         applied_fields.append("credits")
 
     mapped_title = str(entry.get("title", "") or "").strip()
-    if mapped_title and (not str(song_desc.title or "").strip() or song_desc.title == song_desc.map_name):
+    if mapped_title and (
+        _is_effectively_missing_text(song_desc.title)
+        or str(song_desc.title or "").strip().lower() == str(song_desc.map_name or "").strip().lower()
+    ):
         song_desc.title = mapped_title
         applied_fields.append("title")
 
     mapped_artist = str(entry.get("artist", "") or "").strip()
-    if mapped_artist and not str(song_desc.artist or "").strip():
+    if mapped_artist and _is_effectively_missing_text(song_desc.artist):
         song_desc.artist = mapped_artist
         applied_fields.append("artist")
 
@@ -769,7 +790,7 @@ def _apply_jdnext_songdb_cache_overrides(
         applied_fields.append("coach_count")
 
     original_ver = _as_int(entry.get("original_jd_version"))
-    if original_ver is not None and song_desc.original_jd_version in (0, 2021):
+    if original_ver is not None and song_desc.original_jd_version in (0, -1, 2021):
         song_desc.original_jd_version = original_ver
         applied_fields.append("original_jd_version")
 

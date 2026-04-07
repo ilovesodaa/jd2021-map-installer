@@ -477,6 +477,79 @@ class TestNormalizerMusicTrack:
         assert result.song_desc.num_coach == 4
         assert result.song_desc.original_jd_version == 2023
 
+    def test_jdnext_songdb_cache_overlays_placeholder_original_version(self, tmp_path: Path, monkeypatch) -> None:
+        import json
+
+        mt_data = {
+            "COMPONENTS": [{
+                "trackData": {
+                    "structure": {
+                        "markers": [0, 2400, 4800],
+                        "signatures": [{"beats": 4, "marker": 0}],
+                        "sections": [{"sectionType": 0, "marker": 0}],
+                        "startBeat": 0,
+                        "endBeat": 2,
+                        "videoStartTime": 0.0,
+                    }
+                }
+            }]
+        }
+        map_json = {
+            "MapName": "Judas",
+            "SongDesc": {
+                "MapName": "Judas",
+                "Artist": "Unknown Artist",
+                "DancerName": "Unknown Dancer",
+                "Title": "Unknown Title",
+                "Credits": "Empty Credits",
+                "NumCoach": 1,
+                "MainCoach": 0,
+                "Difficulty": 2,
+                "SweatDifficulty": 1,
+                "OriginalJDVersion": -1,
+            },
+        }
+        songdb = {
+            "schema_version": 1,
+            "index": {
+                "judas": {
+                    "entry_id": "998b2cd2-02ff-4c73-8aac-54065aebee36",
+                    "map_name": "Judas",
+                    "parent_map_name": "Judas",
+                    "title": "Judas",
+                    "artist": "Lady Gaga",
+                    "credits": "Licensed Credits",
+                    "tags": ["Main", "jdplus"],
+                    "difficulty": 2,
+                    "sweat_difficulty": 1,
+                    "coach_count": 1,
+                    "original_jd_version": 2022,
+                    "status": None,
+                    "lyrics_color": "#FFA416FF",
+                    "preview_entry": None,
+                    "preview_loop_start": None,
+                    "preview_loop_end": None,
+                    "video_start_time": None,
+                }
+            },
+        }
+
+        (tmp_path / "Judas_musictrack.tpl.ckd").write_text(json.dumps(mt_data), encoding="utf-8")
+        mono = tmp_path / "monobehaviour"
+        mono.mkdir(parents=True, exist_ok=True)
+        (mono / "map.json").write_text(json.dumps(map_json), encoding="utf-8")
+        synth_path = tmp_path / "jdnext_songdb_synth.json"
+        synth_path.write_text(json.dumps(songdb), encoding="utf-8")
+
+        monkeypatch.setattr("jd2021_installer.parsers.normalizer.resolve_songdb_synth_path", lambda: synth_path)
+
+        result = normalize(tmp_path, codename="Judas")
+
+        assert result.song_desc.title == "Judas"
+        assert result.song_desc.artist == "Lady Gaga"
+        assert result.song_desc.credits == "Licensed Credits"
+        assert result.song_desc.original_jd_version == 2022
+
     def test_synthesized_tapes_with_top_level_clips_are_counted(self, tmp_path: Path) -> None:
         import json
 
