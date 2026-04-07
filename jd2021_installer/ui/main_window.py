@@ -1349,6 +1349,7 @@ class MainWindow(QMainWindow):
             map_data.sync.audio_ms = default_audio_ms
             map_data.sync.video_ms = default_video_ms
             setattr(map_data, "_readjust_profile", "fetch_html")
+            setattr(map_data, "_readjust_source_mode", entry.source_mode)
             setattr(map_data, "_readjust_update_audio", True)
             setattr(map_data, "_readjust_update_video", False)
         else:
@@ -1401,6 +1402,16 @@ class MainWindow(QMainWindow):
         if map_data is None:
             return False
 
+        # Never apply JDNext preview-only corrections to explicit IPK sources.
+        if self._is_ipk_source_map(map_data):
+            return False
+
+        profile = str(getattr(map_data, "_readjust_profile", "")).strip().lower()
+        if profile == "fetch_html":
+            source_mode = str(getattr(map_data, "_readjust_source_mode", "")).strip().lower()
+            if "jdnext" in source_mode:
+                return True
+
         mode_low = (self._current_mode or "").lower()
         if "jdnext" in mode_low:
             return True
@@ -1418,12 +1429,6 @@ class MainWindow(QMainWindow):
                             return True
                     except OSError:
                         pass
-
-        video_path = map_data.media.video_path
-        if video_path:
-            name = video_path.name.lower()
-            if re.match(r"^video_(ultra|high|mid|low)\.(hd|vp8|vp9)\.webm$", name):
-                return True
 
         return False
 
@@ -2060,14 +2065,21 @@ class MainWindow(QMainWindow):
     def _infer_readjust_source_mode(self, map_data: NormalizedMapData) -> str:
         mode = (self._current_mode or "").strip()
         audio_suffix = map_data.media.audio_path.suffix.lower() if map_data.media.audio_path else ""
+        mode_low = mode.lower()
 
-        if "fetch" in mode.lower():
+        if "jdnext" in mode_low and "fetch" in mode_low:
+            return "Fetch JDNext"
+        if "jdnext" in mode_low and "html" in mode_low:
+            return "HTML JDNext"
+        if "jdnext" in mode_low:
+            return "JDNext"
+        if "fetch" in mode_low:
             return "Fetch"
-        if "html" in mode.lower():
+        if "html" in mode_low:
             return "HTML"
-        if "ipk" in mode.lower():
+        if "ipk" in mode_low:
             return "IPK Archive"
-        if "batch" in mode.lower():
+        if "batch" in mode_low:
             if audio_suffix == ".wav":
                 return "IPK Bundle"
             return "Batch"
@@ -2170,7 +2182,8 @@ class MainWindow(QMainWindow):
                 a_offset += preview_nudge_s
                 loop_start, loop_end = self._get_preview_loop_seconds(self._current_map)
                 preview_fps = self._get_preview_fps_for_map(self._current_map)
-                startup_compensation_ms: Optional[float] = 0.0 if self._is_jdnext_source_map(self._current_map) else None
+                is_jdnext_preview = self._is_jdnext_source_map(self._current_map)
+                startup_compensation_ms: Optional[float] = 0.0 if is_jdnext_preview else None
                 
                 logger.debug(
                     "Preview launch: v_override=%.3f, a_offset=%.3f, preview_nudge=%.3f, fps=%.3f, startup_comp_ms=%s",
@@ -2189,6 +2202,7 @@ class MainWindow(QMainWindow):
                     loop_end=loop_end,
                     preview_fps=preview_fps,
                     startup_compensation_ms=startup_compensation_ms,
+                    accurate_seek=is_jdnext_preview,
                 )
             else:
                 self.append_log("No video available for preview.")
@@ -2237,7 +2251,8 @@ class MainWindow(QMainWindow):
             a_offset += preview_nudge_s
             loop_start, loop_end = self._get_preview_loop_seconds(self._current_map)
             preview_fps = self._get_preview_fps_for_map(self._current_map)
-            startup_compensation_ms: Optional[float] = 0.0 if self._is_jdnext_source_map(self._current_map) else None
+            is_jdnext_preview = self._is_jdnext_source_map(self._current_map)
+            startup_compensation_ms: Optional[float] = 0.0 if is_jdnext_preview else None
             
             logger.debug(
                 "Debounced preview restart (startup_comp_ms=%s)...",
@@ -2253,6 +2268,7 @@ class MainWindow(QMainWindow):
                 loop_end=loop_end,
                 preview_fps=preview_fps,
                 startup_compensation_ms=startup_compensation_ms,
+                accurate_seek=is_jdnext_preview,
             )
 
     def _on_pad_audio(self) -> None:

@@ -274,6 +274,7 @@ class PreviewWidget(QWidget):
         self._preview_video_mode: str = "proxy_low"
         self._preview_fps_default: float = float(PREVIEW_FPS)
         self._playback_fps: float = float(PREVIEW_FPS)
+        self._accurate_seek: bool = False
         self._preview_startup_compensation_ms: float = 100.0
         self._startup_compensation_override_ms: Optional[float] = None
         self._preview_proxy_cache: dict[str, str] = {}
@@ -447,6 +448,7 @@ class PreviewWidget(QWidget):
         loop_end: float = 0.0,
         preview_fps: Optional[float] = None,
         startup_compensation_ms: Optional[float] = None,
+        accurate_seek: bool = False,
     ) -> None:
         """Start (or restart) embedded preview playback.
 
@@ -491,6 +493,7 @@ class PreviewWidget(QWidget):
         self._loop_end = max(0.0, loop_end)
         self._playback_fps = effective_fps
         self._startup_compensation_override_ms = startup_compensation_ms
+        self._accurate_seek = bool(accurate_seek)
         self._stop_requested = False
 
         # Kill previous, but keep position if we are just restarting/seeking
@@ -529,11 +532,10 @@ class PreviewWidget(QWidget):
         vid_seek += start_time
         aud_seek += start_time
 
-        coarse_video_seek = 0
         fine_video_seek = max(0.0, vid_seek)
 
         vf_filters: list[str] = []
-        if fine_video_seek > 1e-6:
+        if self._accurate_seek and fine_video_seek > 1e-6:
             vf_filters.extend([
                 f"trim=start={fine_video_seek:.6f}",
                 "setpts=PTS-STARTPTS",
@@ -551,7 +553,8 @@ class PreviewWidget(QWidget):
         ffmpeg_cmd: list[str] = [self._ffmpeg_path, "-loglevel", "error"]
         if self._ffmpeg_hwaccel == "auto":
             ffmpeg_cmd += ["-hwaccel", "auto"]
-        # Accuracy-first preview seek: avoid input-seek keyframe snapping.
+        if not self._accurate_seek and fine_video_seek > 1e-6:
+            ffmpeg_cmd += ["-ss", f"{fine_video_seek:.6f}"]
         ffmpeg_cmd += [
             "-i", resolved_video_path,
             "-vf", vf_chain,
@@ -565,10 +568,12 @@ class PreviewWidget(QWidget):
             self._ffplay_path, "-nodisp", "-autoexit", "-loglevel", "quiet",
         ]
         fine_audio_seek = max(0.0, aud_seek)
+        if not self._accurate_seek and fine_audio_seek > 1e-6:
+            ffplay_cmd += ["-ss", f"{fine_audio_seek:.6f}"]
         ffplay_cmd += ["-i", resolved_audio_path]
 
         afilters: list[str] = []
-        if fine_audio_seek > 1e-6:
+        if self._accurate_seek and fine_audio_seek > 1e-6:
             # Fine decoder-side trim preserves fractional precision after coarse seek.
             afilters.extend([
                 f"atrim=start={fine_audio_seek:.6f}",
@@ -709,6 +714,7 @@ class PreviewWidget(QWidget):
                 loop_end=self._loop_end,
                 preview_fps=self._playback_fps,
                 startup_compensation_ms=self._startup_compensation_override_ms,
+                accurate_seek=self._accurate_seek,
             )
             return
 
@@ -858,6 +864,7 @@ class PreviewWidget(QWidget):
                 loop_end=self._loop_end,
                 preview_fps=self._playback_fps,
                 startup_compensation_ms=self._startup_compensation_override_ms,
+                accurate_seek=self._accurate_seek,
             )
 
     # ==================================================================
