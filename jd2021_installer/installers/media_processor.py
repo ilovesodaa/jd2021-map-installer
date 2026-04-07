@@ -1080,6 +1080,36 @@ def copy_moves(
     total_copied = 0
     skipped_gesture_names: set[str] = set()
 
+    def _collect_expected_gestures_from_dtape() -> set[str]:
+        """Extract expected gesture filenames from installed dance tape paths."""
+        expected: set[str] = set()
+        timeline_dir = Path(target_dir) / "timeline"
+        if not timeline_dir.is_dir():
+            return expected
+
+        dtapes = sorted(timeline_dir.glob("*_TML_Dance.dtape"))
+        classifier_re = re.compile(r'ClassifierPath\s*=\s*"([^"]+)"', re.IGNORECASE)
+        for dtape_path in dtapes:
+            try:
+                content = dtape_path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+
+            for match in classifier_re.finditer(content):
+                classifier_path = match.group(1).strip().replace("\\", "/")
+                move_name = Path(classifier_path).name
+                if not move_name:
+                    continue
+
+                stem, ext = os.path.splitext(move_name)
+                ext_low = ext.lower()
+                if ext_low == ".gesture":
+                    expected.add(move_name)
+                elif ext_low == ".msm":
+                    expected.add(f"{stem}.gesture")
+
+        return expected
+
     KINECT_GESTURE_PLATFORMS = {"DURANGO", "X360"}
 
     if skip_gestures:
@@ -1170,11 +1200,7 @@ def copy_moves(
     should_synthesize = skip_gestures or not pc_gestures
     if should_synthesize:
         expected_names: set[str] = set(skipped_gesture_names)
-        for plat_dir in src_root.iterdir():
-            if not plat_dir.is_dir():
-                continue
-            for msm_file in plat_dir.glob("*.msm"):
-                expected_names.add(f"{msm_file.stem}.gesture")
+        expected_names.update(_collect_expected_gestures_from_dtape())
 
         expected_names = {
             name

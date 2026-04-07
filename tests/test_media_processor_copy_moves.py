@@ -77,8 +77,18 @@ def test_copy_moves_synthesizes_fallback_gestures_when_none_survive(tmp_path: Pa
     _write_binary_gesture(scarlett / "jdnext_a.gesture")
     _write_binary_gesture(scarlett / "jdnext_b.gesture")
 
-    # MSM-only moves should also get a paired gesture fallback.
-    (durango / "jdnext_c.msm").write_text("msm", encoding="utf-8")
+    # MSM files are copied, but fallback gesture names should come from dtape.
+    (durango / "unused_from_msm_only.msm").write_text("msm", encoding="utf-8")
+
+    timeline = target / "timeline"
+    timeline.mkdir(parents=True, exist_ok=True)
+    (timeline / "jdnext_map_TML_Dance.dtape").write_text(
+        'params = { Tape = { Clips = {\n'
+        '  { MotionClip = { ClassifierPath = "world/maps/jdnext_map/timeline/moves/jdnext_c.msm" } },\n'
+        '  { MotionClip = { ClassifierPath = "world/maps/jdnext_map/timeline/moves/jdnext_d.gesture" } }\n'
+        '} } }',
+        encoding="utf-8",
+    )
 
     copied = copy_moves(src, target)
     pc = target / "timeline" / "moves" / "pc"
@@ -86,8 +96,10 @@ def test_copy_moves_synthesizes_fallback_gestures_when_none_survive(tmp_path: Pa
     assert (pc / "jdnext_a.gesture").exists()
     assert (pc / "jdnext_b.gesture").exists()
     assert (pc / "jdnext_c.gesture").exists()
-    assert (pc / "jdnext_c.msm").exists()
-    assert copied == 4
+    assert (pc / "jdnext_d.gesture").exists()
+    assert (pc / "unused_from_msm_only.msm").exists()
+    assert not (pc / "unused_from_msm_only.gesture").exists()
+    assert copied == 5
 
 
 def test_copy_moves_uses_bundled_generic_template(tmp_path: Path) -> None:
