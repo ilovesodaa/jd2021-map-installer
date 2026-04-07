@@ -92,3 +92,35 @@ def test_synthesize_jdnext_songdb_derives_loop_end_from_preview_duration(tmp_pat
     assert entry is not None
     # 30 seconds at 48k ticks/s with 24k-per-beat markers = 60 beats forward.
     assert entry.get("preview_loop_end") == 139.0
+
+
+def test_synthesize_jdnext_songdb_title_collision_prefers_matching_map_name(tmp_path: Path):
+    source_path = tmp_path / "songdbnext_title_collision.json"
+    source_payload = {
+        "uuid-base": {
+            "mapName": "Telephone",
+            "parentMapName": "Telephone",
+            "title": "Telephone",
+            "artist": "Lady Gaga",
+        },
+        "uuid-alt": {
+            "mapName": "TelephoneALT",
+            "parentMapName": "TelephoneALT",
+            "title": "Telephone",
+            "artist": "Lady Gaga",
+            "tags": ["ALT", "Variant"],
+        },
+    }
+    source_path.write_text(json.dumps(source_payload), encoding="utf-8")
+
+    result = synthesize_jdnext_songdb(source_path, output_dir=tmp_path)
+    loaded = load_songdb_synth(result.output_path)
+    assert loaded is not None
+
+    title_lookup = find_songdb_entry("Telephone", synth_path=result.output_path)
+    alt_lookup = find_songdb_entry("TelephoneALT", synth_path=result.output_path)
+
+    assert title_lookup is not None
+    assert alt_lookup is not None
+    assert title_lookup.get("map_name") == "Telephone"
+    assert alt_lookup.get("map_name") == "TelephoneALT"

@@ -178,13 +178,40 @@ def _entry_score(entry: dict[str, Any]) -> int:
     return score
 
 
-def _upsert_index(index: dict[str, dict[str, Any]], key_raw: str, entry: dict[str, Any]) -> None:
+def _upsert_index(
+    index: dict[str, dict[str, Any]],
+    key_raw: str,
+    entry: dict[str, Any],
+    *,
+    key_kind: str,
+) -> None:
     key = _normalize_lookup_key(key_raw)
     if not key:
         return
 
     existing = index.get(key)
-    if existing is None or _entry_score(entry) >= _entry_score(existing):
+    if existing is None:
+        index[key] = entry
+        return
+
+    if key_kind == "title":
+        # Title collisions are common for alternates/variants (e.g. base + ALT).
+        # Prefer the entry whose map identifier actually matches this lookup key.
+        existing_map_name = _normalize_lookup_key(str(existing.get("map_name", "") or ""))
+        existing_parent = _normalize_lookup_key(str(existing.get("parent_map_name", "") or ""))
+        entry_map_name = _normalize_lookup_key(str(entry.get("map_name", "") or ""))
+        entry_parent = _normalize_lookup_key(str(entry.get("parent_map_name", "") or ""))
+
+        existing_matches_key = existing_map_name == key or existing_parent == key
+        entry_matches_key = entry_map_name == key or entry_parent == key
+
+        if existing_matches_key and not entry_matches_key:
+            return
+        if entry_matches_key and not existing_matches_key:
+            index[key] = entry
+            return
+
+    if _entry_score(entry) >= _entry_score(existing):
         index[key] = entry
 
 
@@ -268,9 +295,9 @@ def synthesize_jdnext_songdb(
             "video_start_time": preview["video_start_time"],
         }
 
-        _upsert_index(index, map_name, compact_entry)
-        _upsert_index(index, parent_map_name, compact_entry)
-        _upsert_index(index, title, compact_entry)
+        _upsert_index(index, map_name, compact_entry, key_kind="map_name")
+        _upsert_index(index, parent_map_name, compact_entry, key_kind="parent_map_name")
+        _upsert_index(index, title, compact_entry, key_kind="title")
 
     if usable_entries == 0 or not index:
         raise ValueError(

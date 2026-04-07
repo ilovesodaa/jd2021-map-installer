@@ -175,3 +175,50 @@ def test_strategy_falls_back_to_assetstudio_when_unitypy_fails(tmp_path: Path, m
 
     assert summary.winner == "assetstudio"
     assert calls == ["unitypy", "assetstudio"]
+
+
+def test_synthesize_tape_normalizes_prefixed_or_suffixed_move_names(tmp_path: Path):
+    mapped = tmp_path / "mapped"
+    map_json = tmp_path / "Map.json"
+    map_json.write_text(
+        json.dumps(
+            {
+                "DanceData": {
+                    "MotionClips": [
+                        {
+                            "StartTime": 0,
+                            "Duration": 24,
+                            "Id": 1,
+                            "TrackId": 2,
+                            "IsActive": 1,
+                            "MoveName": "maps\\judas\\timeline\\moves\\judas_moto_1.gesture",
+                            "MoveType": 1,
+                        },
+                        {
+                            "StartTime": 24,
+                            "Duration": 24,
+                            "Id": 3,
+                            "TrackId": 4,
+                            "IsActive": 1,
+                            "MoveName": "world/maps/judas/timeline/moves/judas_intro_judas_2.msm",
+                            "MoveType": 0,
+                        },
+                    ]
+                },
+                "KaraokeData": {"Clips": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    dance_ckd, _, _ = strategy_mod._synthesize_tapes_from_map_json(map_json, mapped, codename="Judas")
+
+    assert dance_ckd is not None
+    data = json.loads(dance_ckd.read_text(encoding="utf-8"))
+    clips = data.get("Clips", [])
+    classifier_paths = [c.get("ClassifierPath", "") for c in clips if c.get("__class") == "MotionClip"]
+
+    assert "world/maps/judas/timeline/moves/judas_moto_1.gesture" in classifier_paths
+    assert "world/maps/judas/timeline/moves/judas_intro_judas_2.msm" in classifier_paths
+    assert all(".gesture.gesture" not in p for p in classifier_paths)
+    assert all(".msm.msm" not in p for p in classifier_paths)

@@ -203,6 +203,26 @@ def _normalize_color(raw: object) -> list[float]:
     return [1.0, 0.968, 0.164, 0.552]
 
 
+def _normalize_move_name(raw: object) -> str:
+    """Return a bare move stem from variable JDNext MoveName formats."""
+    name = str(raw or "").strip()
+    if not name:
+        return ""
+
+    # Some maps provide full classifier-like paths and/or include the extension.
+    name = name.replace("\\", "/")
+    if "/" in name:
+        name = name.rsplit("/", 1)[-1]
+
+    lowered = name.lower()
+    for suffix in (".gesture", ".msm"):
+        if lowered.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+
+    return name.strip()
+
+
 def _synthesize_tapes_from_map_json(map_json_path: Path, mapped_root: Path, codename: str) -> tuple[Path | None, Path | None, set[str]]:
     if not map_json_path.exists():
         return None, None, set()
@@ -221,7 +241,7 @@ def _synthesize_tapes_from_map_json(map_json_path: Path, mapped_root: Path, code
     for mc in dance_data.get("MotionClips", []) if isinstance(dance_data, dict) else []:
         if not isinstance(mc, dict):
             continue
-        move_name = str(mc.get("MoveName", "")).strip()
+        move_name = _normalize_move_name(mc.get("MoveName", ""))
         move_type = int(mc.get("MoveType", 0) or 0)
         ext = "gesture" if move_type == 1 else "msm"
         dance_clips.append(

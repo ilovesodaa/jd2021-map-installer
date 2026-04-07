@@ -63,7 +63,7 @@ class AppConfig(BaseModel):
     preview_fps: int = 25
     preview_startup_compensation_ms: float = 100.0
     preview_only_audio_offset_ms: float = 0.0
-    jdnext_preview_only_audio_offset_ms: float = -170.0
+    jdnext_preview_only_audio_offset_ms: float = -200.0
     jdnext_preview_beat_nudge: float = 0.0
     audio_preview_fade_s: float = 2.0
 
