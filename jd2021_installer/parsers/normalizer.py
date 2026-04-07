@@ -43,7 +43,7 @@ from jd2021_installer.parsers.binary_ckd import parse_binary_ckd
 
 logger = logging.getLogger("jd2021.parsers.normalizer")
 
-JDU_AUDIO_CALIBRATION_MS = 85.0
+JDU_AUDIO_CALIBRATION_MS = 0.0
 _SONGDB_SYNTH_MISSING_WARNED = False
 
 

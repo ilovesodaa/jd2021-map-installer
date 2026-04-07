@@ -1439,39 +1439,9 @@ class MainWindow(QMainWindow):
             return 25.0
         return default_fps if default_fps > 0 else 24.0
 
-    def _estimate_ms_per_beat(self, map_data: Optional[NormalizedMapData]) -> Optional[float]:
-        """Estimate beat length from music track markers (milliseconds per beat)."""
-        if map_data is None or not map_data.music_track or not map_data.music_track.markers:
-            return None
-
-        markers = map_data.music_track.markers
-        if len(markers) < 2:
-            return None
-
-        # Marker units are 1/48 ms; derive beat duration from neighboring diffs.
-        diffs_ms: list[float] = []
-        max_samples = min(len(markers) - 1, 16)
-        for idx in range(max_samples):
-            delta = markers[idx + 1] - markers[idx]
-            if delta > 0:
-                diffs_ms.append(delta / 48.0)
-
-        if not diffs_ms:
-            return None
-        return sum(diffs_ms) / float(len(diffs_ms))
-
-    def _get_preview_only_audio_nudge_s(self, map_data: Optional[NormalizedMapData]) -> float:
+    def _get_preview_only_audio_nudge_s(self, _map_data: Optional[NormalizedMapData]) -> float:
         """Return preview-only audio nudge (seconds), never applied to install output."""
         nudge_ms = float(getattr(self._config, "preview_only_audio_offset_ms", 0.0) or 0.0)
-
-        if self._is_jdnext_source_map(map_data):
-            # JDNext preview-only correction. This never affects install/in-game offsets.
-            nudge_ms += float(getattr(self._config, "jdnext_preview_only_audio_offset_ms", -85.0) or 0.0)
-            beat_nudge = float(getattr(self._config, "jdnext_preview_beat_nudge", 0.0) or 0.0)
-            if abs(beat_nudge) > 1e-9:
-                beat_ms = self._estimate_ms_per_beat(map_data)
-                if beat_ms is not None:
-                    nudge_ms += beat_nudge * beat_ms
 
         return nudge_ms / 1000.0
 
