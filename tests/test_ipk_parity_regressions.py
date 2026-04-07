@@ -95,14 +95,14 @@ def test_archive_worker_does_not_swallow_unexpected_extraction_errors(tmp_path: 
     extractor.extract = _explode  # type: ignore[method-assign]
 
     worker = ExtractAndNormalizeWorker(extractor=extractor, output_dir=tmp_path / "work")
-    errors: list[str] = []
+    errors: list[tuple[str, str]] = []
     finished_payloads: list[object] = []
 
-    worker.error.connect(errors.append)
+    worker.error.connect(lambda stage, message: errors.append((stage, message)))
     worker.finished.connect(finished_payloads.append)
     worker.run()
 
-    assert errors and "boom" in errors[0]
+    assert errors and "boom" in errors[0][1]
     assert finished_payloads and finished_payloads[0] is None
 
 

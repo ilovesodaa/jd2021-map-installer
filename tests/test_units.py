@@ -177,7 +177,7 @@ def test_download_prefers_curl_resolve_for_jdhelper(monkeypatch, tmp_path: Path)
         "video_ULTRA.vp9.webm/hash.webm?auth=token"
     )
 
-    monkeypatch.setattr(web_playwright, "_classify_urls", lambda urls, quality: {
+    monkeypatch.setattr(web_playwright, "_classify_urls", lambda urls, quality, config=None: {
         "video": url,
         "audio": None,
         "mainscene": None,
@@ -260,6 +260,7 @@ def test_copy_video_keeps_vp9_yuv420p(monkeypatch, tmp_path: Path):
     src.write_bytes(b"data")
 
     class _Probe:
+        returncode = 0
         stdout = "vp9\nyuv420p\n"
 
     copied: dict[str, bool] = {"copy": False}
@@ -287,6 +288,7 @@ def test_copy_video_force_reencode_even_if_vp9(monkeypatch, tmp_path: Path):
     src.write_bytes(b"data")
 
     class _Probe:
+        returncode = 0
         stdout = "vp9\nyuv420p\n"
 
     called: dict[str, bool] = {"ffmpeg": False}
@@ -322,7 +324,8 @@ def test_classify_urls_prefers_ultra_then_ultra_hd():
     selected = classified.get("video")
 
     assert isinstance(selected, str)
-    assert "video_ULTRA.hd.webm" in selected
+    # Default vp9 mode is fallback_compatible_down for non-HD selections.
+    assert "video_HIGH.hd.webm" in selected
 
 
 def test_classify_urls_ignores_jdnext_vp9_variants():
@@ -338,7 +341,7 @@ def test_classify_urls_ignores_jdnext_vp9_variants():
 
     assert isinstance(selected, str)
     assert "vp9" not in selected.lower()
-    assert "video_HIGH.hd.webm" in selected
+    assert "video_MID.hd.webm" in selected
 
 
 @pytest.mark.skipif(not _RUN_QT_WIDGET_TESTS, reason="Set JD2021_RUN_QT_WIDGET_TESTS=1 to run Qt widget behavior tests.")

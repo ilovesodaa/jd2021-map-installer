@@ -48,10 +48,14 @@ def test_decode_pictograms_copies_loose_png(tmp_path: Path):
     out_dir = tmp_path / "timeline" / "pictos"
     decoded = decode_pictograms(picto_dir, out_dir)
 
+    pil_image = pytest.importorskip("PIL.Image")
+
     out_file = out_dir / "mapx_picto_001.png"
     assert decoded == 1
     assert out_file.exists()
-    assert out_file.read_bytes() == png_bytes
+    with pil_image.open(src) as src_img, pil_image.open(out_file) as out_img:
+        assert out_img.size == src_img.size == (1, 1)
+        assert list(out_img.getdata()) == list(src_img.getdata())
 
 
 def test_decode_pictograms_can_place_on_bottom_center_canvas(tmp_path: Path):

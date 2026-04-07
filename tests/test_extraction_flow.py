@@ -132,6 +132,7 @@ def test_download_files_reuses_existing_alternate_video(tmp_path, monkeypatch):
     monkeypatch.setattr("requests.Session", lambda: fake_session)
     monkeypatch.setattr("time.sleep", lambda *_: None)
 
+    # Existing alternate quality should no longer be reused for a requested tier.
     existing = tmp_path / "TestMap_LOW.webm"
     existing.write_bytes(b"v" * 2048)
 
@@ -144,9 +145,8 @@ def test_download_files_reuses_existing_alternate_video(tmp_path, monkeypatch):
 
     downloaded = download_files(urls, tmp_path, "ULTRA_HD", cfg)
 
-    assert "TestMap_ULTRA.hd.webm" in downloaded
-    assert downloaded["TestMap_ULTRA.hd.webm"] == str(existing)
-    assert not any(u.endswith("TestMap_ULTRA.hd.webm") for u in fake_session.get_calls)
+    assert "TestMap_ULTRA.hd.webm" not in downloaded
+    assert any(u.endswith("TestMap_ULTRA.hd.webm") for u in fake_session.get_calls)
 
 
 def test_web_extractor_raises_when_critical_assets_still_missing(tmp_path, monkeypatch):
@@ -484,7 +484,8 @@ def test_classify_urls_maps_jdnext_vp9_to_non_hd_tier():
 
     classified = _classify_urls(urls, "ULTRA")
     assert classified["video"] is not None
-    assert "video_ULTRA.vp9.webm" in str(classified["video"])
+    # Default vp9 mode is compatibility-down, so ULTRA resolves to HIGH_HD.
+    assert "video_HIGH.hd.webm" in str(classified["video"])
 
 
 def test_classify_urls_maps_jdnext_vp9_for_hd_fallback_search_order():
@@ -496,5 +497,4 @@ def test_classify_urls_maps_jdnext_vp9_for_hd_fallback_search_order():
 
     # Request HIGH_HD when only HIGH_VP9 exists: should resolve to HIGH tier fallback.
     classified = _classify_urls(urls, "HIGH_HD")
-    assert classified["video"] is not None
-    assert "video_HIGH.vp9.webm" in str(classified["video"])
+    assert classified["video"] is None

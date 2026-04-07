@@ -173,15 +173,14 @@ class TestBundleParity(unittest.TestCase):
              patch("jd2021_installer.installers.media_processor.process_menu_art"), \
              patch("jd2021_installer.installers.sku_scene.register_map"), \
              patch("jd2021_installer.installers.autodance_processor.process_stape_file"), \
-             patch("jd2021_installer.ui.workers.pipeline_workers.shutil.copy2") as mock_copy2, \
              patch("jd2021_installer.installers.media_processor.copy_video") as mock_copy_video:
             install_map_to_game(map_data, game_root, config)
 
         expected_main_dst = game_root / "data" / "world" / "maps" / "MapA" / "videoscoach" / "MapA.webm"
         expected_preview_dst = game_root / "data" / "world" / "maps" / "MapA" / "videoscoach" / "MapA_MapPreview.webm"
 
-        mock_copy2.assert_any_call(gameplay_video, expected_main_dst)
-        mock_copy_video.assert_called_once_with(preview_video, expected_preview_dst, config=config)
+        mock_copy_video.assert_any_call(gameplay_video, expected_main_dst, config=config)
+        mock_copy_video.assert_any_call(preview_video, expected_preview_dst, config=config)
 
 if __name__ == "__main__":
     unittest.main()
