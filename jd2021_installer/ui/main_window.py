@@ -182,7 +182,7 @@ class MainWindow(QMainWindow):
         self._completed_install_maps: list[NormalizedMapData] = []
 
         # -- Window setup -----------------------------------------------------
-        self.setWindowTitle("JD2021 Map Installer")
+        self.setWindowTitle("JD2021PC Map Installer")
         self._apply_window_size_config()
 
         self._build_ui()
@@ -1351,6 +1351,14 @@ class MainWindow(QMainWindow):
             self._set_status("Settings saved.")
 
     def _on_readjust(self) -> None:
+        if self._active_worker is not None:
+            self._set_status("Please wait for the current operation to finish.")
+            return
+
+        self._preview_widget.stop(reset_position=False, clear_canvas=False)
+        self._sync_refinement.set_preview_state(False)
+        self._clear_offset_review_state()
+
         entries, pruned = prune_stale_entries()
         if pruned:
             self.append_log(
@@ -1759,6 +1767,10 @@ class MainWindow(QMainWindow):
 
     def _on_install_requested(self) -> None:
         """Launch the Extract → Normalize → Install pipeline."""
+        if self._active_worker is not None:
+            self._set_status("Please wait for the current operation to finish.")
+            return
+
         self._install_started_at = time.monotonic()
         self._completed_install_maps = []
 
@@ -1815,6 +1827,10 @@ class MainWindow(QMainWindow):
         include_fetch_checks = mode_index in (MODE_FETCH, MODE_JDNEXT)
         if not self._ensure_runtime_dependencies(include_fetch_checks=include_fetch_checks):
             return
+
+        # Ensure readjust/bundle review state from a prior operation doesn't leak
+        # into the next install/finalize flow.
+        self._clear_offset_review_state()
 
         # Start dynamic per-map logging immediately if target is available
         self._start_file_logging(self._current_target)
@@ -2078,51 +2094,63 @@ class MainWindow(QMainWindow):
     def _on_status_updated(self, msg: str) -> None:
         """Map backend status messages to checklist steps for visual feedback."""
         self._log_with_level(msg, self._classify_status_level(msg))
-        
-        # Fix for Batch mode status strings e.g. "[1/10] Normalize assets (Koi)" or "[Koi] Extract map data"
+
+        # Support both batch status styles:
+        # - "[Koi] Normalize assets"
+        # - "[1/10] Normalize assets (Koi)"
         clean_msg = msg
-        prefix = ""
+        raw_prefix = ""
         if msg.startswith("[") and "]" in msg:
             try:
-                # Extract [Codename] prefix if it exists
                 parts = msg.split("]", 1)
-                prefix = parts[0][1:].strip()
+                raw_prefix = parts[0][1:].strip()
                 step_part = parts[1].strip()
-                
-                # If prefix is a number (e.g. 1/10), it's the old format
-                if "/" in prefix and prefix.replace("/", "").isdigit():
-                    prefix = f"[{prefix}]"
-                else:
-                    # It's likely a codename
-                    prefix = f"[{prefix}]"
-                
+
                 if "(" in step_part:
                     step_part = step_part.split("(", 1)[0].strip()
                 clean_msg = step_part
             except Exception:
                 pass
 
+        prefix = f"[{raw_prefix}]" if raw_prefix else ""
+        map_step_names = self._feedback_panel._step_items
+        pipeline_mode = any(step in map_step_names for step in PIPELINE_STEPS)
+
+        indexed_map_step: Optional[str] = None
+        if "/" in raw_prefix:
+            left, right = raw_prefix.split("/", 1)
+            if left.isdigit() and right.isdigit():
+                idx_1_based = int(left)
+                list_item = self._feedback_panel._checklist.item(idx_1_based - 1)
+                if list_item is not None:
+                    indexed_map_step = str(list_item.data(Qt.ItemDataRole.UserRole) or "").strip()
+                    if indexed_map_step not in map_step_names:
+                        indexed_map_step = None
+
         if clean_msg in PIPELINE_STEPS:
-            # If in batch mode, we might be updating by map name instead of step name
-            # Check if prefix (without brackets) is a known map in the checklist
-            raw_prefix = prefix.strip("[]")
-            if raw_prefix in self._feedback_panel._step_items:
+            if raw_prefix in map_step_names:
                 self._feedback_panel.update_checklist_step(raw_prefix, StepStatus.IN_PROGRESS, suffix=clean_msg)
-            else:
-                # Standard single-map step update
+            elif indexed_map_step is not None:
+                self._feedback_panel.update_checklist_step(indexed_map_step, StepStatus.IN_PROGRESS, suffix=clean_msg)
+            elif clean_msg in map_step_names:
                 self._feedback_panel.update_checklist_step(clean_msg, StepStatus.IN_PROGRESS, prefix=prefix)
-            
-            # Heuristic: Mark ALL preceding steps as DONE (only for single-map mode).
-            if raw_prefix not in self._feedback_panel._step_items:
+            else:
+                self._feedback_panel.update_checklist_step(clean_msg, StepStatus.IN_PROGRESS, prefix=prefix)
+
+            # Mark preceding pipeline steps only when checklist is in pipeline mode.
+            if pipeline_mode and clean_msg in map_step_names:
                 try:
                     idx = PIPELINE_STEPS.index(clean_msg)
                     for i in range(idx):
-                        self._feedback_panel.update_checklist_step(PIPELINE_STEPS[i], StepStatus.DONE, prefix=prefix)
+                        prev_step = PIPELINE_STEPS[i]
+                        if prev_step in map_step_names:
+                            self._feedback_panel.update_checklist_step(prev_step, StepStatus.DONE, prefix=prefix)
                 except ValueError:
                     pass
-        elif prefix.strip("[]") in self._feedback_panel._step_items:
-            # High-level status for a map in batch mode
-            self._feedback_panel.update_checklist_step(prefix.strip("[]"), StepStatus.IN_PROGRESS, suffix=clean_msg)
+        elif raw_prefix in map_step_names:
+            self._feedback_panel.update_checklist_step(raw_prefix, StepStatus.IN_PROGRESS, suffix=clean_msg)
+        elif indexed_map_step is not None:
+            self._feedback_panel.update_checklist_step(indexed_map_step, StepStatus.IN_PROGRESS, suffix=clean_msg)
 
     def _on_install_error(self, msg: str) -> None:
         self.append_log(f"ERROR: {msg}")
@@ -2684,8 +2712,18 @@ class MainWindow(QMainWindow):
             self._set_preview_controls_ready(False)
             # V1 Parity: Don't auto-restart preview anymore after apply
             self._prompt_cleanup()
+            self._clear_offset_review_state()
         else:
             self._readjust_pending_updates.clear()
+
+    def _clear_offset_review_state(self) -> None:
+        """Clear map-review/readjust context so a new flow starts cleanly."""
+        self._nav_maps = []
+        self._nav_index = 0
+        self._pending_offsets.clear()
+        self._readjust_pending_updates.clear()
+        self._current_map = None
+        self._sync_refinement.set_nav_visible(False)
 
     def _on_preview_audio_unavailable(self) -> None:
         if self._preview_audio_warning_shown:

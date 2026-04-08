@@ -49,6 +49,9 @@ _CFLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 class _AspectRatioLabel(QLabel):
     """A QLabel that automatically scales its pixmap while maintaining aspect ratio on resize."""
+
+    clicked = pyqtSignal()
+
     def __init__(self, text: str = "") -> None:
         super().__init__(text)
         self._base_pixmap = QPixmap()
@@ -68,6 +71,11 @@ class _AspectRatioLabel(QLabel):
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +285,7 @@ class PreviewWidget(QWidget):
         self._preview_startup_compensation_ms: float = 100.0
         self._startup_compensation_override_ms: Optional[float] = None
         self._preview_proxy_cache: dict[str, str] = {}
+        self._ended_naturally: bool = False
 
         self._build_ui()
 
@@ -304,6 +313,7 @@ class PreviewWidget(QWidget):
         self._canvas.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding,
         )
+        self._canvas.clicked.connect(self._toggle_playback)
         root.addWidget(self._canvas, stretch=1)
 
         # -- Seek bar -------------------------------------------------------
@@ -459,6 +469,7 @@ class PreviewWidget(QWidget):
         self._startup_compensation_override_ms = startup_compensation_ms
         self._accurate_seek = bool(accurate_seek)
         self._stop_requested = False
+        self._ended_naturally = False
 
         # Kill previous, but keep position if we are just restarting/seeking
         self.stop(
@@ -588,6 +599,7 @@ class PreviewWidget(QWidget):
             clear_canvas: If True, clears the preview canvas to "No Preview".
         """
         self._stop_requested = True
+        self._ended_naturally = False
         if self._worker is not None:
             self._worker.request_stop()
         
@@ -682,6 +694,7 @@ class PreviewWidget(QWidget):
             return
 
         self._playing = False
+        self._ended_naturally = True
         self._set_play_button_icon(False)
         self.preview_stopped.emit()
 
@@ -708,6 +721,8 @@ class PreviewWidget(QWidget):
         self.position_changed.emit(self._position)
         if self._playing:
             self._relaunch(new_pos)
+        elif self._ended_naturally and self._video_path and self._audio_path:
+            self._relaunch(new_pos)
         else:
             self._lbl_time.setText(self._fmt(new_pos))
             if self._duration > 0:
@@ -720,6 +735,8 @@ class PreviewWidget(QWidget):
         self.position_changed.emit(self._position)
         self._lbl_time.setText(self._fmt(self._position))
         if self._playing or self._resume_after_seek:
+            self._relaunch(self._position)
+        elif self._ended_naturally and self._video_path and self._audio_path:
             self._relaunch(self._position)
         self._resume_after_seek = False
 
@@ -735,6 +752,12 @@ class PreviewWidget(QWidget):
         # Clicking directly on the timeline groove may not set slider-down state.
         # Seek immediately so click-to-seek behaves as expected.
         if self._playing and abs(target - self._position) >= 0.25:
+            self._position = target
+            self.position_changed.emit(self._position)
+            self._relaunch(self._position)
+            return
+
+        if self._ended_naturally and abs(target - self._position) >= 0.25:
             self._position = target
             self.position_changed.emit(self._position)
             self._relaunch(self._position)

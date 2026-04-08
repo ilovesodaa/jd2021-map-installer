@@ -145,12 +145,12 @@ class ActionWidget(QWidget):
         utils = QHBoxLayout()
         utils.setSpacing(6)
 
-        self._btn_preflight = WrapButton("Pre-flight Check")
-        self._btn_preflight.setObjectName("btn_preflight")
-        self._btn_preflight.setMinimumHeight(38)
-        self._btn_preflight.setToolTip("Validate selected inputs, paths, and required tools before install")
-        self._btn_preflight.clicked.connect(self.preflight_requested.emit)
-        utils.addWidget(self._btn_preflight)
+        self._btn_reset = WrapButton("Reset State")
+        self._btn_reset.setObjectName("btn_reset")
+        self._btn_reset.setMinimumHeight(38)
+        self._btn_reset.setToolTip("Clear current mode inputs and reset temporary installer state")
+        self._btn_reset.clicked.connect(self.reset_state_requested.emit)
+        utils.addWidget(self._btn_reset)
 
         self._btn_settings = WrapButton("Settings")
         self._btn_settings.setObjectName("btn_settings")
@@ -159,17 +159,17 @@ class ActionWidget(QWidget):
         self._btn_settings.clicked.connect(self.settings_requested.emit)
         utils.addWidget(self._btn_settings)
 
-        self._btn_reset = WrapButton("Reset State")
-        self._btn_reset.setObjectName("btn_reset")
-        self._btn_reset.setMinimumHeight(38)
-        self._btn_reset.setToolTip("Clear current mode inputs and reset temporary installer state")
-        self._btn_reset.clicked.connect(self.reset_state_requested.emit)
-        utils.addWidget(self._btn_reset)
+        self._btn_preflight = WrapButton("Pre-flight Check")
+        self._btn_preflight.setObjectName("btn_preflight")
+        self._btn_preflight.setMinimumHeight(38)
+        self._btn_preflight.setToolTip("Validate selected inputs, paths, and required tools before install")
+        self._btn_preflight.clicked.connect(self.preflight_requested.emit)
+        utils.addWidget(self._btn_preflight)
 
         self._utility_row_buttons = [
+            self._btn_reset,
             self._btn_preflight,
             self._btn_settings,
-            self._btn_reset,
         ]
         root.addLayout(utils)
         QTimer.singleShot(0, self._sync_button_row_heights)
