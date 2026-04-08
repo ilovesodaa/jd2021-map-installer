@@ -44,7 +44,7 @@ def _safe_name(value: str, fallback: str) -> str:
 
 
 def _load_unitypy(config: AppConfig | None = None) -> Any:
-    """Import UnityPy from site-packages or local 3rd-party clone."""
+    """Import UnityPy from site-packages or local tools clone."""
     try:
         unitypy = importlib.import_module("UnityPy")
     except ModuleNotFoundError:
@@ -53,11 +53,11 @@ def _load_unitypy(config: AppConfig | None = None) -> Any:
         local_roots: list[Path] = []
         if configured_root:
             local_roots.append(Path(configured_root).expanduser())
-        local_roots.append(repo_root / "3rdPartyTools")
+        local_roots.append(repo_root / "tools")
 
         local_unitypy = None
         for root in local_roots:
-            candidate = root / "JDNextTools" / "UnityPy"
+            candidate = root / "UnityPy"
             if candidate.exists():
                 local_unitypy = candidate
                 break
@@ -70,7 +70,7 @@ def _load_unitypy(config: AppConfig | None = None) -> Any:
         else:
             raise RuntimeError(
                 "UnityPy is not available. Install it or clone it to "
-                "3rdPartyTools/JDNextTools/UnityPy."
+                "tools/UnityPy."
             )
 
     try:

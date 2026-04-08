@@ -8,7 +8,7 @@ A Windows-first, pure Python GUI application built on **PyQt6** for extracting, 
 - **Intro AMB is temporarily disabled** — the current pipeline intentionally forces silent intro placeholder behavior as a mitigation while AMB reliability is being redesigned.
 - **IPK video offset remains approximate** — Xbox 360 binary CKDs do not reliably preserve lead-in timing. Manual sync tuning is expected for many IPK installs.
 - **External tools are required for full fidelity** — FFmpeg/FFprobe and vgmstream availability directly affects media decode, conversion, and preview behavior.
-- **JDNext support is still in active integration** — current JDNext extraction relies on third-party toolchain assets under `3rdPartyTools/`.
+- **JDNext support is still in active integration** — current JDNext extraction relies on third-party toolchain assets under `tools/`.
 
 ## Features
 
@@ -90,7 +90,7 @@ RUN.bat
 - **Some background AMB sounds remain silent** — mid-song AMB sounds hosted only on JDU servers cannot be downloaded in all cases.
 - **JDHelper required for HTML modes** — asset Fetch/HTML mode files must be exported from the JDHelper Discord bot. Links expire quickly after the bot responds.
 - **Toolchain completeness affects results** — missing FFmpeg/FFprobe or vgmstream can degrade decode/conversion paths, previews, and fallback behavior.
-- **JDNext mapPackage extraction depends on local third-party tool staging** — if `AssetStudioModCLI.exe` is missing under `3rdPartyTools`, JDNext extraction may fail or fall back to reduced coverage.
+- **JDNext mapPackage extraction depends on local third-party tool staging** — if `AssetStudioModCLI.exe` is missing under `tools`, JDNext extraction may fail or fall back to reduced coverage.
 
 ## Credits
 

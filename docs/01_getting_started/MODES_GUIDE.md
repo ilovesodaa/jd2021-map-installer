@@ -70,9 +70,9 @@ Do these once before first install:
 
 If you are testing JDNext mapPackage flows, also confirm:
 
-1. `3rdPartyTools/JDNextTools/AssetStudio` exists.
-2. `3rdPartyTools/JDNextTools/UnityPy` exists.
-3. `3rdPartyTools/Unity2UbiArt/bin/AssetStudioModCLI/AssetStudioModCLI.exe` exists.
+1. `tools/AssetStudio` exists.
+2. `tools/UnityPy` exists.
+3. `tools/Unity2UbiArt/bin/AssetStudioModCLI/AssetStudioModCLI.exe` exists.
 
 Recommended safety checks before every install:
 

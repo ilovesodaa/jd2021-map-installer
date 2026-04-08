@@ -71,7 +71,7 @@ def _run_assetstudio_export(
     third_party_roots: list[Path] = []
     if configured_root:
         third_party_roots.append(Path(configured_root).expanduser())
-    third_party_roots.append(repo_root / "3rdPartyTools")
+    third_party_roots.append(repo_root / "tools")
 
     seen: set[str] = set()
     for root in third_party_roots:
@@ -82,14 +82,14 @@ def _run_assetstudio_export(
         candidates.extend(
             [
                 root / "Unity2UbiArt" / "bin" / "AssetStudioModCLI" / "AssetStudioModCLI.exe",
-                root / "JDNextTools" / "AssetStudio" / "AssetStudioModCLI.exe",
+                root / "AssetStudioModCLI" / "AssetStudioModCLI.exe",
                 root / "AssetStudio" / "AssetStudioModCLI.exe",
             ]
         )
 
     cli_path = next((p for p in candidates if p.exists()), None)
     if cli_path is None:
-        raise FileNotFoundError("AssetStudioModCLI.exe not found under 3rdPartyTools")
+        raise FileNotFoundError("AssetStudioModCLI.exe not found under tools")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 

@@ -444,7 +444,7 @@ class SettingsDialog(QDialog):
 
         third_party_root = getattr(self._config, "third_party_tools_root", None)
         self.txt_third_party_root = QLineEdit(str(third_party_root) if third_party_root else "")
-        self.txt_third_party_root.setPlaceholderText("Auto (./3rdPartyTools)")
+        self.txt_third_party_root.setPlaceholderText("Auto (./tools)")
         self.txt_third_party_root.setToolTip(
             "Optional root directory for JDNext third-party tools. Leave empty for default auto path."
         )

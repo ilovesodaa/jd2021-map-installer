@@ -99,15 +99,15 @@ These tools were used as references during development. Their logic has been por
 
 Setup bootstrap behavior for JDNext support:
 
-1. `setup.bat` clones/upgrades source trees into `3rdPartyTools/JDNextTools/AssetStudio`, `3rdPartyTools/JDNextTools/UnityPy`, and `3rdPartyTools/Unity2UbiArt`.
+1. `setup.bat` clones/upgrades source trees into `tools/AssetStudio`, `tools/UnityPy`, and `tools/Unity2UbiArt`.
 2. `setup.bat` does not download the `AssetStudioModCLI` runtime bundle.
-3. JDNext extraction resolves `AssetStudioModCLI.exe` from local `3rdPartyTools` paths only.
+3. JDNext extraction resolves `AssetStudioModCLI.exe` from local `tools` paths only.
 
 ### AssetStudioMod / AssetStudioModCLI
 
 **Source:** [github.com/aelurum/AssetStudio](https://github.com/aelurum/AssetStudio)
 
-Used for JDNext `mapPackage` bundle extraction and asset export. The CLI binary is staged locally under `3rdPartyTools/Unity2UbiArt/bin/AssetStudioModCLI/` on machines that have the extracted toolchain.
+Used for JDNext `mapPackage` bundle extraction and asset export. The CLI binary is staged locally under `tools/Unity2UbiArt/bin/AssetStudioModCLI/` on machines that have the extracted toolchain.
 
 ### Unity2UbiArt
 

@@ -30,9 +30,9 @@ if errorlevel 1 (
 
 echo.
 echo [3/7] Cloning AssetStudio
-if not exist 3rdPartyTools\JDNextTools mkdir 3rdPartyTools\JDNextTools
+if not exist tools mkdir tools
 
-call :ensure_git_clone https://github.com/Perfare/AssetStudio.git 3rdPartyTools\JDNextTools\AssetStudio master
+call :ensure_git_clone https://github.com/Perfare/AssetStudio.git tools\AssetStudio master
 if errorlevel 1 (
 	popd
 	endlocal
@@ -41,7 +41,7 @@ if errorlevel 1 (
 
 echo.
 echo [4/7] Cloning UnityPy
-call :ensure_git_clone https://github.com/K0lb3/UnityPy.git 3rdPartyTools\JDNextTools\UnityPy master
+call :ensure_git_clone https://github.com/K0lb3/UnityPy.git tools\UnityPy master
 if errorlevel 1 (
 	popd
 	endlocal
@@ -50,7 +50,7 @@ if errorlevel 1 (
 
 echo.
 echo [5/7] Cloning Unity2UbiArt
-call :ensure_git_clone https://github.com/Itaybl14/Unity2UbiArt.git 3rdPartyTools\Unity2UbiArt main
+call :ensure_git_clone https://github.com/Itaybl14/Unity2UbiArt.git tools\Unity2UbiArt main
 if errorlevel 1 (
 	popd
 	endlocal
@@ -108,7 +108,7 @@ if errorlevel 1 (
 exit /b 0
 
 :install_assetstudio_cli
-set "CLI_DIR=3rdPartyTools\Unity2UbiArt\bin\AssetStudioModCLI"
+set "CLI_DIR=tools\Unity2UbiArt\bin\AssetStudioModCLI"
 set "CLI_EXE=%CLI_DIR%\AssetStudioModCLI.exe"
 
 if exist "%CLI_EXE%" (
@@ -116,9 +116,9 @@ if exist "%CLI_EXE%" (
 	exit /b 0
 )
 
-if not exist "3rdPartyTools\Unity2UbiArt\bin" mkdir "3rdPartyTools\Unity2UbiArt\bin"
+if not exist "tools\Unity2UbiArt\bin" mkdir "tools\Unity2UbiArt\bin"
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $api='https://api.github.com/repos/aelurum/AssetStudio/releases/latest'; $headers=@{'User-Agent'='jd2021-map-installer-setup'}; $release=Invoke-RestMethod -Headers $headers -Uri $api; $asset=$release.assets | Where-Object { $_.name -match 'AssetStudio.*(CLI|cmd|console).*win.*\.(zip|7z)$' } | Select-Object -First 1; if (-not $asset) { $asset=$release.assets | Where-Object { $_.name -match 'AssetStudio.*CLI.*\.(zip|7z)$' } | Select-Object -First 1 }; if (-not $asset) { throw 'Could not find a Windows AssetStudio CLI release asset.' }; $tmpRoot='3rdPartyTools/Unity2UbiArt/bin/_assetstudio_tmp'; if (Test-Path $tmpRoot) { Remove-Item -Recurse -Force $tmpRoot }; New-Item -ItemType Directory -Path $tmpRoot | Out-Null; $archive=Join-Path $tmpRoot $asset.name; Invoke-WebRequest -Headers $headers -Uri $asset.browser_download_url -OutFile $archive; if ($archive -like '*.zip') { Expand-Archive -Path $archive -DestinationPath $tmpRoot -Force } elseif ($archive -like '*.7z') { $sevenZip=(Get-Command 7z -ErrorAction SilentlyContinue); if (-not $sevenZip) { throw 'AssetStudio release is .7z, but 7z is not installed.' }; & $sevenZip.Source x $archive ('-o' + $tmpRoot) -y | Out-Null } else { throw 'Unsupported AssetStudio archive format.' }; $cli=(Get-ChildItem -Path $tmpRoot -Recurse -Filter AssetStudioModCLI.exe -File | Select-Object -First 1); if (-not $cli) { throw 'AssetStudioModCLI.exe not found in downloaded archive.' }; $root=$cli.Directory.FullName; $dest='3rdPartyTools/Unity2UbiArt/bin/AssetStudioModCLI'; if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }; New-Item -ItemType Directory -Path $dest | Out-Null; Get-ChildItem -Path $root -Force | ForEach-Object { Copy-Item -Path $_.FullName -Destination $dest -Recurse -Force }; Remove-Item -Recurse -Force $tmpRoot"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $api='https://api.github.com/repos/aelurum/AssetStudio/releases/latest'; $headers=@{'User-Agent'='jd2021-map-installer-setup'}; $release=Invoke-RestMethod -Headers $headers -Uri $api; $asset=$release.assets | Where-Object { $_.name -match 'AssetStudio.*(CLI|cmd|console).*win.*\.(zip|7z)$' } | Select-Object -First 1; if (-not $asset) { $asset=$release.assets | Where-Object { $_.name -match 'AssetStudio.*CLI.*\.(zip|7z)$' } | Select-Object -First 1 }; if (-not $asset) { throw 'Could not find a Windows AssetStudio CLI release asset.' }; $tmpRoot='tools/Unity2UbiArt/bin/_assetstudio_tmp'; if (Test-Path $tmpRoot) { Remove-Item -Recurse -Force $tmpRoot }; New-Item -ItemType Directory -Path $tmpRoot | Out-Null; $archive=Join-Path $tmpRoot $asset.name; Invoke-WebRequest -Headers $headers -Uri $asset.browser_download_url -OutFile $archive; if ($archive -like '*.zip') { Expand-Archive -Path $archive -DestinationPath $tmpRoot -Force } elseif ($archive -like '*.7z') { $sevenZip=(Get-Command 7z -ErrorAction SilentlyContinue); if (-not $sevenZip) { throw 'AssetStudio release is .7z, but 7z is not installed.' }; & $sevenZip.Source x $archive ('-o' + $tmpRoot) -y | Out-Null } else { throw 'Unsupported AssetStudio archive format.' }; $cli=(Get-ChildItem -Path $tmpRoot -Recurse -Filter AssetStudioModCLI.exe -File | Select-Object -First 1); if (-not $cli) { throw 'AssetStudioModCLI.exe not found in downloaded archive.' }; $root=$cli.Directory.FullName; $dest='tools/Unity2UbiArt/bin/AssetStudioModCLI'; if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }; New-Item -ItemType Directory -Path $dest | Out-Null; Get-ChildItem -Path $root -Force | ForEach-Object { Copy-Item -Path $_.FullName -Destination $dest -Recurse -Force }; Remove-Item -Recurse -Force $tmpRoot"
 
 if errorlevel 1 (
 	echo [WARNING] AssetStudioModCLI auto-install failed.
