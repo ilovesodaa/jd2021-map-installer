@@ -31,6 +31,7 @@ from jd2021_installer.core.config import AppConfig
 from jd2021_installer.core.exceptions import ExtractionError, IPKExtractionError
 from jd2021_installer.core.logging_config import log_exception_for_profile
 from jd2021_installer.core.models import NormalizedMapData
+from jd2021_installer.core.readjust_index import remove_entry
 from jd2021_installer.extractors.base import BaseExtractor
 from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor
 from jd2021_installer.installers.game_writer import write_game_files
@@ -1433,6 +1434,14 @@ class UninstallResult:
     removed_installer_cache: bool
 
 
+@dataclass
+class UninstallBatchResult:
+    selected_count: int
+    changed_codenames: list[str]
+    failed: list[str]
+    no_changes: list[str]
+
+
 def uninstall_map_from_game(
     game_dir: Path,
     codename: str,
@@ -1511,6 +1520,106 @@ def uninstall_map_from_game(
         sku_unregistered=sku_unregistered,
         removed_installer_cache=removed_installer_cache,
     )
+
+
+class UninstallMapsWorker(QObject):
+    """Uninstall one or more maps in a background thread."""
+
+    progress = pyqtSignal(int)
+    status = pyqtSignal(str)
+    error = pyqtSignal(str)
+    finished = pyqtSignal(object)  # UninstallBatchResult
+
+    def __init__(
+        self,
+        game_dir: Path,
+        selected_codenames: list[str],
+        config: Optional[AppConfig] = None,
+        parent: Optional[QObject] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._game_dir = game_dir
+        self._selected_codenames = list(selected_codenames)
+        self._config = config
+
+    def run(self) -> None:
+        try:
+            total = len(self._selected_codenames)
+            if total == 0:
+                self.finished.emit(
+                    UninstallBatchResult(
+                        selected_count=0,
+                        changed_codenames=[],
+                        failed=[],
+                        no_changes=[],
+                    )
+                )
+                return
+
+            failed: list[str] = []
+            changed_lowers: set[str] = set()
+            no_changes: list[str] = []
+
+            for idx, codename in enumerate(self._selected_codenames, start=1):
+                progress_value = int(((idx - 1) / total) * 100)
+                self.progress.emit(progress_value)
+                self.status.emit(f"[{codename}] Uninstalling map files...")
+
+                try:
+                    result = uninstall_map_from_game(
+                        self._game_dir,
+                        codename,
+                        config=self._config,
+                        status_callback=lambda msg, code=codename: self.status.emit(f"[{code}] {msg}"),
+                    )
+
+                    index_removed = remove_entry(codename)
+                    if index_removed:
+                        self.status.emit(f"[{codename}] Removed from readjust index.")
+
+                    changed = bool(
+                        result.removed_map_dirs
+                        or result.removed_cache_dirs
+                        or result.sku_unregistered
+                        or result.removed_installer_cache
+                        or index_removed
+                    )
+                    if changed:
+                        changed_lowers.add(codename.lower())
+                        self.status.emit(
+                            (
+                                f"[{codename}] Uninstall complete "
+                                f"(map_dirs={len(result.removed_map_dirs)}, "
+                                f"cooked_cache={len(result.removed_cache_dirs)}, "
+                                f"sku_unregistered={'yes' if result.sku_unregistered else 'no'}, "
+                                f"installer_cache={'yes' if result.removed_installer_cache else 'no'}, "
+                                f"index_removed={'yes' if index_removed else 'no'})."
+                            )
+                        )
+                    else:
+                        no_changes.append(codename)
+                        self.status.emit(
+                            f"[{codename}] No uninstallable artifacts found (already removed or never installed)."
+                        )
+
+                except Exception as exc:
+                    logger.exception("Failed to uninstall map '%s': %s", codename, exc)
+                    failed.append(f"{codename}: {exc}")
+                    self.status.emit(f"[{codename}] ERROR: {exc}")
+
+            self.progress.emit(100)
+            self.finished.emit(
+                UninstallBatchResult(
+                    selected_count=total,
+                    changed_codenames=sorted(changed_lowers),
+                    failed=failed,
+                    no_changes=no_changes,
+                )
+            )
+
+        except Exception as exc:
+            log_exception_for_profile(logger, "UninstallMapsWorker failed", exc)
+            self.error.emit(str(exc))
 
 
 def install_map_to_game(

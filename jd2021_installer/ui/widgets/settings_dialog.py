@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
-    QApplication,
     QDialog,
     QCheckBox,
     QComboBox,
@@ -43,6 +42,28 @@ from jd2021_installer.core.songdb_update import (
 logger = logging.getLogger("jd2021.ui.widgets.settings_dialog")
 
 
+class _SettingsTaskWorker(QObject):
+    """Runs a blocking maintenance task in a background thread."""
+
+    status = pyqtSignal(str)
+    finished = pyqtSignal(object)
+    error = pyqtSignal(str)
+
+    def __init__(self, task: Callable[[], object], start_status: str) -> None:
+        super().__init__()
+        self._task = task
+        self._start_status = start_status
+
+    def run(self) -> None:
+        try:
+            self.status.emit(self._start_status)
+            result = self._task()
+            self.finished.emit(result)
+        except Exception as exc:
+            logger.exception("Settings task failed: %s", exc)
+            self.error.emit(str(exc))
+
+
 class SettingsDialog(QDialog):
     """Modal dialog for configuring application settings."""
 
@@ -62,7 +83,121 @@ class SettingsDialog(QDialog):
         else:
             self._config = AppConfig(**config.dict())
 
+        self._task_thread: Optional[QThread] = None
+        self._task_worker: Optional[_SettingsTaskWorker] = None
+        self._task_progress: Optional[QProgressDialog] = None
+        self._task_status_timer: Optional[QTimer] = None
+        self._task_status_base: str = ""
+        self._task_status_dots: int = 0
+
         self._build_ui()
+
+    def _set_parent_status(self, text: str) -> None:
+        parent = self.parent()
+        if parent is None:
+            return
+        status_setter = getattr(parent, "set_status", None)
+        if callable(status_setter):
+            status_setter(text)
+
+    def _set_task_status_text(self, text: str) -> None:
+        if self._task_progress is not None:
+            self._task_progress.setLabelText(text)
+        self._set_parent_status(text)
+
+    def _stop_task_status_animation(self) -> None:
+        if self._task_status_timer is not None:
+            self._task_status_timer.stop()
+            self._task_status_timer.deleteLater()
+            self._task_status_timer = None
+        self._task_status_base = ""
+        self._task_status_dots = 0
+
+    def _start_task_status_animation(self, base_text: str) -> None:
+        self._stop_task_status_animation()
+        self._task_status_base = base_text
+        self._task_status_dots = 0
+
+        timer = QTimer(self)
+        timer.setInterval(450)
+
+        def _tick() -> None:
+            self._task_status_dots = (self._task_status_dots + 1) % 4
+            dots = "." * self._task_status_dots
+            self._set_task_status_text(f"{self._task_status_base}{dots}")
+
+        timer.timeout.connect(_tick)
+        timer.start()
+        self._task_status_timer = timer
+
+    def _cleanup_task_state(self) -> None:
+        self._stop_task_status_animation()
+        if self._task_progress is not None:
+            self._task_progress.close()
+            self._task_progress.deleteLater()
+            self._task_progress = None
+        self._task_worker = None
+        self._task_thread = None
+
+    def _run_background_task(
+        self,
+        *,
+        window_title: str,
+        initial_status: str,
+        task: Callable[[], object],
+        on_success: Callable[[object], None],
+        error_title: str,
+    ) -> None:
+        if self._task_thread is not None and self._task_thread.isRunning():
+            QMessageBox.information(
+                self,
+                "Operation In Progress",
+                "Wait for the current task to finish before starting another one.",
+            )
+            return
+
+        progress = QProgressDialog(initial_status, "", 0, 0, self)
+        progress.setWindowTitle(window_title)
+        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        progress.setMinimumDuration(0)
+        progress.setCancelButton(None)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.show()
+
+        self._task_progress = progress
+        self._set_task_status_text(initial_status)
+        self._start_task_status_animation(initial_status)
+
+        worker = _SettingsTaskWorker(task=task, start_status=initial_status)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+
+        def _on_status(text: str) -> None:
+            self._start_task_status_animation(text)
+
+        def _on_error(msg: str) -> None:
+            QMessageBox.critical(self, error_title, f"{error_title}:\n{msg}")
+            self._set_parent_status("Ready")
+            thread.quit()
+
+        def _on_finished(result: object) -> None:
+            self._set_parent_status("Ready")
+            on_success(result)
+            thread.quit()
+
+        thread.started.connect(worker.run)
+        worker.status.connect(_on_status)
+        worker.error.connect(_on_error)
+        worker.finished.connect(_on_finished)
+        worker.finished.connect(worker.deleteLater)
+        worker.error.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._cleanup_task_state)
+
+        self._task_worker = worker
+        self._task_thread = thread
+        thread.start()
 
     @staticmethod
     def _set_combo_from_value(combo: QComboBox, value: str) -> None:
@@ -726,13 +861,6 @@ class SettingsDialog(QDialog):
 
         try:
             console_save_path = resolve_console_save_path(Path(self._config.game_directory))
-            result = update_console_localization(Path(selected_file), console_save_path)
-            logger.info(
-                "Localization updated: %s updated, %s added, backup=%s",
-                result.updated_existing,
-                result.added_new,
-                result.backup_path,
-            )
         except Exception as exc:
             logger.exception("Localization update failed: %s", exc)
             QMessageBox.critical(
@@ -742,13 +870,31 @@ class SettingsDialog(QDialog):
             )
             return
 
-        QMessageBox.information(
-            self,
-            "Localization Updated",
-            "Localization update completed successfully.\n\n"
-            f"Updated IDs: {result.updated_existing}\n"
-            f"New IDs: {result.added_new}\n\n"
-            f"Backup: {result.backup_path}",
+        def _task() -> object:
+            return update_console_localization(Path(selected_file), console_save_path)
+
+        def _on_success(result: object) -> None:
+            logger.info(
+                "Localization updated: %s updated, %s added, backup=%s",
+                result.updated_existing,
+                result.added_new,
+                result.backup_path,
+            )
+            QMessageBox.information(
+                self,
+                "Localization Updated",
+                "Localization update completed successfully.\n\n"
+                f"Updated IDs: {result.updated_existing}\n"
+                f"New IDs: {result.added_new}\n\n"
+                f"Backup: {result.backup_path}",
+            )
+
+        self._run_background_task(
+            window_title="Updating Localization",
+            initial_status="Updating ConsoleSave localization",
+            task=_task,
+            on_success=_on_success,
+            error_title="Localization Update Failed",
         )
 
     def _on_update_songdb(self) -> None:
@@ -776,19 +922,11 @@ class SettingsDialog(QDialog):
         if confirm != QMessageBox.StandardButton.Yes:
             return
 
-        progress = QProgressDialog("Synthesizing JDNext song database cache...", "", 0, 0, self)
-        progress.setWindowTitle("Updating Song Database")
-        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
-        progress.setMinimumDuration(0)
-        progress.setCancelButton(None)
-        progress.setAutoClose(False)
-        progress.setAutoReset(False)
-        progress.show()
-        QApplication.processEvents()
-
-        try:
+        def _task() -> object:
             logger.info("Starting JDNext song database synthesis from %s", selected_file)
-            result = synthesize_jdnext_songdb(Path(selected_file), output_dir=output_path.parent)
+            return synthesize_jdnext_songdb(Path(selected_file), output_dir=output_path.parent)
+
+        def _on_success(result: object) -> None:
             logger.info(
                 "JDNext song database synthesized: source=%s usable=%s keys=%s output=%s",
                 result.source_entries,
@@ -796,28 +934,25 @@ class SettingsDialog(QDialog):
                 result.index_keys,
                 result.output_path,
             )
-        except Exception as exc:
-            logger.exception("Song database synthesis failed: %s", exc)
-            QMessageBox.critical(
+            backup_line = f"Backup: {result.backup_path}\n" if result.backup_path else ""
+            QMessageBox.information(
                 self,
-                "Song Database Update Failed",
-                f"Could not synthesize JDNext song database cache:\n{exc}",
+                "Song Database Updated",
+                "JDNext song database cache created successfully.\n\n"
+                f"Source entries: {result.source_entries}\n"
+                f"Usable entries: {result.usable_entries}\n"
+                f"Indexed keys: {result.index_keys}\n\n"
+                f"Output: {result.output_path}\n"
+                f"{backup_line}"
+                "If this cache is missing later, installer fallback remains active.",
             )
-            return
-        finally:
-            progress.close()
 
-        backup_line = f"Backup: {result.backup_path}\n" if result.backup_path else ""
-        QMessageBox.information(
-            self,
-            "Song Database Updated",
-            "JDNext song database cache created successfully.\n\n"
-            f"Source entries: {result.source_entries}\n"
-            f"Usable entries: {result.usable_entries}\n"
-            f"Indexed keys: {result.index_keys}\n\n"
-            f"Output: {result.output_path}\n"
-            f"{backup_line}"
-            "If this cache is missing later, installer fallback remains active.",
+        self._run_background_task(
+            window_title="Updating Song Database",
+            initial_status="Synthesizing JDNext song database cache",
+            task=_task,
+            on_success=_on_success,
+            error_title="Song Database Update Failed",
         )
 
     def _on_clean_game_data(self) -> None:
@@ -840,18 +975,10 @@ class SettingsDialog(QDialog):
         if confirm != QMessageBox.StandardButton.Yes:
             return
 
-        progress = QProgressDialog("Cleaning game data...", "", 0, 0, self)
-        progress.setWindowTitle("Clean Game Data")
-        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
-        progress.setMinimumDuration(0)
-        progress.setCancelButton(None)
-        progress.setAutoClose(False)
-        progress.setAutoReset(False)
-        progress.show()
-        QApplication.processEvents()
+        def _task() -> object:
+            return clean_game_data(Path(self._config.game_directory))
 
-        try:
-            result = clean_game_data(Path(self._config.game_directory))
+        def _on_success(result: object) -> None:
             logger.info(
                 "Clean data completed: game_dir=%s baseline_source=%s original_maps=%d removed_maps=%d removed_sku=%d removed_cooked=%d",
                 result.game_directory,
@@ -861,28 +988,25 @@ class SettingsDialog(QDialog):
                 result.removed_skuscene_entries,
                 result.removed_cooked_cache_maps,
             )
-        except Exception as exc:
-            logger.exception("Clean game data failed: %s", exc)
-            QMessageBox.critical(
+            source_line = f"\nBaseline source: {result.baseline_source}"
+            QMessageBox.information(
                 self,
-                "Clean Game Data Failed",
-                f"Could not clean game data:\n{exc}",
+                "Clean Game Data Complete",
+                "Cleanup completed successfully.\n\n"
+                f"Game directory: {result.game_directory}\n"
+                f"Baseline maps tracked: {result.original_maps_count}\n"
+                f"Custom map folders removed: {result.removed_custom_maps}\n"
+                f"SkuScene entries removed: {result.removed_skuscene_entries}\n"
+                f"Cooked cache map folders removed: {result.removed_cooked_cache_maps}"
+                f"{source_line}",
             )
-            return
-        finally:
-            progress.close()
 
-        source_line = f"\nBaseline source: {result.baseline_source}"
-        QMessageBox.information(
-            self,
-            "Clean Game Data Complete",
-            "Cleanup completed successfully.\n\n"
-            f"Game directory: {result.game_directory}\n"
-            f"Baseline maps tracked: {result.original_maps_count}\n"
-            f"Custom map folders removed: {result.removed_custom_maps}\n"
-            f"SkuScene entries removed: {result.removed_skuscene_entries}\n"
-            f"Cooked cache map folders removed: {result.removed_cooked_cache_maps}"
-            f"{source_line}",
+        self._run_background_task(
+            window_title="Clean Game Data",
+            initial_status="Cleaning game data",
+            task=_task,
+            on_success=_on_success,
+            error_title="Clean Game Data Failed",
         )
 
     def get_config(self) -> AppConfig:
