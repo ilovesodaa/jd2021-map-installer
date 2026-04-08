@@ -173,6 +173,129 @@ def _collect_menuart_texture_sources(source_dir: Path, codename: str) -> list[Pa
     return sources
 
 
+def _ensure_optional_menuart_actors_from_textures(map_target: Path, codename: str) -> int:
+    """Create optional MenuArt actor files when matching textures exist.
+
+    Some sources (notably JDNext extraction paths) can populate optional MenuArt
+    textures later in the install flow (pictos/cache decode), after initial
+    `write_game_files` actor generation has already run.
+    """
+    texture_dirs = [
+        map_target / "menuart" / "textures",
+        map_target / "MenuArt" / "textures",
+    ]
+    actor_dir = map_target / "MenuArt" / "Actors"
+    actor_dir.mkdir(parents=True, exist_ok=True)
+
+    optional_suffixes = (
+        "cover_albumbkg",
+        "cover_albumcoach",
+        "banner_bkg",
+        "map_bkg",
+    )
+    texture_exts = (".tga", ".png", ".jpg", ".jpeg", ".tga.ckd", ".png.ckd", ".jpg.ckd", ".jpeg.ckd")
+
+    created = 0
+    for suffix in optional_suffixes:
+        has_texture = False
+        for tex_dir in texture_dirs:
+            for ext in texture_exts:
+                if (tex_dir / f"{codename}_{suffix}{ext}").exists():
+                    has_texture = True
+                    break
+            if has_texture:
+                break
+
+        if not has_texture:
+            continue
+
+        act_path = actor_dir / f"{codename}_{suffix}.act"
+        if act_path.exists():
+            continue
+
+        act_path.write_text(
+            f'''params =
+{{
+    NAME="Actor",
+    Actor =
+    {{
+        RELATIVEZ = 0,
+        LUA = "enginedata/actortemplates/tpl_materialgraphiccomponent2d.tpl",
+        COMPONENTS =
+        {{
+            {{
+                NAME = "MaterialGraphicComponent",
+                MaterialGraphicComponent =
+                {{
+                    disableLight = 0,
+                    material =
+                    {{
+                        GFXMaterialSerializable =
+                        {{
+                            textureSet =
+                            {{
+                                GFXMaterialTexturePathSet =
+                                {{
+                                    diffuse = "World/MAPS/{codename}/menuart/textures/{codename}_{suffix}.tga"
+                                }}
+                            }},
+                            shaderPath = "World/_COMMON/MatShader/MultiTexture_1Layer.msh"
+                        }}
+                    }}
+                }}
+            }}
+        }}
+    }}
+}}''',
+            encoding="utf-8",
+        )
+        created += 1
+
+    return created
+
+
+def _ensure_jdnext_albumcoach_texture_from_coach(map_target: Path, codename: str) -> bool:
+    """Synthesize missing albumcoach texture from coach_1 for JDNext maps.
+
+    JDNext sources commonly do not ship a dedicated albumcoach texture. In that
+    case, mirror the primary coach texture so downstream actor references can be
+    generated consistently.
+    """
+    texture_dirs = [
+        map_target / "menuart" / "textures",
+        map_target / "MenuArt" / "textures",
+    ]
+    texture_exts = (".tga", ".png", ".jpg", ".jpeg", ".tga.ckd", ".png.ckd", ".jpg.ckd", ".jpeg.ckd")
+
+    # If albumcoach already exists in any recognized extension, do nothing.
+    for tex_dir in texture_dirs:
+        for ext in texture_exts:
+            if (tex_dir / f"{codename}_cover_albumcoach{ext}").exists():
+                return False
+
+    src: Optional[Path] = None
+    dst: Optional[Path] = None
+    for tex_dir in texture_dirs:
+        for ext in texture_exts:
+            coach_candidate = tex_dir / f"{codename}_coach_1{ext}"
+            if coach_candidate.exists():
+                src = coach_candidate
+                dst = tex_dir / f"{codename}_cover_albumcoach{ext}"
+                break
+        if src is not None:
+            break
+
+    if src is None or dst is None:
+        return False
+
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        return True
+    except OSError:
+        return False
+
+
 def _collect_pictogram_sources(source_dir: Path, codename: str, preferred: Optional[Path] = None) -> list[Path]:
     """Collect candidate pictogram directories, including IPK cache fallbacks."""
     seen: set[str] = set()
@@ -1383,9 +1506,9 @@ def install_map_to_game(
     
     reprocess_audio(map_data, map_target, initial_a_offset, config)
 
-    # Fetch/HTML parity ticket: boost installed gameplay audio by +8 dB.
+    # Fetch/HTML parity ticket: boost installed gameplay audio by +8 dB (JDU only).
     mode_low = (source_mode or "").lower()
-    if "fetch" in mode_low or "html" in mode_low:
+    if ("fetch" in mode_low or "html" in mode_low) and not _is_jdnext_source_map():
         if status_callback: status_callback("Applying +8dB JDU audio boost...")
         if progress_callback: progress_callback(45)
         from jd2021_installer.installers.media_processor import apply_audio_gain
@@ -1538,10 +1661,26 @@ def install_map_to_game(
                 codename,
             )
 
+        if _is_jdnext_source_map():
+            synthesized_albumcoach = _ensure_jdnext_albumcoach_texture_from_coach(map_target, codename)
+            if synthesized_albumcoach:
+                logger.debug(
+                    "Synthesized missing albumcoach texture from coach_1 for JDNext map '%s'.",
+                    codename,
+                )
+
             
         # V1 Parity: Validate and heal MenuArt (case-fix + RGBA re-save)
         from jd2021_installer.installers.media_processor import process_menu_art
         process_menu_art(map_target, codename)
+
+        ensured_acts = _ensure_optional_menuart_actors_from_textures(map_target, codename)
+        if ensured_acts:
+            logger.debug(
+                "Created %d optional MenuArt actor file(s) from discovered textures for '%s'.",
+                ensured_acts,
+                codename,
+            )
             
         if status_callback: status_callback("Decoding pictograms...")
         decoded_pictos = 0

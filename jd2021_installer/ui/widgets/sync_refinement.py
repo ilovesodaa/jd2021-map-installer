@@ -54,7 +54,7 @@ class SyncRefinementWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _set_preview_icon(self, playing: bool) -> None:
-        text = "Stop" if playing else "Preview"
+        text = "Stop Preview" if playing else "Start Preview"
         self._btn_preview.setText(text)
 
     def _build_ui(self) -> None:

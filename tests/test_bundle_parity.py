@@ -182,5 +182,124 @@ class TestBundleParity(unittest.TestCase):
         mock_copy_video.assert_any_call(gameplay_video, expected_main_dst, config=config)
         mock_copy_video.assert_any_call(preview_video, expected_preview_dst, config=config)
 
+    def test_install_does_not_apply_jdnext_boost_in_fetch_mode(self):
+        source_dir = self.test_dir / "source"
+        source_dir.mkdir(parents=True)
+
+        game_root = self.test_dir / "game"
+        game_root.mkdir(parents=True)
+
+        map_data = NormalizedMapData(
+            codename="MapA",
+            song_desc=SongDescription(map_name="MapA", title="MapA", artist="Artist"),
+            music_track=MusicTrackStructure(markers=[0, 2400, 4800], start_beat=0, end_beat=2),
+            media=MapMedia(),
+            sync=MapSync(audio_ms=0.0, video_ms=0.0),
+            source_dir=source_dir,
+        )
+        config = AppConfig(game_directory=game_root, cache_directory=self.test_dir / "cache")
+
+        def _fake_reprocess(_map_data, target_dir, _a_offset=0.0, _config=None):
+            audio_dir = target_dir / "audio"
+            audio_dir.mkdir(parents=True, exist_ok=True)
+            (audio_dir / "MapA.wav").write_bytes(b"wav")
+
+        with patch("jd2021_installer.ui.workers.pipeline_workers.pre_install_cleanup"), \
+             patch("jd2021_installer.ui.workers.pipeline_workers.reprocess_audio", side_effect=_fake_reprocess), \
+             patch("jd2021_installer.installers.tape_converter.auto_convert_tapes"), \
+             patch("jd2021_installer.installers.ambient_processor.process_ambient_directory"), \
+             patch("jd2021_installer.installers.texture_decoder.decode_menuart_textures"), \
+             patch("jd2021_installer.installers.texture_decoder.decode_pictograms"), \
+             patch("jd2021_installer.installers.media_processor.process_menu_art"), \
+             patch("jd2021_installer.installers.sku_scene.register_map"), \
+             patch("jd2021_installer.installers.autodance_processor.process_stape_file"), \
+             patch("jd2021_installer.installers.media_processor.apply_audio_gain") as mock_apply_gain:
+            install_map_to_game(map_data, game_root, config, source_mode="fetch_jdnext")
+
+        mock_apply_gain.assert_not_called()
+
+    def test_install_creates_optional_albumcoach_act_from_late_texture_copy(self):
+        source_dir = self.test_dir / "source"
+        pictos_dir = source_dir / "timeline" / "pictos"
+        pictos_dir.mkdir(parents=True)
+        (pictos_dir / "cover_albumcoach.png").write_bytes(b"png")
+
+        game_root = self.test_dir / "game"
+        game_root.mkdir(parents=True)
+
+        map_data = NormalizedMapData(
+            codename="MapA",
+            song_desc=SongDescription(map_name="MapA", title="MapA", artist="Artist"),
+            music_track=MusicTrackStructure(markers=[0, 2400, 4800], start_beat=0, end_beat=2),
+            media=MapMedia(pictogram_dir=pictos_dir),
+            sync=MapSync(audio_ms=0.0, video_ms=0.0),
+            source_dir=source_dir,
+        )
+        config = AppConfig(game_directory=game_root, cache_directory=self.test_dir / "cache")
+
+        def _fake_reprocess(_map_data, target_dir, _a_offset=0.0, _config=None):
+            actors_dir = target_dir / "MenuArt" / "Actors"
+            actors_dir.mkdir(parents=True, exist_ok=True)
+            # Simulate initial game writer output without optional actor files.
+            (actors_dir / "MapA_cover_generic.act").write_text("generic", encoding="utf-8")
+            (actors_dir / "MapA_cover_online.act").write_text("online", encoding="utf-8")
+
+        with patch("jd2021_installer.ui.workers.pipeline_workers.pre_install_cleanup"), \
+             patch("jd2021_installer.ui.workers.pipeline_workers.reprocess_audio", side_effect=_fake_reprocess), \
+             patch("jd2021_installer.installers.tape_converter.auto_convert_tapes"), \
+             patch("jd2021_installer.installers.ambient_processor.process_ambient_directory"), \
+             patch("jd2021_installer.installers.texture_decoder.decode_menuart_textures"), \
+             patch("jd2021_installer.installers.texture_decoder.decode_pictograms"), \
+             patch("jd2021_installer.installers.media_processor.process_menu_art"), \
+             patch("jd2021_installer.installers.sku_scene.register_map"), \
+             patch("jd2021_installer.installers.autodance_processor.process_stape_file"):
+            install_map_to_game(map_data, game_root, config)
+
+        expected_act = game_root / "data" / "world" / "maps" / "MapA" / "MenuArt" / "Actors" / "MapA_cover_albumcoach.act"
+        self.assertTrue(expected_act.exists())
+
+    def test_install_synthesizes_jdnext_albumcoach_from_coach1(self):
+        source_dir = self.test_dir / "source"
+        source_dir.mkdir(parents=True)
+        coach_1 = source_dir / "MapA_coach_1.png"
+        coach_1.write_bytes(b"png")
+
+        game_root = self.test_dir / "game"
+        game_root.mkdir(parents=True)
+
+        map_data = NormalizedMapData(
+            codename="MapA",
+            song_desc=SongDescription(map_name="MapA", title="MapA", artist="Artist"),
+            music_track=MusicTrackStructure(markers=[0, 2400, 4800], start_beat=0, end_beat=2),
+            media=MapMedia(coach_images=[coach_1]),
+            sync=MapSync(audio_ms=0.0, video_ms=0.0),
+            source_dir=source_dir,
+        )
+        config = AppConfig(game_directory=game_root, cache_directory=self.test_dir / "cache")
+
+        def _fake_reprocess(_map_data, target_dir, _a_offset=0.0, _config=None):
+            actors_dir = target_dir / "MenuArt" / "Actors"
+            actors_dir.mkdir(parents=True, exist_ok=True)
+            # Simulate initial game writer output without optional actor files.
+            (actors_dir / "MapA_cover_generic.act").write_text("generic", encoding="utf-8")
+            (actors_dir / "MapA_cover_online.act").write_text("online", encoding="utf-8")
+
+        with patch("jd2021_installer.ui.workers.pipeline_workers.pre_install_cleanup"), \
+             patch("jd2021_installer.ui.workers.pipeline_workers.reprocess_audio", side_effect=_fake_reprocess), \
+             patch("jd2021_installer.installers.tape_converter.auto_convert_tapes"), \
+             patch("jd2021_installer.installers.ambient_processor.process_ambient_directory"), \
+             patch("jd2021_installer.installers.texture_decoder.decode_menuart_textures"), \
+             patch("jd2021_installer.installers.texture_decoder.decode_pictograms"), \
+             patch("jd2021_installer.installers.media_processor.process_menu_art"), \
+             patch("jd2021_installer.installers.sku_scene.register_map"), \
+             patch("jd2021_installer.installers.autodance_processor.process_stape_file"):
+            install_map_to_game(map_data, game_root, config, source_mode="fetch_jdnext")
+
+        texture_dir = game_root / "data" / "world" / "maps" / "MapA" / "menuart" / "textures"
+        expected_texture = texture_dir / "MapA_cover_albumcoach.png"
+        expected_act = game_root / "data" / "world" / "maps" / "MapA" / "MenuArt" / "Actors" / "MapA_cover_albumcoach.act"
+        self.assertTrue(expected_texture.exists())
+        self.assertTrue(expected_act.exists())
+
 if __name__ == "__main__":
     unittest.main()
