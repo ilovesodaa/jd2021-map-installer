@@ -59,21 +59,17 @@ class ConfigWidget(QWidget):
         dir_row = QHBoxLayout()
         self._dir_line = QLineEdit()
         self._dir_line.setReadOnly(True)
-        self._dir_line.setPlaceholderText("Select JD2021 game folder…")
-        self._dir_line.setToolTip("Path to your JD2021 installation root (contains data and engine folders). Ensure this points to the base game folder.")
+        self._dir_line.setPlaceholderText("Select the folder that contains data and engine…")
+        self._dir_line.setToolTip(
+            "Choose the JD2021 installation root. It must contain both the data and engine folders."
+        )
         dir_row.addWidget(self._dir_line)
 
-        # Buttons side-by-side
         btn_layout = QHBoxLayout()
         btn_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self._auto_btn = QPushButton("Auto-Detect")
-        self._auto_btn.setToolTip("Scan common installation directories to locate your JD2021 game automatically.")
-        self._auto_btn.clicked.connect(self._auto_detect_game_dir)
-        btn_layout.addWidget(self._auto_btn)
 
         self._browse_btn = QPushButton("Browse…")
-        self._browse_btn.setToolTip("Manually choose your JD2021 installation folder")
+        self._browse_btn.setToolTip("Browse to the JD2021 folder that contains data and engine.")
         self._browse_btn.clicked.connect(self._browse_game_dir)
         btn_layout.addWidget(self._browse_btn)
 
@@ -96,57 +92,14 @@ class ConfigWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _browse_game_dir(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Select JD2021 Game Directory")
+        path = QFileDialog.getExistingDirectory(
+            self,
+            "Select the folder that contains data and engine",
+        )
         if path:
             self._dir_line.setText(path)
             self.game_dir_changed.emit(path)
             logger.info("Game directory set to: %s", path)
-
-    def _auto_detect_game_dir(self) -> None:
-        """Attempt to fast-resolve the game directory via heuristics."""
-        from jd2021_installer.core.path_discovery import resolve_game_paths
-        from PyQt6.QtWidgets import QMessageBox
-
-        # Start from the current working directory to detect local installations
-        candidate = resolve_game_paths(Path.cwd())
-        if candidate:
-            self._dir_line.setText(str(candidate))
-            self.game_dir_changed.emit(str(candidate))
-            logger.info("Auto-detected game directory at: %s", candidate)
-            QMessageBox.information(
-                self, 
-                "Target Discovered", 
-                f"Successfully detected JD2021 game installation at:\n{candidate}"
-            )
-        else:
-            logger.warning("Auto-detection failed via quick heuristics.")
-            ans = QMessageBox.question(
-                self,
-                "Auto-Detect Failed",
-                "Heuristic search failed to locate JD2021. Would you like to run a deep "
-                "recursive scan of the current drive? (This may take a few minutes.)"
-            )
-            if ans == QMessageBox.StandardButton.Yes:
-                # We do this synchronously or via thread for simplicity for now
-                # In the future a dedicated worker would prevent GUI lock
-                from jd2021_installer.core.path_discovery import deep_scan_for_game_dir
-                
-                deep_cand = deep_scan_for_game_dir(Path(Path.cwd().anchor)) # e.g. C:\
-                if deep_cand:
-                    self._dir_line.setText(str(deep_cand))
-                    self.game_dir_changed.emit(str(deep_cand))
-                    logger.info("Deep-scanned game directory at: %s", deep_cand)
-                    QMessageBox.information(
-                        self, 
-                        "Target Discovered", 
-                        f"Successfully found JD2021 game installation at:\n{deep_cand}"
-                    )
-                else:
-                    QMessageBox.warning(
-                        self,
-                        "Deep Scan Failed",
-                        "Could not locate JD2021 on the root drive. Please browse manually."
-                    )
 
     def _on_quality_changed(self, quality: str) -> None:
         self.quality_changed.emit(quality)

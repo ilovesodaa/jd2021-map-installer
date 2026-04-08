@@ -122,6 +122,18 @@ def _copy_if_exists(src: Path, dst: Path) -> bool:
     return True
 
 
+def _call_strategy_helper(helper, *args, config: AppConfig | None = None, **kwargs):
+    try:
+        if config is None:
+            return helper(*args, **kwargs)
+        return helper(*args, config=config, **kwargs)
+    except TypeError as exc:
+        message = str(exc)
+        if "unexpected keyword argument 'config'" in message or "got an unexpected keyword argument 'config'" in message:
+            return helper(*args, **kwargs)
+        raise
+
+
 def _extract_val_list(items: list) -> list[int]:
     values: list[int] = []
     for item in items or []:
@@ -487,25 +499,25 @@ def run_jdnext_bundle_strategy(
 
     if strategy == "assetstudio_first":
         try:
-            _run_assetstudio_export(bundle, assetstudio_out, unity_version, config=config)
+            _call_strategy_helper(_run_assetstudio_export, bundle, assetstudio_out, unity_version, config=config)
             assetstudio_success = True
         except Exception as exc:
             assetstudio_error = exc
         if not assetstudio_success:
             try:
-                unitypy_summary = _run_unitypy(bundle, unitypy_out, config=config)
+                unitypy_summary = _call_strategy_helper(_run_unitypy, bundle, unitypy_out, config=config)
                 unitypy_success = True
             except Exception as exc:
                 unitypy_error = exc
     elif strategy == "unitypy_first":
         try:
-            unitypy_summary = _run_unitypy(bundle, unitypy_out, config=config)
+            unitypy_summary = _call_strategy_helper(_run_unitypy, bundle, unitypy_out, config=config)
             unitypy_success = True
         except Exception as exc:
             unitypy_error = exc
         if not unitypy_success:
             try:
-                _run_assetstudio_export(bundle, assetstudio_out, unity_version, config=config)
+                _call_strategy_helper(_run_assetstudio_export, bundle, assetstudio_out, unity_version, config=config)
                 assetstudio_success = True
             except Exception as exc:
                 assetstudio_error = exc

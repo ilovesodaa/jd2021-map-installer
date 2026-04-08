@@ -191,22 +191,22 @@ _SONG_STATUS_MEANINGS: dict[int, str] = {
 
 # Granular checklist steps (V1 Parity)
 PIPELINE_STEPS = [
-    "Extract map data",
-    "Parse CKDs & Metadata",
-    "Normalize assets",
-    "Decode XMA2 Audio",
-    "Convert Audio (Pad/Trim)",
-    "Generate Intro AMB",
-    "Copy Video files",
-    "Convert Dance Tapes",
-    "Convert Karaoke Tapes",
-    "Convert Cinematic Tapes",
-    "Process Ambient Sounds",
-    "Decode MenuArt textures",
-    "Decode Pictograms",
-    "Integrate Move data",
-    "Register in SkuScene",
-    "Finalizing Offsets",
+    "Extracting map data...",
+    "Parsing CKDs and metadata...",
+    "Normalizing assets...",
+    "Decoding XMA2 audio...",
+    "Converting audio (pad/trim)...",
+    "Generating intro AMB...",
+    "Copying video files...",
+    "Converting dance tapes...",
+    "Converting karaoke tapes...",
+    "Converting cinematic tapes...",
+    "Processing ambient sounds...",
+    "Decoding MenuArt textures...",
+    "Decoding pictograms...",
+    "Integrating move data...",
+    "Registering in SkuScene...",
+    "Finalizing offsets...",
 ]
 
 # Runtime dependencies required for end-user operation.
@@ -658,9 +658,59 @@ class MainWindow(QMainWindow):
 
     def _refresh_media_tool_configuration(self, persist: bool = False) -> dict[str, Optional[str]]:
         """Resolve ffmpeg tool paths and propagate them to preview/runtime state."""
+        repo_root = Path(__file__).resolve().parents[2]
+
         resolved_ffmpeg = self._resolve_media_binary("ffmpeg", self._config.ffmpeg_path)
         resolved_ffprobe = self._resolve_media_binary("ffprobe", self._config.ffprobe_path)
         resolved_ffplay = self._resolve_media_binary("ffplay")
+
+        def _resolve_existing_path(candidate: Path) -> Optional[str]:
+            if candidate.exists() and candidate.is_file():
+                return str(candidate.resolve())
+            return None
+
+        def _resolve_configured_tool(
+            configured_path: Optional[str],
+            candidate_paths: list[Path],
+            command_names: tuple[str, ...] = (),
+        ) -> Optional[str]:
+            if configured_path:
+                configured_candidate = Path(configured_path).expanduser()
+                resolved = _resolve_existing_path(configured_candidate)
+                if resolved:
+                    return resolved
+                configured_found = shutil.which(configured_path)
+                if configured_found:
+                    return configured_found
+
+            for candidate in candidate_paths:
+                resolved = _resolve_existing_path(candidate)
+                if resolved:
+                    return resolved
+
+            for command_name in command_names:
+                on_path = shutil.which(command_name)
+                if on_path:
+                    return on_path
+
+            return None
+
+        resolved_vgmstream = _resolve_configured_tool(
+            getattr(self._config, "vgmstream_path", None),
+            [
+                repo_root / "tools" / "vgmstream" / "vgmstream-cli.exe",
+                repo_root / "tools" / "vgmstream" / "vgmstream.exe",
+            ],
+            command_names=("vgmstream-cli.exe", "vgmstream.exe"),
+        )
+        resolved_assetstudio = _resolve_configured_tool(
+            getattr(self._config, "assetstudio_cli_path", None),
+            [
+                repo_root / "tools" / "Unity2UbiArt" / "bin" / "AssetStudioModCLI" / "AssetStudioModCLI.exe",
+                repo_root / "tools" / "AssetStudioModCLI" / "AssetStudioModCLI.exe",
+                repo_root / "tools" / "AssetStudio" / "AssetStudioModCLI.exe",
+            ],
+        )
 
         updated = False
         if resolved_ffmpeg and self._config.ffmpeg_path != resolved_ffmpeg:
@@ -668,6 +718,12 @@ class MainWindow(QMainWindow):
             updated = True
         if resolved_ffprobe and self._config.ffprobe_path != resolved_ffprobe:
             self._config.ffprobe_path = resolved_ffprobe
+            updated = True
+        if resolved_vgmstream and self._config.vgmstream_path != resolved_vgmstream:
+            self._config.vgmstream_path = resolved_vgmstream
+            updated = True
+        if resolved_assetstudio and self._config.assetstudio_cli_path != resolved_assetstudio:
+            self._config.assetstudio_cli_path = resolved_assetstudio
             updated = True
 
         if hasattr(self, "_preview_widget"):
@@ -688,6 +744,8 @@ class MainWindow(QMainWindow):
             "ffmpeg": resolved_ffmpeg,
             "ffprobe": resolved_ffprobe,
             "ffplay": resolved_ffplay,
+            "vgmstream": resolved_vgmstream,
+            "assetstudio": resolved_assetstudio,
         }
 
     def _ensure_runtime_dependencies(self, include_fetch_checks: bool) -> bool:
@@ -878,14 +936,7 @@ class MainWindow(QMainWindow):
         # Apply loaded settings to config panel
         if self._config.game_directory:
             self._config_panel.set_game_directory(str(self._config.game_directory))
-        else:
-            from jd2021_installer.core.path_discovery import resolve_game_paths
-            from pathlib import Path
-            cand = resolve_game_paths(Path.cwd())
-            if cand:
-                self._config.game_directory = cand
-                self._config_panel.set_game_directory(str(cand))
-                
+
         self._config_panel.set_video_quality(self._config.video_quality)
         self._set_preview_controls_ready(False)
 
@@ -1459,7 +1510,7 @@ class MainWindow(QMainWindow):
             self._config = new_config
             self._apply_window_size_config(force_to_configured_size=True)
             self._apply_theme()
-            self._refresh_media_tool_configuration(persist=False)
+            self._refresh_media_tool_configuration(persist=True)
             self._save_settings()
             if not getattr(self._config, "show_window_size_overlay", True):
                 self._hide_size_overlay()
@@ -2024,7 +2075,7 @@ class MainWindow(QMainWindow):
         self._lock_ui(True)
         self._feedback_panel.reset()
         self._feedback_panel.set_checklist_steps(PIPELINE_STEPS)
-        self._feedback_panel.update_checklist_step("Extract map data", StepStatus.IN_PROGRESS)
+        self._feedback_panel.update_checklist_step("Extracting map data...", StepStatus.IN_PROGRESS)
 
         # Create worker + thread
         worker = ExtractAndNormalizeWorker(
@@ -2050,7 +2101,7 @@ class MainWindow(QMainWindow):
         thread.start()
 
     def _on_extract_error(self, stage: str, msg: str) -> None:
-        failed_stage = stage if stage in PIPELINE_STEPS else "Extract map data"
+        failed_stage = stage if stage in PIPELINE_STEPS else "Extracting map data..."
         self._feedback_panel.update_checklist_step(failed_stage, StepStatus.ERROR)
         self.append_log(f"ERROR: {msg}")
         QMessageBox.critical(
@@ -2067,11 +2118,11 @@ class MainWindow(QMainWindow):
 
         self._current_map = map_data
         self._completed_install_maps = [map_data]
-        self._feedback_panel.update_checklist_step("Extract map data", StepStatus.DONE)
-        self._feedback_panel.update_checklist_step("Parse CKDs & Metadata", StepStatus.DONE)
-        self._feedback_panel.update_checklist_step("Normalize assets", StepStatus.DONE)
+        self._feedback_panel.update_checklist_step("Extracting map data...", StepStatus.DONE)
+        self._feedback_panel.update_checklist_step("Parsing CKDs and metadata...", StepStatus.DONE)
+        self._feedback_panel.update_checklist_step("Normalizing assets...", StepStatus.DONE)
         self._feedback_panel.update_checklist_step(
-            "Decode XMA2 Audio", StepStatus.IN_PROGRESS
+            "Decoding XMA2 audio...", StepStatus.IN_PROGRESS
         )
 
         # Update UI offsets from calculated normalization data
@@ -2294,9 +2345,15 @@ class MainWindow(QMainWindow):
 
     def _on_install_finished(self, success: bool) -> None:
         if success:
-            if "Finalizing Offsets" in self._feedback_panel._step_items:
-                self._feedback_panel.update_checklist_step("Finalizing Offsets", StepStatus.DONE)
+            if "Finalizing offsets..." in self._feedback_panel._step_items:
+                self._feedback_panel.update_checklist_step("Finalizing offsets...", StepStatus.DONE)
             self._set_status("Installation complete!")
+            if not self._config.suppress_offset_notification and len(self._nav_maps) <= 1:
+                QMessageBox.information(
+                    self,
+                    "Check and Evaluate Offsets",
+                    "Review the preview and sync controls now to verify the installed map offsets.",
+                )
             self.append_log("✅  Map installed successfully!")
 
             # If we don't have a nav list yet (single install), set current as the only one
@@ -2833,8 +2890,8 @@ class MainWindow(QMainWindow):
                 for map_data in self._nav_maps:
                     if map_data.codename in self._feedback_panel._step_items:
                         self._feedback_panel.update_checklist_step(map_data.codename, StepStatus.DONE)
-            if "Finalizing Offsets" in self._feedback_panel._step_items:
-                self._feedback_panel.update_checklist_step("Finalizing Offsets", StepStatus.DONE)
+            if "Finalizing offsets..." in self._feedback_panel._step_items:
+                self._feedback_panel.update_checklist_step("Finalizing offsets...", StepStatus.DONE)
             self._preview_widget.reset()
             self._sync_refinement.set_preview_state(False)
             self._sync_refinement.set_nav_visible(False)
@@ -2927,6 +2984,13 @@ class MainWindow(QMainWindow):
             if temp_dir.exists():
                 import shutil
                 shutil.rmtree(temp_dir, ignore_errors=True)
+
+            # 1b. Clean up the downloaded asset cache for this map.
+            if self._current_map:
+                download_dir = self._config.download_root / self._current_map.codename
+                if download_dir.exists():
+                    import shutil
+                    shutil.rmtree(download_dir, ignore_errors=True)
             
             # 2. Clean up _batch_temp if it exists
             batch_temp = self._config.cache_directory / "_batch_temp"
@@ -3106,7 +3170,7 @@ class MainWindow(QMainWindow):
             self._feedback_panel.set_checklist_steps(map_names)
         else:
             self._feedback_panel.set_checklist_steps(PIPELINE_STEPS)
-            self._feedback_panel.update_checklist_step("Extract map data", StepStatus.IN_PROGRESS)
+            self._feedback_panel.update_checklist_step("Extracting map data...", StepStatus.IN_PROGRESS)
 
         worker = BatchInstallWorker(
             batch_source_dir=Path(self._current_target),

@@ -31,6 +31,8 @@ QGroupBox::title {
 QLineEdit,
 QPlainTextEdit,
 QComboBox,
+QSpinBox,
+QDoubleSpinBox,
 QListWidget {
 	background-color: #ffffff;
 	color: #1f2a38;
@@ -44,8 +46,35 @@ QListWidget {
 QLineEdit:focus,
 QPlainTextEdit:focus,
 QComboBox:focus,
+QSpinBox:focus,
+QDoubleSpinBox:focus,
 QListWidget:focus {
 	border: 1px solid #3f7cff;
+}
+
+QSpinBox::up-button,
+QSpinBox::down-button,
+QDoubleSpinBox::up-button,
+QDoubleSpinBox::down-button {
+	border: none;
+	background: #edf2f9;
+	width: 16px;
+	border-radius: 4px;
+	margin: 1px;
+}
+
+QSpinBox::up-button:hover,
+QSpinBox::down-button:hover,
+QDoubleSpinBox::up-button:hover,
+QDoubleSpinBox::down-button:hover {
+	background: #dde7f5;
+}
+
+QSpinBox::down-arrow,
+QDoubleSpinBox::down-arrow {
+	image: url(assets/icons/chevron-down-dark.svg);
+	width: 8px;
+	height: 8px;
 }
 
 QComboBox::drop-down {

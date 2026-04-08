@@ -973,7 +973,7 @@ async def _wait_for_new_embed(
     Waits until the element is stable (no "Loading" text, has children)
     for 3 consecutive checks.
     """
-    logger.info("Waiting for bot response...")
+    logger.debug("Waiting for bot response...")
     deadline = asyncio.get_event_loop().time() + timeout_s
 
     while asyncio.get_event_loop().time() < deadline:
@@ -1497,6 +1497,7 @@ class WebPlaywrightExtractor(BaseExtractor):
 
         self._codename = inferred_codename or self._codename
         codename = self._codename or "UnknownMap"
+        logger.info("Downloading Assets, this may take a while...")
         
         # 1. Determine download directory (respect hand-picked HTML location if available)
         if self._asset_html and Path(self._asset_html).is_file():

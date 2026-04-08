@@ -247,7 +247,7 @@ def decode_ckd_texture(
     try:
         raw_data, fmt = strip_ckd_header(ckd_path)
     except ValueError as e:
-        logger.error("Cannot decode %s: %s", ckd_path.name, e)
+        logger.debug("Skipping non-texture CKD %s: %s", ckd_path.name, e)
         return False
 
     if fmt == 'dds':

@@ -267,7 +267,7 @@ class ExtractAndNormalizeWorker(QObject):
         self._codename = codename
 
     def run(self) -> None:
-        failed_stage = "Extract map data"
+        failed_stage = "Extracting map data..."
         try:
             # Clear output_dir (temp extraction dir) before starting
             import shutil
@@ -276,7 +276,7 @@ class ExtractAndNormalizeWorker(QObject):
                 shutil.rmtree(self._output_dir)
             self._output_dir.mkdir(parents=True, exist_ok=True)
 
-            self.status.emit("Extract map data")
+            self.status.emit("Extracting map data...")
             self.progress.emit(10)
             try:
                 map_output_dir = self._extractor.extract(self._output_dir)
@@ -314,12 +314,12 @@ class ExtractAndNormalizeWorker(QObject):
                     logger.error("IPK media validation failed: %s", error)
                 raise RuntimeError(" ".join(media_errors))
 
-            failed_stage = "Parse CKDs & Metadata"
-            self.status.emit("Parse CKDs & Metadata")
+            failed_stage = "Parsing CKDs and metadata..."
+            self.status.emit("Parsing CKDs and metadata...")
             self.progress.emit(40)
             
-            failed_stage = "Normalize assets"
-            self.status.emit("Normalize assets")
+            failed_stage = "Normalizing assets..."
+            self.status.emit("Normalizing assets...")
             self.progress.emit(50)
 
             map_data = normalize(
@@ -329,7 +329,7 @@ class ExtractAndNormalizeWorker(QObject):
             )
 
             self.progress.emit(100)
-            self.status.emit("Normalization complete.")
+            self.status.emit("Normalization completed.")
             self.finished.emit(map_data)
 
         except Exception as e:
@@ -573,7 +573,7 @@ class ApplyAndFinishWorker(QObject):
 
     def run(self) -> None:
         try:
-            self.status.emit("Finalizing Offsets")
+            self.status.emit("Finalizing offsets...")
             self.progress.emit(30)
             
             # 1. Update configs and audio via reprocess_audio
@@ -615,7 +615,7 @@ class ApplyOffsetsBatchWorker(QObject):
 
             for idx, (map_data, target_dir, a_offset) in enumerate(self._entries, start=1):
                 codename = map_data.codename
-                self.status.emit(f"[{codename}] Finalizing Offsets")
+                self.status.emit(f"[{codename}] Finalizing offsets...")
                 progress = int(((idx - 1) / total) * 100)
                 self.progress.emit(progress)
                 reprocess_audio(map_data, target_dir, a_offset, self._config)
@@ -656,7 +656,7 @@ class ApplyReadjustOffsetsBatchWorker(QObject):
 
             for idx, (map_data, target_dir, a_offset, v_override, update_video, update_audio) in enumerate(self._entries, start=1):
                 codename = map_data.codename
-                self.status.emit(f"[{codename}] Finalizing Offsets")
+                self.status.emit(f"[{codename}] Finalizing offsets...")
                 progress = int(((idx - 1) / total) * 100)
                 self.progress.emit(progress)
                 reprocess_audio_readjust(
@@ -987,7 +987,7 @@ class BatchInstallWorker(QObject):
                         maps_in_ipk = inspect_ipk(cpath)
                         ipk_name_hint = maps_in_ipk[0] if maps_in_ipk else cpath.name
                         
-                        self.status.emit(f"[{ipk_name_hint}] Extract map data")
+                        self.status.emit(f"[{ipk_name_hint}] Extracting map data...")
                         desired_codename = None
                         if selected_lookup and maps_in_ipk:
                             for discovered_name in maps_in_ipk:
@@ -1020,7 +1020,7 @@ class BatchInstallWorker(QObject):
                         attempted_maps += 1
                         emit_map_stage(0)
                             
-                        self.status.emit(f"[{map_name}] Parse CKDs & Metadata")
+                        self.status.emit(f"[{map_name}] Parsing CKDs and metadata...")
                         from jd2021_installer.parsers.normalizer import normalize
                         map_data = normalize(map_dir, codename=map_name, search_root=map_dir)
                         setattr(map_data, "_is_ipk_source", is_candidate_ipk)
@@ -1046,7 +1046,7 @@ class BatchInstallWorker(QObject):
                                 )
                         
                         emit_map_stage(1)
-                        self.status.emit(f"[{map_data.codename}] Normalize assets")
+                        self.status.emit(f"[{map_data.codename}] Normalizing assets...")
                         
                         # V1 Parity: Persist preview assets in map cache so they remain available after batch extraction is cleared
                         map_cache = self._config.cache_directory / map_data.codename
@@ -1093,7 +1093,7 @@ class BatchInstallWorker(QObject):
                     attempted_maps += 1
                     emit_map_stage(0)
 
-                    self.status.emit(f"[{map_name}] Parse CKDs & Metadata")
+                    self.status.emit(f"[{map_name}] Parsing CKDs and metadata...")
                     from jd2021_installer.parsers.normalizer import normalize
                     map_data = normalize(map_dir, codename=map_name, search_root=map_dir)
                     setattr(map_data, "_is_ipk_source", False)
@@ -1119,7 +1119,7 @@ class BatchInstallWorker(QObject):
                             )
 
                     emit_map_stage(1)
-                    self.status.emit(f"[{map_data.codename}] Normalize assets")
+                    self.status.emit(f"[{map_data.codename}] Normalizing assets...")
 
                     map_cache = self._config.cache_directory / map_data.codename
                     map_cache.mkdir(parents=True, exist_ok=True)
@@ -1372,13 +1372,13 @@ def install_map_to_game(
     # We'll need to manually emit status for its sub-steps if we want true granularity
     # but for now we'll wrap it.
     
-    if status_callback: status_callback("Decode XMA2 Audio")
+    if status_callback: status_callback("Decoding XMA2 audio...")
     if progress_callback: progress_callback(20)
     
-    if status_callback: status_callback("Convert Audio (Pad/Trim)")
+    if status_callback: status_callback("Converting audio (pad/trim)...")
     if progress_callback: progress_callback(30)
     
-    if status_callback: status_callback("Generate Intro AMB")
+    if status_callback: status_callback("Generating intro AMB...")
     if progress_callback: progress_callback(40)
     
     reprocess_audio(map_data, map_target, initial_a_offset, config)
@@ -1386,7 +1386,7 @@ def install_map_to_game(
     # Fetch/HTML parity ticket: boost installed gameplay audio by +8 dB.
     mode_low = (source_mode or "").lower()
     if "fetch" in mode_low or "html" in mode_low:
-        if status_callback: status_callback("Apply +8dB JDU audio boost")
+        if status_callback: status_callback("Applying +8dB JDU audio boost...")
         if progress_callback: progress_callback(45)
         from jd2021_installer.installers.media_processor import apply_audio_gain
 
@@ -1399,7 +1399,7 @@ def install_map_to_game(
     # 2b. Copy Video
     media = map_data.media
     if media.video_path and media.video_path.exists():
-        if status_callback: status_callback("Copy Video files")
+        if status_callback: status_callback("Copying video files...")
         if progress_callback: progress_callback(50)
         from jd2021_installer.installers.media_processor import copy_video
         video_dst = map_target / "videoscoach" / f"{codename}.webm"
@@ -1505,21 +1505,21 @@ def install_map_to_game(
                     target_name = f"{codename}_{target_name}"
                 shutil.copy2(asset, textures_dir / target_name)
 
-        if status_callback: status_callback("Convert Dance Tapes")
+        if status_callback: status_callback("Converting dance tapes...")
         if progress_callback: progress_callback(60)
         from jd2021_installer.installers.tape_converter import auto_convert_tapes
         auto_convert_tapes(map_data.source_dir, map_target, codename)
         
         # We don't have separate steps for Karaoke/Cinematic yet in logic, but status can reflect them
-        if status_callback: status_callback("Convert Karaoke Tapes")
-        if status_callback: status_callback("Convert Cinematic Tapes")
+        if status_callback: status_callback("Converting karaoke tapes...")
+        if status_callback: status_callback("Converting cinematic tapes...")
         
-        if status_callback: status_callback("Process Ambient Sounds")
+        if status_callback: status_callback("Processing ambient sounds...")
         if progress_callback: progress_callback(70)
         from jd2021_installer.installers.ambient_processor import process_ambient_directory
         process_ambient_directory(map_data.source_dir, map_target, codename)
         
-        if status_callback: status_callback("Decode MenuArt textures")
+        if status_callback: status_callback("Decoding MenuArt textures...")
         if progress_callback: progress_callback(80)
         from jd2021_installer.installers.texture_decoder import decode_menuart_textures, decode_pictograms
         
@@ -1543,7 +1543,7 @@ def install_map_to_game(
         from jd2021_installer.installers.media_processor import process_menu_art
         process_menu_art(map_target, codename)
             
-        if status_callback: status_callback("Decode Pictograms")
+        if status_callback: status_callback("Decoding pictograms...")
         decoded_pictos = 0
         picto_canvas_size = 512 if _is_jdnext_source_map() else None
         if map_data.source_dir and map_data.source_dir.exists():
@@ -1568,14 +1568,14 @@ def install_map_to_game(
 
     # 5. Moves
     if media.moves_dir and media.moves_dir.exists():
-        if status_callback: status_callback("Integrate Move data")
+        if status_callback: status_callback("Integrating move data...")
         if progress_callback: progress_callback(85)
         from jd2021_installer.installers.media_processor import copy_moves
         copy_moves(media.moves_dir, map_target, skip_gestures=_is_jdnext_source_map())
 
     # 5b. Autodance + stape payloads (V1 step_11 parity)
     if map_data.has_autodance and map_data.source_dir and map_data.source_dir.exists():
-        if status_callback: status_callback("Extract moves & autodance")
+        if status_callback: status_callback("Extracting moves and autodance...")
         from jd2021_installer.installers.autodance_processor import (
             process_autodance_directory,
             process_stape_file,
@@ -1588,7 +1588,7 @@ def install_map_to_game(
         process_stape_file(map_data.source_dir, map_target, codename)
 
     # 6. Register map in SkuScene ISC
-    if status_callback: status_callback("Register in SkuScene")
+    if status_callback: status_callback("Registering in SkuScene...")
     if progress_callback: progress_callback(95)
     try:
         from jd2021_installer.installers.sku_scene import register_map
@@ -1596,5 +1596,5 @@ def install_map_to_game(
     except Exception as e:
         logger.debug("SkuScene registration failed (non-fatal): %s", e)
 
-    if status_callback: status_callback("Finalizing Offsets")
+    if status_callback: status_callback("Finalizing offsets...")
     if progress_callback: progress_callback(100)
