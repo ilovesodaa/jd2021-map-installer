@@ -128,6 +128,11 @@ _SETTINGS_CHANGE_LABELS: dict[str, str] = {
     "preview_startup_compensation_ms": "Preview startup compensation",
     "preview_only_audio_offset_ms": "Audio-only preview offset",
     "audio_preview_fade_s": "Audio preview fade",
+    "ffmpeg_path": "FFmpeg executable",
+    "ffprobe_path": "FFprobe executable",
+    "vgmstream_path": "vgmstream executable",
+    "third_party_tools_root": "3rd-party tools root",
+    "assetstudio_cli_path": "AssetStudio CLI",
 }
 
 _SETTINGS_CHANGE_ORDER: tuple[str, ...] = (
@@ -161,6 +166,11 @@ _SETTINGS_CHANGE_ORDER: tuple[str, ...] = (
     "preview_startup_compensation_ms",
     "preview_only_audio_offset_ms",
     "audio_preview_fade_s",
+    "ffmpeg_path",
+    "ffprobe_path",
+    "vgmstream_path",
+    "third_party_tools_root",
+    "assetstudio_cli_path",
 )
 
 _READY_STATUS_VALUE = 3
@@ -621,7 +631,15 @@ class MainWindow(QMainWindow):
         binary_name: str,
         configured_path: Optional[str] = None,
     ) -> Optional[str]:
-        """Resolve media tools with system-first policy, then local fallback."""
+        """Resolve media tools with configured override, PATH, then local fallback."""
+        if configured_path:
+            configured_candidate = Path(configured_path)
+            if configured_candidate.exists() and configured_candidate.is_file():
+                return str(configured_candidate.resolve())
+            configured_found = shutil.which(configured_path)
+            if configured_found:
+                return configured_found
+
         system_path = shutil.which(binary_name)
         if system_path:
             return system_path
@@ -630,14 +648,6 @@ class MainWindow(QMainWindow):
         local_candidate = (Path("tools/ffmpeg") / exe_name).resolve()
         if local_candidate.exists() and local_candidate.is_file():
             return str(local_candidate)
-
-        if configured_path:
-            configured_candidate = Path(configured_path)
-            if configured_candidate.exists() and configured_candidate.is_file():
-                return str(configured_candidate.resolve())
-            configured_found = shutil.which(configured_path)
-            if configured_found:
-                return configured_found
 
         return None
 

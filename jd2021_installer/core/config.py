@@ -74,6 +74,9 @@ class AppConfig(BaseModel):
     # FFmpeg configuration
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
+    vgmstream_path: Optional[str] = None
+    assetstudio_cli_path: Optional[str] = None
+    third_party_tools_root: Optional[Path] = Path("./3rdPartyTools")
     ffmpeg_hwaccel: str = Field(default="auto", pattern=r"^(auto|none)$")
     vp9_handling_mode: str = Field(
         default="fallback_compatible_down",

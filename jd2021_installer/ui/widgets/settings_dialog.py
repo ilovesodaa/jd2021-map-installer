@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QProgressDialog,
     QSpinBox,
     QDoubleSpinBox,
+    QScrollArea,
     QWidget,
     QSizePolicy,
 )
@@ -77,6 +78,52 @@ class SettingsDialog(QDialog):
     def _combo_value(combo: QComboBox) -> str:
         data = combo.currentData()
         return str(data) if data is not None else combo.currentText()
+
+    def _make_path_picker_row(
+        self,
+        line_edit: QLineEdit,
+        *,
+        browse_title: str,
+        select_directory: bool = False,
+    ) -> QWidget:
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(6)
+        row_layout.addWidget(line_edit, 1)
+
+        btn_browse = QPushButton("Browse")
+        btn_browse.setMinimumWidth(70)
+
+        def _browse() -> None:
+            if select_directory:
+                selected = QFileDialog.getExistingDirectory(
+                    self,
+                    browse_title,
+                    str(Path.cwd()),
+                )
+                if selected:
+                    line_edit.setText(selected)
+                return
+
+            selected, _ = QFileDialog.getOpenFileName(
+                self,
+                browse_title,
+                str(Path.cwd()),
+                "Executables (*.exe);;All Files (*)",
+            )
+            if selected:
+                line_edit.setText(selected)
+
+        btn_browse.clicked.connect(_browse)
+        row_layout.addWidget(btn_browse)
+
+        btn_clear = QPushButton("Clear")
+        btn_clear.setMinimumWidth(60)
+        btn_clear.clicked.connect(line_edit.clear)
+        row_layout.addWidget(btn_clear)
+
+        return row
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -328,13 +375,25 @@ class SettingsDialog(QDialog):
 
         # ----- Advanced tab -----
         tab_advanced = QWidget()
-        advanced_layout = QVBoxLayout(tab_advanced)
+        tab_advanced_layout = QVBoxLayout(tab_advanced)
+        tab_advanced_layout.setContentsMargins(0, 0, 0, 0)
+        tab_advanced_layout.setSpacing(0)
+
+        advanced_scroll = QScrollArea(tab_advanced)
+        advanced_scroll.setWidgetResizable(True)
+        advanced_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        tab_advanced_layout.addWidget(advanced_scroll)
+
+        advanced_content = QWidget()
+        advanced_scroll.setWidget(advanced_content)
+
+        advanced_layout = QVBoxLayout(advanced_content)
         advanced_layout.setContentsMargins(10, 10, 10, 10)
         advanced_layout.setSpacing(10)
 
         advanced_note = QLabel(
-            "Advanced runtime behavior for downloads and preview timing. "
-            "Core engine constants and binary path overrides remain JSON-only."
+            "Advanced runtime behavior for downloads, preview timing, and external tool resolution. "
+            "Core engine constants remain JSON-only."
         )
         advanced_note.setWordWrap(True)
         advanced_layout.addWidget(advanced_note)
@@ -343,6 +402,73 @@ class SettingsDialog(QDialog):
         advanced_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         advanced_form.setHorizontalSpacing(12)
         advanced_form.setVerticalSpacing(10)
+
+        self.txt_ffmpeg_path = QLineEdit(str(getattr(self._config, "ffmpeg_path", "ffmpeg") or "ffmpeg"))
+        self.txt_ffmpeg_path.setPlaceholderText("ffmpeg")
+        self.txt_ffmpeg_path.setToolTip(
+            "FFmpeg executable path or command name. Clear to use auto/default resolution."
+        )
+        advanced_form.addRow(
+            "FFmpeg executable:",
+            self._make_path_picker_row(
+                self.txt_ffmpeg_path,
+                browse_title="Select FFmpeg executable",
+            ),
+        )
+
+        self.txt_ffprobe_path = QLineEdit(str(getattr(self._config, "ffprobe_path", "ffprobe") or "ffprobe"))
+        self.txt_ffprobe_path.setPlaceholderText("ffprobe")
+        self.txt_ffprobe_path.setToolTip(
+            "FFprobe executable path or command name. Clear to use auto/default resolution."
+        )
+        advanced_form.addRow(
+            "FFprobe executable:",
+            self._make_path_picker_row(
+                self.txt_ffprobe_path,
+                browse_title="Select FFprobe executable",
+            ),
+        )
+
+        self.txt_vgmstream_path = QLineEdit(str(getattr(self._config, "vgmstream_path", "") or ""))
+        self.txt_vgmstream_path.setPlaceholderText("Auto (tools/vgmstream or PATH)")
+        self.txt_vgmstream_path.setToolTip(
+            "Optional vgmstream CLI executable for XMA2 decode. Leave empty for auto-detection."
+        )
+        advanced_form.addRow(
+            "vgmstream executable:",
+            self._make_path_picker_row(
+                self.txt_vgmstream_path,
+                browse_title="Select vgmstream executable",
+            ),
+        )
+
+        third_party_root = getattr(self._config, "third_party_tools_root", None)
+        self.txt_third_party_root = QLineEdit(str(third_party_root) if third_party_root else "")
+        self.txt_third_party_root.setPlaceholderText("Auto (./3rdPartyTools)")
+        self.txt_third_party_root.setToolTip(
+            "Optional root directory for JDNext third-party tools. Leave empty for default auto path."
+        )
+        advanced_form.addRow(
+            "3rd-party tools root:",
+            self._make_path_picker_row(
+                self.txt_third_party_root,
+                browse_title="Select third-party tools root",
+                select_directory=True,
+            ),
+        )
+
+        self.txt_assetstudio_cli = QLineEdit(str(getattr(self._config, "assetstudio_cli_path", "") or ""))
+        self.txt_assetstudio_cli.setPlaceholderText("Auto (search under 3rd-party tools root)")
+        self.txt_assetstudio_cli.setToolTip(
+            "Optional direct AssetStudioModCLI executable path for JDNext bundle extraction."
+        )
+        advanced_form.addRow(
+            "AssetStudio CLI:",
+            self._make_path_picker_row(
+                self.txt_assetstudio_cli,
+                browse_title="Select AssetStudioModCLI executable",
+            ),
+        )
 
         self.spin_download_timeout = QSpinBox()
         self.spin_download_timeout.setRange(15, 3600)
@@ -545,6 +671,14 @@ class SettingsDialog(QDialog):
         self._config.vp9_handling_mode = str(self.combo_vp9_mode.currentData())
         self._config.preview_video_mode = self._combo_value(self.combo_preview_mode)
         self._config.discord_channel_url = self.txt_discord_url.text().strip()
+        self._config.ffmpeg_path = self.txt_ffmpeg_path.text().strip() or "ffmpeg"
+        self._config.ffprobe_path = self.txt_ffprobe_path.text().strip() or "ffprobe"
+        self._config.vgmstream_path = self.txt_vgmstream_path.text().strip() or None
+        self._config.assetstudio_cli_path = self.txt_assetstudio_cli.text().strip() or None
+        third_party_root_text = self.txt_third_party_root.text().strip()
+        self._config.third_party_tools_root = (
+            Path(third_party_root_text).expanduser() if third_party_root_text else None
+        )
         self._config.download_timeout_s = self.spin_download_timeout.value()
         self._config.max_retries = self.spin_max_retries.value()
         self._config.retry_base_delay_s = self.spin_retry_base_delay.value()

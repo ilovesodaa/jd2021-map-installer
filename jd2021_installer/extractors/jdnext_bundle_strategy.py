@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
+from jd2021_installer.core.config import AppConfig
 from jd2021_installer.extractors.jdnext_unitypy import (
     JDNextUnpackSummary,
     unpack_jdnext_bundle_with_unitypy,
@@ -53,13 +54,39 @@ def _write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, ensure_ascii=True, indent=2), encoding="utf-8")
 
 
-def _run_assetstudio_export(bundle_path: Path, output_dir: Path, unity_version: str) -> Path:
+def _run_assetstudio_export(
+    bundle_path: Path,
+    output_dir: Path,
+    unity_version: str,
+    config: AppConfig | None = None,
+) -> Path:
     repo_root = Path(__file__).resolve().parents[2]
-    candidates = [
-        repo_root / "3rdPartyTools" / "Unity2UbiArt" / "bin" / "AssetStudioModCLI" / "AssetStudioModCLI.exe",
-        repo_root / "3rdPartyTools" / "JDNextTools" / "AssetStudio" / "AssetStudioModCLI.exe",
-        repo_root / "3rdPartyTools" / "AssetStudio" / "AssetStudioModCLI.exe",
-    ]
+
+    candidates: list[Path] = []
+    configured_cli = str(getattr(config, "assetstudio_cli_path", "") or "").strip()
+    if configured_cli:
+        candidates.append(Path(configured_cli).expanduser())
+
+    configured_root = getattr(config, "third_party_tools_root", None)
+    third_party_roots: list[Path] = []
+    if configured_root:
+        third_party_roots.append(Path(configured_root).expanduser())
+    third_party_roots.append(repo_root / "3rdPartyTools")
+
+    seen: set[str] = set()
+    for root in third_party_roots:
+        key = str(root).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.extend(
+            [
+                root / "Unity2UbiArt" / "bin" / "AssetStudioModCLI" / "AssetStudioModCLI.exe",
+                root / "JDNextTools" / "AssetStudio" / "AssetStudioModCLI.exe",
+                root / "AssetStudio" / "AssetStudioModCLI.exe",
+            ]
+        )
+
     cli_path = next((p for p in candidates if p.exists()), None)
     if cli_path is None:
         raise FileNotFoundError("AssetStudioModCLI.exe not found under 3rdPartyTools")
@@ -424,9 +451,13 @@ def map_assetstudio_output(assetstudio_out: Path, mapped_root: Path, codename: s
     return summary
 
 
-def _run_unitypy(bundle_path: Path, unitypy_out: Path) -> JDNextUnpackSummary:
+def _run_unitypy(
+    bundle_path: Path,
+    unitypy_out: Path,
+    config: AppConfig | None = None,
+) -> JDNextUnpackSummary:
     unitypy_out.mkdir(parents=True, exist_ok=True)
-    return unpack_jdnext_bundle_with_unitypy(bundle_path, unitypy_out)
+    return unpack_jdnext_bundle_with_unitypy(bundle_path, unitypy_out, config=config)
 
 
 def run_jdnext_bundle_strategy(
@@ -436,6 +467,7 @@ def run_jdnext_bundle_strategy(
     strategy: Strategy = "assetstudio_first",
     codename: str | None = None,
     unity_version: str = "2021.3.9f1",
+    config: AppConfig | None = None,
 ) -> JDNextStrategySummary:
     bundle = Path(bundle_path)
     out_root = Path(output_dir)
@@ -455,25 +487,25 @@ def run_jdnext_bundle_strategy(
 
     if strategy == "assetstudio_first":
         try:
-            _run_assetstudio_export(bundle, assetstudio_out, unity_version)
+            _run_assetstudio_export(bundle, assetstudio_out, unity_version, config=config)
             assetstudio_success = True
         except Exception as exc:
             assetstudio_error = exc
         if not assetstudio_success:
             try:
-                unitypy_summary = _run_unitypy(bundle, unitypy_out)
+                unitypy_summary = _run_unitypy(bundle, unitypy_out, config=config)
                 unitypy_success = True
             except Exception as exc:
                 unitypy_error = exc
     elif strategy == "unitypy_first":
         try:
-            unitypy_summary = _run_unitypy(bundle, unitypy_out)
+            unitypy_summary = _run_unitypy(bundle, unitypy_out, config=config)
             unitypy_success = True
         except Exception as exc:
             unitypy_error = exc
         if not unitypy_success:
             try:
-                _run_assetstudio_export(bundle, assetstudio_out, unity_version)
+                _run_assetstudio_export(bundle, assetstudio_out, unity_version, config=config)
                 assetstudio_success = True
             except Exception as exc:
                 assetstudio_error = exc

@@ -363,7 +363,7 @@ def convert_audio(
     temp_dir = target_dir / "_temp_audio"
     if audio_path.suffix.lower() == ".ckd":
         temp_dir.mkdir(parents=True, exist_ok=True)
-        extracted = extract_ckd_audio_v1(audio_path, temp_dir)
+        extracted = extract_ckd_audio_v1(audio_path, temp_dir, config=config)
         if extracted:
             effective_audio = Path(extracted)
             logger.debug("Using extracted audio payload for conversion: %s", effective_audio.name)
@@ -855,7 +855,11 @@ def _ffmpeg_decode_unknown_payload(payload_file: Path, output_wav: Path) -> bool
 # Ported from V1: _extract_ckd_audio
 CKD_HEADER_SIZE = 44
 
-def extract_ckd_audio_v1(ckd_path: str | Path, output_dir: str | Path) -> Optional[str]:
+def extract_ckd_audio_v1(
+    ckd_path: str | Path,
+    output_dir: str | Path,
+    config: Optional[AppConfig] = None,
+) -> Optional[str]:
     """Strip the 44-byte CKD header from a cooked audio file and write raw audio.
     
     Ported from V1 source_analysis.py.
@@ -881,7 +885,11 @@ def extract_ckd_audio_v1(ckd_path: str | Path, output_dir: str | Path) -> Option
     # V1 Parity: Try vgmstream on the RAW CKD file first (some newer versions support it)
     vgm_raw_out = output_dir / f"{base}_raw_vgm.wav"
     try:
-        decoded = decode_xma2_audio(ckd_path, vgm_raw_out)
+        decoded = decode_xma2_audio(
+            ckd_path,
+            vgm_raw_out,
+            vgmstream_path=getattr(config, "vgmstream_path", None),
+        )
         if decoded and decoded.exists():
             if is_valid_wav(decoded):
                 logger.debug("Decoded raw CKD directly via vgmstream: %s", decoded.name)
@@ -919,7 +927,11 @@ def extract_ckd_audio_v1(ckd_path: str | Path, output_dir: str | Path) -> Option
             out_path = output_dir / (base + "_decoded.wav")
 
             try:
-                decoded = decode_xma2_audio(temp_payload, out_path)
+                decoded = decode_xma2_audio(
+                    temp_payload,
+                    out_path,
+                    vgmstream_path=getattr(config, "vgmstream_path", None),
+                )
                 if decoded and decoded.exists():
                     if is_valid_wav(decoded):
                         return str(decoded)

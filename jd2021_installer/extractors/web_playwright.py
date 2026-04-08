@@ -361,6 +361,7 @@ def _extract_jdnext_aux_texture_bundles(
     extract_dir: Path,
     mainscene_name: str,
     codename: str,
+    config: Optional[AppConfig] = None,
 ) -> int:
     """Decode JDNext non-mapPackage bundles and copy loose texture payloads.
 
@@ -379,7 +380,7 @@ def _extract_jdnext_aux_texture_bundles(
 
         export_dir = strategy_aux_root / bundle_path.stem
         try:
-            _run_assetstudio_export(bundle_path, export_dir, "2021.3.9f1")
+            _run_assetstudio_export(bundle_path, export_dir, "2021.3.9f1", config=config)
         except Exception as exc:
             logger.debug("JDNext aux bundle export failed (%s): %s", bundle_path.name, exc)
             continue
@@ -1582,6 +1583,7 @@ class WebPlaywrightExtractor(BaseExtractor):
                             strategy_dir,
                             strategy="assetstudio_first",
                             codename=codename,
+                            config=self._config,
                         )
                         mapped_root = strategy_dir / "mapped"
                         if mapped_root.exists():
@@ -1601,6 +1603,7 @@ class WebPlaywrightExtractor(BaseExtractor):
                             extract_dir=extract_dir,
                             mainscene_name=mainscene_name,
                             codename=codename,
+                            config=self._config,
                         )
                     except Exception as exc:
                         logger.debug("JDNext auxiliary texture extraction failed: %s", exc)

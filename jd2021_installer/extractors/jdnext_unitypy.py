@@ -15,6 +15,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from jd2021_installer.core.config import AppConfig
+
 _DEFAULT_UNITY_FALLBACK_VERSION = "2021.3.0f1"
 
 
@@ -41,14 +43,26 @@ def _safe_name(value: str, fallback: str) -> str:
     return safe or fallback
 
 
-def _load_unitypy() -> Any:
+def _load_unitypy(config: AppConfig | None = None) -> Any:
     """Import UnityPy from site-packages or local 3rd-party clone."""
     try:
         unitypy = importlib.import_module("UnityPy")
     except ModuleNotFoundError:
         repo_root = Path(__file__).resolve().parents[2]
-        local_unitypy = repo_root / "3rdPartyTools" / "JDNextTools" / "UnityPy"
-        if local_unitypy.exists():
+        configured_root = getattr(config, "third_party_tools_root", None)
+        local_roots: list[Path] = []
+        if configured_root:
+            local_roots.append(Path(configured_root).expanduser())
+        local_roots.append(repo_root / "3rdPartyTools")
+
+        local_unitypy = None
+        for root in local_roots:
+            candidate = root / "JDNextTools" / "UnityPy"
+            if candidate.exists():
+                local_unitypy = candidate
+                break
+
+        if local_unitypy is not None:
             local_path = str(local_unitypy)
             if local_path not in sys.path:
                 sys.path.insert(0, local_path)
@@ -86,7 +100,11 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, ensure_ascii=True, indent=2), encoding="utf-8")
 
 
-def unpack_jdnext_bundle_with_unitypy(bundle_path: str | Path, output_dir: str | Path) -> JDNextUnpackSummary:
+def unpack_jdnext_bundle_with_unitypy(
+    bundle_path: str | Path,
+    output_dir: str | Path,
+    config: AppConfig | None = None,
+) -> JDNextUnpackSummary:
     """Run a single UnityPy extraction pass for a JDNext bundle.
 
     Args:
@@ -101,7 +119,7 @@ def unpack_jdnext_bundle_with_unitypy(bundle_path: str | Path, output_dir: str |
     if not bundle.is_file():
         raise FileNotFoundError(f"Bundle file not found: {bundle}")
 
-    unitypy = _load_unitypy()
+    unitypy = _load_unitypy(config=config)
     try:
         env = unitypy.load(str(bundle))
     except Exception as exc:
