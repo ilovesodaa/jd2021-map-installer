@@ -107,6 +107,21 @@ def upsert_entry(entry: ReadjustIndexEntry, index_file: Path = INDEX_FILE) -> No
     save_index(index, index_file)
 
 
+def remove_entry(codename: str, index_file: Path = INDEX_FILE) -> bool:
+    """Remove an indexed map entry by codename; returns True if removed."""
+    if not codename:
+        return False
+
+    index = load_index(index_file)
+    original_len = len(index.entries)
+    index.entries = [e for e in index.entries if e.codename.lower() != codename.lower()]
+    if len(index.entries) == original_len:
+        return False
+
+    save_index(index, index_file)
+    return True
+
+
 def update_offsets(
     codename: str,
     *,

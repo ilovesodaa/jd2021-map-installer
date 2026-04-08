@@ -17,6 +17,7 @@ Usage (in controller):
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 import re
 import shutil
@@ -1190,11 +1191,20 @@ def pre_install_cleanup(
     if status_callback:
         status_callback(f"Cleaning up previous installation of {codename}...")
 
-    # 1. Delete main map directory
-    map_dir = game_dir / "data" / "world" / "maps" / codename
-    if map_dir.exists():
-        logger.info("Deleting previous map directory: %s", codename)
-        shutil.rmtree(map_dir, ignore_errors=True)
+    # 1. Delete main map directory (support common case variants)
+    map_dir_candidates = [
+        game_dir / "data" / "world" / "maps" / codename,
+        game_dir / "data" / "World" / "MAPS" / codename,
+    ]
+    seen_paths: set[str] = set()
+    for map_dir in map_dir_candidates:
+        key = str(map_dir).lower()
+        if key in seen_paths:
+            continue
+        seen_paths.add(key)
+        if map_dir.exists():
+            logger.info("Deleting previous map directory: %s", map_dir)
+            shutil.rmtree(map_dir, ignore_errors=True)
 
     # 2. Delete cooked cache directories
     # V1 Parity: engine cache paths are strictly lowercase
@@ -1216,6 +1226,95 @@ def pre_install_cleanup(
     # 3. Unregister from SkuScene
     from jd2021_installer.installers.sku_scene import unregister_map
     unregister_map(game_dir, codename)
+
+
+@dataclass
+class UninstallResult:
+    codename: str
+    removed_map_dirs: list[Path]
+    removed_cache_dirs: list[Path]
+    sku_unregistered: bool
+    removed_installer_cache: bool
+
+
+def uninstall_map_from_game(
+    game_dir: Path,
+    codename: str,
+    config: Optional[AppConfig] = None,
+    status_callback: Optional[Callable[[str], None]] = None,
+) -> UninstallResult:
+    """Uninstall a map from the game and return verifiable cleanup results."""
+    normalized_game_dir = game_dir
+    while normalized_game_dir.name.lower() in ("world", "data"):
+        normalized_game_dir = normalized_game_dir.parent
+
+    name_lower = codename.lower()
+    map_dir_candidates = [
+        normalized_game_dir / "data" / "world" / "maps" / codename,
+        normalized_game_dir / "data" / "World" / "MAPS" / codename,
+    ]
+    deduped_map_dirs: list[Path] = []
+    seen_map_dirs: set[str] = set()
+    for map_dir in map_dir_candidates:
+        key = str(map_dir).lower()
+        if key in seen_map_dirs:
+            continue
+        seen_map_dirs.add(key)
+        deduped_map_dirs.append(map_dir)
+
+    cache_base = normalized_game_dir / "data" / "cache" / "itf_cooked" / "pc" / "world" / "maps" / name_lower
+    cache_paths = [
+        cache_base,
+        cache_base.with_name(cache_base.name + "_autodance"),
+        cache_base.with_name(cache_base.name + "_cine"),
+        cache_base / "audio",
+    ]
+
+    map_dirs_before = [p for p in deduped_map_dirs if p.exists()]
+    cache_dirs_before = [p for p in cache_paths if p.exists()]
+
+    from jd2021_installer.installers.sku_scene import is_registered
+
+    sku_registered_before = is_registered(normalized_game_dir, codename)
+
+    installer_cache_dir: Optional[Path] = None
+    installer_cache_before = False
+    if config is not None:
+        installer_cache_dir = config.cache_directory / codename
+        installer_cache_before = installer_cache_dir.exists()
+
+    pre_install_cleanup(normalized_game_dir, codename, status_callback=status_callback)
+
+    removed_installer_cache = False
+    if installer_cache_dir is not None and installer_cache_before:
+        if status_callback:
+            status_callback(f"Removing installer cache for {codename}...")
+        shutil.rmtree(installer_cache_dir, ignore_errors=True)
+        removed_installer_cache = not installer_cache_dir.exists()
+        if not removed_installer_cache:
+            raise RuntimeError(f"Installer cache could not be removed: {installer_cache_dir}")
+
+    for path in map_dirs_before:
+        if path.exists():
+            raise RuntimeError(f"Map directory still exists after uninstall: {path}")
+
+    for path in cache_dirs_before:
+        if path.exists():
+            raise RuntimeError(f"Cooked cache directory still exists after uninstall: {path}")
+
+    sku_unregistered = False
+    if sku_registered_before:
+        sku_unregistered = not is_registered(normalized_game_dir, codename)
+        if not sku_unregistered:
+            raise RuntimeError(f"Map is still registered in SkuScene after uninstall: {codename}")
+
+    return UninstallResult(
+        codename=codename,
+        removed_map_dirs=[p for p in map_dirs_before if not p.exists()],
+        removed_cache_dirs=[p for p in cache_dirs_before if not p.exists()],
+        sku_unregistered=sku_unregistered,
+        removed_installer_cache=removed_installer_cache,
+    )
 
 
 def install_map_to_game(

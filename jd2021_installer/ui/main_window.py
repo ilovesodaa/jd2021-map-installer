@@ -66,8 +66,10 @@ from jd2021_installer.core.models import (
 )
 from jd2021_installer.core.readjust_index import (
     ReadjustIndexEntry,
+    load_index,
     prune_stale_entries,
     read_video_start_time_from_trk,
+    remove_entry,
     update_offsets,
     upsert_entry,
 )
@@ -90,6 +92,7 @@ from jd2021_installer.ui.workers.pipeline_workers import (
     ApplyAndFinishWorker,
     ApplyOffsetsBatchWorker,
     ApplyReadjustOffsetsBatchWorker,
+    uninstall_map_from_game,
 )
 
 logger = logging.getLogger("jd2021.ui.main_window")
@@ -786,6 +789,7 @@ class MainWindow(QMainWindow):
         # -- Action panel signals -------------------------------------------
         self._action_panel.install_requested.connect(self._on_install_requested)
         self._action_panel.preflight_requested.connect(self._on_preflight)
+        self._action_panel.uninstall_requested.connect(self._on_uninstall_map)
         self._action_panel.readjust_offset_requested.connect(self._on_readjust)
         self._action_panel.settings_requested.connect(self._on_settings)
         self._action_panel.reset_state_requested.connect(self._on_reset_state)
@@ -1068,6 +1072,261 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Clear Cache Failed", f"Failed to clear cache:\n{exc}")
 
     # -- Actions ------------------------------------------------------------
+
+    def _collect_uninstall_candidates(self) -> list[tuple[str, str, str]]:
+        """Return uninstall candidates as (codename, source_mode, location)."""
+        if not self._config.game_directory:
+            return []
+
+        game_dir = self._config.game_directory
+        while game_dir.name.lower() in ("world", "data"):
+            game_dir = game_dir.parent
+
+        index_entries = load_index().entries
+        index_by_codename = {entry.codename.lower(): entry for entry in index_entries}
+
+        candidates: dict[str, tuple[str, str, str]] = {}
+
+        maps_roots = [
+            game_dir / "data" / "World" / "MAPS",
+            game_dir / "data" / "world" / "maps",
+        ]
+        for maps_root in maps_roots:
+            if not maps_root.is_dir():
+                continue
+            for child in maps_root.iterdir():
+                if not child.is_dir():
+                    continue
+                codename = child.name
+                key = codename.lower()
+                source_mode = "Unknown"
+                if key in index_by_codename:
+                    source_mode = index_by_codename[key].source_mode or "Unknown"
+                candidates[key] = (codename, source_mode, str(child))
+
+        for entry in index_entries:
+            installed_dir = Path(entry.installed_map_dir)
+            if not installed_dir.is_dir():
+                continue
+            key = entry.codename.lower()
+            candidates[key] = (
+                entry.codename,
+                entry.source_mode or "Unknown",
+                str(installed_dir),
+            )
+
+        return sorted(candidates.values(), key=lambda item: item[0].lower())
+
+    def _pick_maps_for_uninstall(self) -> list[str]:
+        candidates = self._collect_uninstall_candidates()
+        if not candidates:
+            QMessageBox.information(
+                self,
+                "Uninstall Map",
+                "No installed maps were detected in the selected game directory.",
+            )
+            return []
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Select Maps to Uninstall")
+        dialog.setMinimumSize(620, 420)
+        root = QVBoxLayout(dialog)
+        root.addWidget(QLabel("Choose one or more installed maps to uninstall."))
+
+        list_widget = QListWidget(dialog)
+        list_widget.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        list_widget.itemChanged.connect(lambda _item: _refresh_selection_count())
+        for codename, source_mode, location in candidates:
+            item = QListWidgetItem(f"{codename}  [{source_mode}]")
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked)
+            item.setData(Qt.ItemDataRole.UserRole, codename)
+            item.setToolTip(location)
+            list_widget.addItem(item)
+        root.addWidget(list_widget)
+
+        btns = QHBoxLayout()
+        btn_select_all = QPushButton("Select All")
+        btn_select_all.setToolTip("Check every map in the list")
+
+        def _set_all_checked(checked: bool) -> None:
+            state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+            for i in range(list_widget.count()):
+                item = list_widget.item(i)
+                if item is not None:
+                    item.setCheckState(state)
+            _refresh_selection_count()
+
+        btn_select_all.clicked.connect(lambda: _set_all_checked(True))
+        btns.addWidget(btn_select_all)
+
+        btn_clear = QPushButton("Unselect All")
+        btn_clear.setToolTip("Uncheck every map in the list")
+        btn_clear.clicked.connect(lambda: _set_all_checked(False))
+        btns.addWidget(btn_clear)
+
+        count_label = QLabel()
+        btns.addWidget(count_label)
+
+        def _refresh_selection_count() -> None:
+            total = list_widget.count()
+            selected = 0
+            for i in range(total):
+                item = list_widget.item(i)
+                if item is not None and item.checkState() == Qt.CheckState.Checked:
+                    selected += 1
+            count_label.setText(f"{selected} of {total} selected")
+
+        _refresh_selection_count()
+
+        btns.addStretch()
+
+        btn_uninstall = QPushButton("Uninstall Selected")
+        btn_uninstall.setToolTip("Uninstall all checked maps")
+        btn_uninstall.clicked.connect(dialog.accept)
+        btns.addWidget(btn_uninstall)
+
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.setToolTip("Close this dialog without uninstalling maps")
+        btn_cancel.clicked.connect(dialog.reject)
+        btns.addWidget(btn_cancel)
+
+        root.addLayout(btns)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return []
+
+        selected_codes: list[str] = []
+        for i in range(list_widget.count()):
+            item = list_widget.item(i)
+            if item is None or item.checkState() != Qt.CheckState.Checked:
+                continue
+            selected_codes.append(str(item.data(Qt.ItemDataRole.UserRole)))
+
+        if not selected_codes:
+            QMessageBox.information(self, "No Map Selected", "Select at least one map to uninstall.")
+
+        return selected_codes
+
+    def _on_uninstall_map(self) -> None:
+        if not self._config.game_directory:
+            QMessageBox.warning(self, "Game Directory Missing", "Set a game directory before uninstalling maps.")
+            return
+
+        selected_codes = self._pick_maps_for_uninstall()
+        if not selected_codes:
+            return
+
+        code_lines = "\n".join(f"- {code}" for code in selected_codes)
+        confirm = QMessageBox.question(
+            self,
+            "Confirm Uninstall",
+            (
+                f"Remove {len(selected_codes)} selected map(s)?\n\n"
+                f"{code_lines}\n\n"
+                "This will delete map files and cooked cache, unregister from SkuScene, "
+                "remove installer cache, and remove each map from the readjust index."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        self._lock_ui(True)
+        self._set_status("Uninstalling selected maps...")
+        self.append_log(f"Starting uninstall for {len(selected_codes)} map(s)...")
+
+        try:
+            self._preview_widget.stop()
+
+            failed: list[str] = []
+            changed_lowers: set[str] = set()
+            for codename in selected_codes:
+                self.append_log(f"Uninstalling '{codename}'...")
+                try:
+                    result = uninstall_map_from_game(
+                        self._config.game_directory,
+                        codename,
+                        config=self._config,
+                        status_callback=self.append_log,
+                    )
+                    index_removed = remove_entry(codename)
+                    if index_removed:
+                        self.append_log(f"Removed '{codename}' from readjust index.")
+
+                    changed = bool(
+                        result.removed_map_dirs
+                        or result.removed_cache_dirs
+                        or result.sku_unregistered
+                        or result.removed_installer_cache
+                        or index_removed
+                    )
+                    if changed:
+                        changed_lowers.add(codename.lower())
+                        self.append_log(
+                            (
+                                f"Uninstall result for '{codename}': "
+                                f"map_dirs={len(result.removed_map_dirs)}, "
+                                f"cooked_cache_dirs={len(result.removed_cache_dirs)}, "
+                                f"sku_unregistered={'yes' if result.sku_unregistered else 'no'}, "
+                                f"installer_cache={'yes' if result.removed_installer_cache else 'no'}, "
+                                f"index_removed={'yes' if index_removed else 'no'}."
+                            )
+                        )
+                    else:
+                        self.append_log(
+                            f"No uninstallable artifacts found for '{codename}' (already removed or never installed)."
+                        )
+                except Exception as exc:
+                    logger.exception("Failed to uninstall map '%s': %s", codename, exc)
+                    failed.append(f"{codename}: {exc}")
+
+            self._nav_maps = [m for m in self._nav_maps if m.codename.lower() not in changed_lowers]
+            self._completed_install_maps = [
+                m for m in self._completed_install_maps if m.codename.lower() not in changed_lowers
+            ]
+            self._pending_offsets = {
+                name: offsets
+                for name, offsets in self._pending_offsets.items()
+                if name.lower() not in changed_lowers
+            }
+
+            if self._current_map and self._current_map.codename.lower() in changed_lowers:
+                self._current_map = self._nav_maps[0] if self._nav_maps else None
+                self._nav_index = 0
+
+            if self._current_map:
+                if len(self._nav_maps) > 1:
+                    self._sync_refinement.set_nav_visible(True, f"Map 1 / {len(self._nav_maps)}")
+                else:
+                    self._sync_refinement.set_nav_visible(False)
+                self._set_preview_controls_ready(True)
+            else:
+                self._sync_refinement.set_nav_visible(False)
+                self._set_preview_controls_ready(False)
+                self._preview_widget.reset()
+
+            if failed:
+                QMessageBox.warning(
+                    self,
+                    "Uninstall Completed With Errors",
+                    "Some maps could not be uninstalled:\n\n" + "\n".join(failed),
+                )
+                self.append_log("⚠️  Uninstall finished with errors.")
+                self._set_status("Uninstall completed with errors")
+            elif not changed_lowers:
+                self.append_log("No selected maps required uninstall changes.")
+                self._set_status("Uninstall completed (no changes)")
+            else:
+                self.append_log("✅  Selected maps uninstalled successfully.")
+                self._set_status("Uninstall complete")
+        except Exception as exc:
+            logger.exception("Failed to uninstall selected maps: %s", exc)
+            QMessageBox.critical(self, "Uninstall Failed", f"Failed to uninstall selected maps:\n{exc}")
+            self._set_status("Uninstall failed")
+        finally:
+            self._lock_ui(False)
 
     def _on_settings(self) -> None:
         from jd2021_installer.ui.widgets.settings_dialog import SettingsDialog
