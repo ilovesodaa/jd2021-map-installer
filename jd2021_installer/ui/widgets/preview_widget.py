@@ -80,6 +80,32 @@ class _AspectRatioLabel(QLabel):
         super().mousePressEvent(event)
 
 
+class _AspectRatioViewport(QWidget):
+    """Container that forces a fixed aspect ratio for its child widget."""
+
+    def __init__(self, child: QWidget, ratio_w: int = 16, ratio_h: int = 9) -> None:
+        super().__init__()
+        self._child = child
+        self._ratio_w = max(1, int(ratio_w))
+        self._ratio_h = max(1, int(ratio_h))
+        self._child.setParent(self)
+        self._child.show()
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    def resizeEvent(self, event) -> None:
+        rect = self.contentsRect()
+        max_w = max(1, rect.width())
+        max_h = max(1, rect.height())
+
+        target_w = min(max_w, int(max_h * self._ratio_w / self._ratio_h))
+        target_h = min(max_h, int(target_w * self._ratio_h / self._ratio_w))
+
+        x = rect.x() + (max_w - target_w) // 2
+        y = rect.y() + (max_h - target_h) // 2
+        self._child.setGeometry(x, y, target_w, target_h)
+        super().resizeEvent(event)
+
+
 # ---------------------------------------------------------------------------
 # Frame reader thread (runs ffmpeg, emits QPixmap frames)
 # ---------------------------------------------------------------------------
@@ -316,7 +342,10 @@ class PreviewWidget(QWidget):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding,
         )
         self._canvas.clicked.connect(self._toggle_playback)
-        root.addWidget(self._canvas, stretch=1)
+
+        self._canvas_host = _AspectRatioViewport(self._canvas, ratio_w=16, ratio_h=9)
+        self._canvas_host.setMinimumSize(480, 270)
+        root.addWidget(self._canvas_host, stretch=1)
 
         # -- Seek bar -------------------------------------------------------
         seek_row = QHBoxLayout()

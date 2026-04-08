@@ -280,6 +280,12 @@ class MainWindow(QMainWindow):
         """Ensure all background processes (especially ffplay) are stopped."""
         logger.info("Closing application. Cleaning up...")
         self._preview_widget.stop()
+
+        root_logger = logging.getLogger()
+        try:
+            root_logger.removeHandler(self._log_console.log_handler)
+        except Exception:
+            pass
         
         # Give threads a moment to finish, but don't hang if they are stuck
         for thread in list(self._active_threads):
@@ -924,7 +930,9 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Expanding,
         )
         # Wire root logger to our console
-        logging.getLogger().addHandler(self._log_console.log_handler)
+        root_logger = logging.getLogger()
+        if self._log_console.log_handler not in root_logger.handlers:
+            root_logger.addHandler(self._log_console.log_handler)
         right_layout.addWidget(self._log_console, stretch=1)
 
         self._set_panel_map_hints_visible(bool(getattr(self._config, "style_debug_mode", False)))
@@ -1482,13 +1490,13 @@ class MainWindow(QMainWindow):
                 "Uninstall Completed With Errors",
                 "Some maps could not be uninstalled:\n\n" + "\n".join(result.failed),
             )
-            self.append_log("⚠️  Uninstall finished with errors.")
+            self.append_log("WARNING: Uninstall finished with errors.")
             self._set_status("Uninstall completed with errors")
         elif not changed_lowers:
             self.append_log("No selected maps required uninstall changes.")
             self._set_status("Uninstall completed (no changes)")
         else:
-            self.append_log("✅  Selected maps uninstalled successfully.")
+            self.append_log("Selected maps uninstalled successfully.")
             self._set_status("Uninstall complete")
 
         self._lock_ui(False)
@@ -2351,7 +2359,7 @@ class MainWindow(QMainWindow):
                     "Check and Evaluate Offsets",
                     "Review the preview and sync controls now to verify the installed map offsets.",
                 )
-            self.append_log("✅  Map installed successfully!")
+            self.append_log("Map installed successfully.")
 
             # If we don't have a nav list yet (single install), set current as the only one
             if not self._nav_maps and self._current_map:
@@ -2466,7 +2474,7 @@ class MainWindow(QMainWindow):
         if not summaries:
             return
         for summary in summaries:
-            logger.info("\n===== Installation Summary =====\n%s\n===============================", render_install_summary(summary))
+            logger.info("===== Installation Summary =====\n%s\n===============================", render_install_summary(summary))
 
     def _show_install_summary_popup(self, summaries: list[InstallSummary]) -> None:
         if not getattr(self._config, "show_install_summary_popup", True):
@@ -2879,7 +2887,7 @@ class MainWindow(QMainWindow):
     def _on_reprocess_finished(self, success: bool) -> None:
         self._lock_ui(False)
         if success:
-            logger.info("✅  Offsets applied and audio reprocessed.")
+            logger.info("Offsets applied and audio reprocessed.")
             for codename, audio_ms, video_ms in self._readjust_pending_updates:
                 update_offsets(codename, audio_ms=audio_ms, video_ms=video_ms)
             self._readjust_pending_updates.clear()
@@ -2995,7 +3003,7 @@ class MainWindow(QMainWindow):
                 import shutil
                 shutil.rmtree(batch_temp, ignore_errors=True)
             
-            self.append_log("✅  Source files cleaned up.")
+            self.append_log("Source files cleaned up.")
         except Exception as e:
             self.append_log(f"Warning: Cleanup failed ({e})")
 

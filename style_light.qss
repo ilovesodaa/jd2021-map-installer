@@ -283,7 +283,7 @@ QLabel#syncOffsetLabel {
 	font-weight: 600;
 }
 
-QPlainTextEdit#logConsoleTextEdit {
+QTextEdit#logConsoleTextEdit {
 	background-color: #ffffff;
 	color: #1f2a38;
 	border: 1px solid #c7d4e8;

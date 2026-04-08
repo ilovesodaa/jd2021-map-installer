@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -762,6 +763,22 @@ class SettingsDialog(QDialog):
         clean_data_row.addStretch()
         integrations_layout.addLayout(clean_data_row)
 
+        downloads_row = QHBoxLayout()
+        downloads_row.addWidget(QLabel("Clear downloaded source maps folder:"))
+        self.btn_clear_mapdownloads = QPushButton("Clear mapDownloads...")
+        self.btn_clear_mapdownloads.clicked.connect(self._on_clear_map_downloads)
+        downloads_row.addWidget(self.btn_clear_mapdownloads)
+        downloads_row.addStretch()
+        integrations_layout.addLayout(downloads_row)
+
+        cache_row = QHBoxLayout()
+        cache_row.addWidget(QLabel("Clear installer cache and readjust index:"))
+        self.btn_clear_cache = QPushButton("Clear Cache...")
+        self.btn_clear_cache.clicked.connect(self._on_clear_cache)
+        cache_row.addWidget(self.btn_clear_cache)
+        cache_row.addStretch()
+        integrations_layout.addLayout(cache_row)
+
         integrations_layout.addStretch()
 
         tabs.addTab(tab_integrations, "Integrations")
@@ -1007,6 +1024,120 @@ class SettingsDialog(QDialog):
             task=_task,
             on_success=_on_success,
             error_title="Clean Game Data Failed",
+        )
+
+    @staticmethod
+    def _project_root() -> Path:
+        return Path(__file__).resolve().parents[3]
+
+    def _resolve_config_path(self, configured_path: Path) -> Path:
+        candidate = Path(configured_path).expanduser()
+        return candidate if candidate.is_absolute() else (self._project_root() / candidate)
+
+    def _on_clear_map_downloads(self) -> None:
+        downloads_dir = self._resolve_config_path(self._config.download_root)
+        confirm = QMessageBox.warning(
+            self,
+            "Confirm mapDownloads Cleanup",
+            "This will permanently delete all files and folders inside mapDownloads.\n\n"
+            f"Target:\n- {downloads_dir}\n\n"
+            "Consequences:\n"
+            "- Downloaded source maps and extracted fetch artifacts will be removed.\n"
+            "- Future installs may require re-downloading map assets.\n\n"
+            "Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        def _task() -> object:
+            removed_items: list[str] = []
+            if downloads_dir.exists():
+                for child in downloads_dir.iterdir():
+                    if child.is_dir():
+                        shutil.rmtree(child)
+                    else:
+                        child.unlink()
+                    removed_items.append(str(child))
+            downloads_dir.mkdir(parents=True, exist_ok=True)
+
+            return {
+                "downloads_dir": str(downloads_dir),
+                "removed_count": len(removed_items),
+            }
+
+        def _on_success(result: object) -> None:
+            QMessageBox.information(
+                self,
+                "mapDownloads Cleared",
+                "mapDownloads cleanup completed.\n\n"
+                f"Removed items: {result.get('removed_count', 0)}\n"
+                f"Folder kept at:\n{result.get('downloads_dir')}",
+            )
+
+        self._run_background_task(
+            window_title="Clearing mapDownloads",
+            initial_status="Clearing mapDownloads",
+            task=_task,
+            on_success=_on_success,
+            error_title="mapDownloads Cleanup Failed",
+        )
+
+    def _on_clear_cache(self) -> None:
+        cache_dir = self._resolve_config_path(self._config.cache_directory)
+        readjust_index_file = self._project_root() / "map_readjust_index.json"
+
+        confirm = QMessageBox.warning(
+            self,
+            "Confirm Cache Clear",
+            "This will permanently remove installer cache data and readjust index history.\n\n"
+            f"Will clear:\n- {cache_dir}\n"
+            f"- {readjust_index_file}\n\n"
+            "Consequences:\n"
+            "- Re-adjust Offset entries may disappear until maps are re-installed/re-indexed.\n"
+            "- Cached source artifacts will be gone and may need to be re-downloaded.\n\n"
+            "Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        def _task() -> object:
+            removed_items: list[str] = []
+            if cache_dir.exists():
+                shutil.rmtree(cache_dir)
+                removed_items.append(str(cache_dir))
+            cache_dir.mkdir(parents=True, exist_ok=True)
+
+            if readjust_index_file.exists():
+                readjust_index_file.unlink()
+                removed_items.append(str(readjust_index_file))
+
+            return {
+                "cache_dir": str(cache_dir),
+                "readjust_index": str(readjust_index_file),
+                "removed_items": removed_items,
+            }
+
+        def _on_success(result: object) -> None:
+            removed_items = list(result.get("removed_items", []))
+            removed_text = "\n".join(f"- {item}" for item in removed_items) if removed_items else "- Nothing was present to remove"
+            QMessageBox.information(
+                self,
+                "Cache Cleared",
+                "Cache clear completed.\n\n"
+                f"Removed:\n{removed_text}\n\n"
+                f"Cache folder is ready at:\n{result.get('cache_dir')}",
+            )
+
+        self._run_background_task(
+            window_title="Clearing Cache",
+            initial_status="Clearing cache and readjust index",
+            task=_task,
+            on_success=_on_success,
+            error_title="Clear Cache Failed",
         )
 
     def get_config(self) -> AppConfig:
