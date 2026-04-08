@@ -256,6 +256,7 @@ class MainWindow(QMainWindow):
         self._readjust_pending_updates: list[tuple[str, float, float]] = []
         self._install_started_at: Optional[float] = None
         self._completed_install_maps: list[NormalizedMapData] = []
+        self._quickstart_shown_this_session = False
 
         # -- Window setup -----------------------------------------------------
         self.setWindowTitle("JD2021PC Map Installer")
@@ -266,20 +267,12 @@ class MainWindow(QMainWindow):
         self._config.log_detail_level = apply_log_detail(self._config.log_detail_level)
         self._wire_signals()
 
-        # Phase 4.4 Quickstart
-        if self._config.show_quickstart_on_launch:
-            from jd2021_installer.ui.widgets.quickstart_dialog import QuickstartDialog
-            dont_show_again = QuickstartDialog.show_guide(self)
-            if dont_show_again:
-                self._config.show_quickstart_on_launch = False
-                self._save_settings()
-
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
         self._status_bar.showMessage("Ready")
         self._init_size_overlay()
 
-        # Show Quickstart Guide if needed
+        # Show Quickstart Guide after first paint.
         QTimer.singleShot(500, self._show_quickstart_if_needed)
         QTimer.singleShot(900, self._run_startup_dependency_guardrail)
 
@@ -302,28 +295,32 @@ class MainWindow(QMainWindow):
     # ==================================================================
 
     def _load_settings(self) -> AppConfig:
-        settings_file = Path("installer_settings.json")
+        settings_file = self._settings_file_path()
         if settings_file.exists():
             try:
-                with settings_file.open("r") as f:
+                with settings_file.open("r", encoding="utf-8") as f:
                     data = json.load(f)
                 return AppConfig(**data)
             except Exception as e:
-                logger.error("Failed to load settings: %s", e)
+                logger.error("Failed to load settings from %s: %s", settings_file, e)
         return AppConfig()
 
     def _save_settings(self) -> None:
-        settings_file = Path("installer_settings.json")
+        settings_file = self._settings_file_path()
         try:
             # handle pydantic v2 vs v1
             if hasattr(self._config, "model_dump"):
                 data = self._config.model_dump(mode="json")
             else:
                 data = json.loads(self._config.json())
-            with settings_file.open("w") as f:
+            with settings_file.open("w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4)
         except Exception as e:
-            logger.error("Failed to save settings: %s", e)
+            logger.error("Failed to save settings to %s: %s", settings_file, e)
+
+    @staticmethod
+    def _settings_file_path() -> Path:
+        return Path(__file__).resolve().parents[2] / "installer_settings.json"
 
     @staticmethod
     def _config_snapshot(config: AppConfig) -> dict:
@@ -430,14 +427,22 @@ class MainWindow(QMainWindow):
                 label.setVisible(visible)
 
     def _show_quickstart_if_needed(self) -> None:
-        # Check config (we'll need to add a flag to AppConfig or settings)
-        # For now, let's just check if a certain file exists or dummy logic
-        if not getattr(self._config, "skip_quickstart", False):
-            from jd2021_installer.ui.widgets.quickstart_dialog import QuickstartDialog
-            dont_show_again = QuickstartDialog.show_guide(self)
-            if dont_show_again:
-                self._config.skip_quickstart = True
-                self._save_settings()
+        if self._quickstart_shown_this_session:
+            return
+        if not getattr(self._config, "show_quickstart_on_launch", True):
+            return
+
+        self._quickstart_shown_this_session = True
+        from jd2021_installer.ui.widgets.quickstart_dialog import QuickstartDialog
+        dont_show_again = QuickstartDialog.show_guide(self)
+        if dont_show_again:
+            # Keep legacy flag in sync for users carrying older configs.
+            self._config.show_quickstart_on_launch = False
+            self._config.skip_quickstart = True
+            self._save_settings()
+        elif getattr(self._config, "skip_quickstart", False):
+            self._config.skip_quickstart = False
+            self._save_settings()
 
     def _offer_ffmpeg_install(self, missing: list[str]) -> bool:
         """Prompt user to auto-download and install FFmpeg toolchain."""
