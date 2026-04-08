@@ -33,7 +33,6 @@ from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QPushButton,
     QSlider,
     QSizePolicy,
@@ -278,9 +277,6 @@ class PreviewWidget(QWidget):
         self._preview_startup_compensation_ms: float = 100.0
         self._startup_compensation_override_ms: Optional[float] = None
         self._preview_proxy_cache: dict[str, str] = {}
-        self._repeat_seek_timer = QTimer(self)
-        self._repeat_seek_timer.setInterval(900)
-        self._repeat_seek_timer.timeout.connect(self._on_repeat_seek_tick)
 
         self._build_ui()
 
@@ -304,7 +300,7 @@ class PreviewWidget(QWidget):
         self._canvas.setObjectName("previewCanvas")
         self._canvas.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._canvas.setMinimumSize(480, 270)
-        self._canvas.setToolTip("Video preview area for sync checking")
+        self._canvas.setToolTip("Video preview area for sync checking. Click here to play or pause the video.")
         self._canvas.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding,
         )
@@ -325,7 +321,7 @@ class PreviewWidget(QWidget):
         self._seek_slider.setRange(0, 1000)
         self._seek_slider.setValue(0)
         self._seek_slider.setTracking(True)
-        self._seek_slider.setToolTip("Drag to seek within the preview timeline")
+        self._seek_slider.setToolTip("Drag to seek within the preview timeline. The video will update as you scrub.")
         self._seek_slider.valueChanged.connect(self._on_seek_value_changed)
         self._seek_slider.sliderPressed.connect(self._on_seek_pressed)
         self._seek_slider.sliderReleased.connect(self._on_seek_released)
@@ -335,7 +331,7 @@ class PreviewWidget(QWidget):
         self._lbl_dur.setObjectName("previewDurationLabel")
         self._lbl_dur.setMinimumWidth(40)
         self._lbl_dur.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-        self._lbl_dur.setToolTip("Total preview duration")
+        self._lbl_dur.setToolTip("Total preview duration. Compare this to the song length to ensure nothing is cut off.")
         seek_row.addWidget(self._lbl_dur)
 
         root.addLayout(seek_row)
@@ -350,7 +346,7 @@ class PreviewWidget(QWidget):
         self._btn_rewind.setText("-5s")
         self._btn_rewind.setMinimumWidth(52)
         self._btn_rewind.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-        self._btn_rewind.setToolTip("Rewind 5 seconds")
+        self._btn_rewind.setToolTip("Rewind the preview by 5 seconds.")
         self._btn_rewind.clicked.connect(lambda: self._seek_relative(-5))
         btn_row.addWidget(self._btn_rewind)
 
@@ -367,44 +363,12 @@ class PreviewWidget(QWidget):
         self._btn_forward.setText("+5s")
         self._btn_forward.setMinimumWidth(52)
         self._btn_forward.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-        self._btn_forward.setToolTip("Forward 5 seconds")
+        self._btn_forward.setToolTip("Advance the preview by 5 seconds.")
         self._btn_forward.clicked.connect(lambda: self._seek_relative(5))
         btn_row.addWidget(self._btn_forward)
 
         btn_row.addStretch()
         root.addLayout(btn_row)
-
-        # -- Timestamp test tools ------------------------------------------
-        test_row = QHBoxLayout()
-        test_row.setContentsMargins(4, 0, 4, 0)
-
-        test_label = QLabel("Test:")
-        test_label.setObjectName("previewTestTimestampLabel")
-        test_row.addWidget(test_label)
-
-        self._timestamp_input = QLineEdit()
-        self._timestamp_input.setObjectName("previewTestTimestampInput")
-        self._timestamp_input.setPlaceholderText("3.0 or 0:03.250")
-        self._timestamp_input.setToolTip("Timestamp for quick sync testing")
-        self._timestamp_input.setMinimumWidth(120)
-        self._timestamp_input.returnPressed.connect(self._go_to_test_timestamp)
-        test_row.addWidget(self._timestamp_input)
-
-        self._btn_go_timestamp = QPushButton("Go")
-        self._btn_go_timestamp.setObjectName("previewGoTimestampButton")
-        self._btn_go_timestamp.setToolTip("Jump to test timestamp")
-        self._btn_go_timestamp.clicked.connect(self._go_to_test_timestamp)
-        test_row.addWidget(self._btn_go_timestamp)
-
-        self._btn_repeat_timestamp = QPushButton("Repeat Off")
-        self._btn_repeat_timestamp.setObjectName("previewRepeatTimestampButton")
-        self._btn_repeat_timestamp.setCheckable(True)
-        self._btn_repeat_timestamp.setToolTip("Repeatedly jump to test timestamp")
-        self._btn_repeat_timestamp.toggled.connect(self._on_repeat_seek_toggled)
-        test_row.addWidget(self._btn_repeat_timestamp)
-
-        test_row.addStretch()
-        root.addLayout(test_row)
 
     # ==================================================================
     # PUBLIC API
@@ -623,7 +587,6 @@ class PreviewWidget(QWidget):
             reset_position: If True, sets _position back to 0.0 and clears labels.
             clear_canvas: If True, clears the preview canvas to "No Preview".
         """
-        self._set_repeat_seek_enabled(False)
         self._stop_requested = True
         if self._worker is not None:
             self._worker.request_stop()
@@ -738,84 +701,6 @@ class PreviewWidget(QWidget):
             self.stop(reset_position=False, clear_canvas=False)
         else:
             self._relaunch(self._position)
-
-    def _parse_timestamp_input(self) -> Optional[float]:
-        raw = self._timestamp_input.text().strip() if hasattr(self, "_timestamp_input") else ""
-        if not raw:
-            return None
-
-        try:
-            if ":" in raw:
-                parts = raw.split(":")
-                if len(parts) != 2:
-                    return None
-                mins = float(parts[0])
-                secs = float(parts[1])
-                value = (mins * 60.0) + secs
-            else:
-                value = float(raw)
-        except ValueError:
-            return None
-
-        return max(0.0, value)
-
-    def _jump_to_timestamp(self, target: float) -> None:
-        if self._duration > 0:
-            target = min(target, self._duration)
-
-        self._position = target
-        self.position_changed.emit(self._position)
-        self._lbl_time.setText(self._fmt(target))
-
-        if self._duration > 0:
-            pct = int((target / self._duration) * 1000)
-            self._seek_slider.blockSignals(True)
-            self._seek_slider.setValue(min(max(pct, 0), 1000))
-            self._seek_slider.blockSignals(False)
-
-        if self._playing:
-            self._relaunch(target)
-
-    def _go_to_test_timestamp(self) -> None:
-        target = self._parse_timestamp_input()
-        if target is None:
-            logger.warning("Invalid preview test timestamp input: '%s'", self._timestamp_input.text().strip())
-            return
-        self._jump_to_timestamp(target)
-
-    def _set_repeat_seek_enabled(self, enabled: bool) -> None:
-        if enabled:
-            self._repeat_seek_timer.start()
-        else:
-            self._repeat_seek_timer.stop()
-
-        if self._btn_repeat_timestamp.isChecked() != enabled:
-            self._btn_repeat_timestamp.blockSignals(True)
-            self._btn_repeat_timestamp.setChecked(enabled)
-            self._btn_repeat_timestamp.blockSignals(False)
-        self._btn_repeat_timestamp.setText("Repeat On" if enabled else "Repeat Off")
-
-    def _on_repeat_seek_toggled(self, enabled: bool) -> None:
-        if enabled:
-            target = self._parse_timestamp_input()
-            if target is None:
-                logger.warning("Repeat seek ignored due to invalid timestamp input.")
-                self._set_repeat_seek_enabled(False)
-                return
-            self._jump_to_timestamp(target)
-            self._set_repeat_seek_enabled(True)
-            return
-
-        self._set_repeat_seek_enabled(False)
-
-    def _on_repeat_seek_tick(self) -> None:
-        if not self._playing:
-            return
-        target = self._parse_timestamp_input()
-        if target is None:
-            self._set_repeat_seek_enabled(False)
-            return
-        self._jump_to_timestamp(target)
 
     def _seek_relative(self, delta: float) -> None:
         new_pos = max(0.0, min(self._position + delta, self._duration))

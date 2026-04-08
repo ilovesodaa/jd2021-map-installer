@@ -98,7 +98,7 @@ class FileRowWidget(QWidget):
         self.line_edit.setToolTip(f"Selected path for {label_text.rstrip(':')}")
         lay.addWidget(self.line_edit)
 
-        btn = QPushButton("Browse…")
+        btn = QPushButton("Browse")
         btn.setToolTip(f"Browse and select {label_text.rstrip(':')}")
         btn.clicked.connect(self._browse)
         lay.addWidget(btn)
@@ -164,7 +164,7 @@ class ModeSelectorWidget(QWidget):
 
         self._mode_combo = QComboBox()
         self._mode_combo.addItems(MODE_LABELS)
-        self._mode_combo.setToolTip("Choose how map source files are provided to the installer")
+        self._mode_combo.setToolTip("Choose the input method for map files. Use IPK for bundles, Fetch for Discord URLs, or Local for folders.")
         self._mode_combo.currentIndexChanged.connect(self._on_mode_index_changed)
         mode_row.addWidget(self._mode_combo)
         mode_row.addStretch()
@@ -213,7 +213,7 @@ class ModeSelectorWidget(QWidget):
 
         inp = QLineEdit()
         inp.setPlaceholderText(placeholder)
-        inp.setToolTip("Enter one or more codenames, separated by commas")
+        inp.setToolTip("Enter one or more codenames, separated by commas, to target specific maps.")
         inp.textChanged.connect(lambda t: self.target_selected.emit(t))
         row.addWidget(inp)
 
@@ -429,7 +429,7 @@ class ModeSelectorWidget(QWidget):
         top_lay.addWidget(root_row, 0, 0, 1, 2)
 
         self._manual_scan_btn = QPushButton("Scan")
-        self._manual_scan_btn.setToolTip("Run another scan on the current root folder to refresh detected paths")
+        self._manual_scan_btn.setToolTip("Rescan the selected folder to detect new or removed map files.")
         self._manual_scan_btn.clicked.connect(self._on_manual_scan_clicked)
         top_lay.addWidget(self._manual_scan_btn, 0, 2)
 
@@ -437,7 +437,7 @@ class ModeSelectorWidget(QWidget):
         lbl_code.setMinimumWidth(120)
         top_lay.addWidget(lbl_code, 1, 0)
         inp_code = QLineEdit()
-        inp_code.setToolTip("Codename used for naming outputs and matching map files")
+        inp_code.setToolTip("Enter the codename to use for named assets and directory structure generation (e.g. BangBang).")
         top_lay.addWidget(inp_code, 1, 1)
 
         scroll_lay.addLayout(top_lay)

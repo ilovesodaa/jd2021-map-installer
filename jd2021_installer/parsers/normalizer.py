@@ -304,7 +304,7 @@ def _extract_music_track(
         if 0 <= idx < len(res.markers):
             # V1 Parity: NO marker offset for videoStartTime synthesis
             vst = -(res.markers[idx] / 48.0 / 1000.0)
-            logger.info("Synthesized video_start_time from markers: %.3f s", vst)
+            logger.debug("Synthesized video_start_time from markers: %.3f s", vst)
             res.video_start_time = vst
     return res
 
@@ -523,10 +523,10 @@ def _extract_song_desc(
                     map_json_songdesc.title = html_fallback.title
                 if not str(map_json_songdesc.artist or "").strip() and str(html_fallback.artist or "").strip():
                     map_json_songdesc.artist = html_fallback.artist
-            logger.info("songdesc.tpl.ckd not found; recovered SongDesc from map.json fallback")
+            logger.debug("songdesc.tpl.ckd not found; recovered SongDesc from map.json fallback")
             return map_json_songdesc
 
-        logger.warning("songdesc.tpl.ckd not found; using fallback metadata")
+        logger.debug("songdesc.tpl.ckd not found; using fallback metadata")
         return _songdesc_from_html_fallback()
 
     data = load_ckd(ckd_paths[0])
@@ -1055,7 +1055,7 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
                 elif len(main_videos) > 1:
                     # If we have multiple videos but none match the codename, we are likely in a bundle
                     # and picking a random video is dangerous.
-                    logger.warning("No video match for codename %s in multi-map bundle; skipping video discovery", codename)
+                    logger.debug("No video match for codename %s in multi-map bundle; skipping video discovery", codename)
                     main_videos = []
             
             if main_videos:
@@ -1368,10 +1368,10 @@ def normalize_sync(
                 if abs(vst) > 1000:
                     vst /= 48000.0
                 video_ms = vst * 1000.0
-                logger.info("Readjust mode: inherited videoStartTime %.6fs from existing .trk", vst)
+                logger.debug("Readjust mode: inherited videoStartTime %.6fs from existing .trk", vst)
                 return MapSync(audio_ms=audio_ms, video_ms=video_ms)
         except Exception as e:
-            logger.warning("Failed to read existing .trk for readjust: %s", e)
+            logger.debug("Failed to read existing .trk for readjust: %s", e)
 
     # If no existing .trk or failed to read, proceed with standard logic
     if music_track:
@@ -1429,9 +1429,9 @@ def normalize_sync(
             else:
                 video_ms = metadata_ms
                 if is_jdnext_source:
-                    logger.info("JDNext sync (fallback): using metadata offsets = %.3f ms", video_ms)
+                    logger.debug("JDNext sync (fallback): using metadata offsets = %.3f ms", video_ms)
                 else:
-                    logger.info("Fetch/HTML sync (fallback): using metadata offsets = %.3f ms", video_ms)
+                    logger.debug("Fetch/HTML sync (fallback): using metadata offsets = %.3f ms", video_ms)
 
         else:
             # Binary Mode (IPK / WAV)
@@ -1445,11 +1445,11 @@ def normalize_sync(
                 prms = calculate_marker_preroll(music_track.markers, music_track.start_beat, include_calibration=False)
                 if prms is not None:
                     video_ms = -prms
-                    logger.info("IPK sync (synthesized): audio_offset=0, video_offset=%.3f ms", video_ms)
+                    logger.debug("IPK sync (synthesized): audio_offset=0, video_offset=%.3f ms", video_ms)
                 else:
-                    logger.info("IPK sync (pre-synced): audio_offset=0, video_offset=%.3f ms", video_ms)
+                    logger.debug("IPK sync (pre-synced): audio_offset=0, video_offset=%.3f ms", video_ms)
     else:
-        logger.warning("No music_track provided to normalize_sync, returning default 0 offsets.")
+        logger.debug("No music_track provided to normalize_sync, returning default 0 offsets.")
 
     return MapSync(audio_ms=audio_ms, video_ms=video_ms)
 
@@ -1581,7 +1581,7 @@ def normalize(
                 break
 
     if has_autodance:
-        logger.info("Real autodance data detected for '%s'", effective_codename)
+        logger.debug("Real autodance data detected for '%s'", effective_codename)
 
     result = NormalizedMapData(
         codename=effective_codename,

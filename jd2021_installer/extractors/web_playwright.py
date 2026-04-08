@@ -205,7 +205,7 @@ def _is_valid_webm_file(path: Path, config: AppConfig) -> bool:
         logger.debug("ffmpeg not available for integrity check; using header-only validation.")
         return True
     except subprocess.TimeoutExpired:
-        logger.warning("Timed out while validating webm integrity for %s", path.name)
+        logger.debug("Timed out while validating webm integrity for %s", path.name)
         return False
 
 
@@ -349,7 +349,7 @@ def _try_jdnext_missing_fallbacks(
                         target = download_dir / expected_scene_name
                         shutil.copy2(cand, target)
                         downloaded[expected_scene_name] = str(target)
-                        logger.warning("JDNext fallback: reusing local bundle cache for %s", expected_scene_name)
+                        logger.debug("JDNext fallback: reusing local bundle cache for %s", expected_scene_name)
                         break
                 except OSError:
                     continue
@@ -400,7 +400,7 @@ def _extract_jdnext_aux_texture_bundles(
                 copied += 1
 
     if copied:
-        logger.info("JDNext aux bundle texture import: copied %d texture(s)", copied)
+        logger.debug("JDNext aux bundle texture import: copied %d texture(s)", copied)
     return copied
 
 
@@ -608,10 +608,10 @@ def download_files(
         # Check if already in cache and not empty
         if target.exists() and target.stat().st_size > 1024:
             if is_nohud_video and not _is_valid_webm_file(target, config):
-                logger.warning("Cached NOHUD video %s is corrupt, redownloading...", fname)
+                logger.debug("Cached NOHUD video %s is corrupt, redownloading...", fname)
                 target.unlink(missing_ok=True)
             else:
-                logger.info("%s already in cache, skipping download.", fname)
+                logger.debug("%s already in cache, skipping download.", fname)
                 downloaded[fname] = str(target)
                 continue
         
@@ -635,10 +635,10 @@ def download_files(
             for fpath in game_map_dir.rglob(fname):
                 if fpath.is_file() and fpath.stat().st_size > 1024:
                     import shutil
-                    logger.info("Found %s in existing game installation, copying to cache...", fname)
+                    logger.debug("Found %s in existing game installation, copying to cache...", fname)
                     shutil.copy2(fpath, target)
                     if is_nohud_video and not _is_valid_webm_file(target, config):
-                        logger.warning("Installed NOHUD video %s failed integrity check, redownloading...", fname)
+                        logger.debug("Installed NOHUD video %s failed integrity check, redownloading...", fname)
                         target.unlink(missing_ok=True)
                         continue
                     found_in_game = True
@@ -648,17 +648,17 @@ def download_files(
             downloaded[fname] = str(target)
             continue
 
-        logger.info("Downloading %s... (%d/%d)", fname, idx + 1, total)
+        logger.debug("Downloading %s... (%d/%d)", fname, idx + 1, total)
         if progress_callback:
             progress_callback(fname, idx + 1, total)
 
         success = False
         prefer_curl_resolve = "cdn-jdhelper.ramaprojects.ru" in url.lower()
         if prefer_curl_resolve:
-            logger.info("Using curl --resolve as primary downloader for %s", fname)
+            logger.debug("Using curl --resolve as primary downloader for %s", fname)
             if _download_with_curl_resolve(url, target, config.download_timeout_s):
                 if is_nohud_video and not _is_valid_webm_file(target, config):
-                    logger.warning("curl --resolve primary download produced corrupt NOHUD video %s", fname)
+                    logger.debug("curl --resolve primary download produced corrupt NOHUD video %s", fname)
                     target.unlink(missing_ok=True)
                 else:
                     success = True
@@ -722,9 +722,9 @@ def download_files(
                         success = True
                         break
                     else:
-                        logger.warning("Download produced empty file for %s", fname)
+                        logger.debug("Download produced empty file for %s", fname)
             except Exception as e:
-                logger.warning("Download error for %s: %s (Attempt %d/%d)", fname, e, attempt, config.max_retries)
+                logger.debug("Download error for %s: %s (Attempt %d/%d)", fname, e, attempt, config.max_retries)
                 if attempt < config.max_retries:
                     time.sleep(config.retry_base_delay_s * (2 ** (attempt - 1)))
                 else:
@@ -734,24 +734,24 @@ def download_files(
             downloaded[fname] = str(target)
         else:
             if prefer_curl_resolve:
-                logger.warning("Trying curl --resolve fallback download for %s", fname)
+                logger.debug("Trying curl --resolve fallback download for %s", fname)
                 if _download_with_curl_resolve(url, target, config.download_timeout_s):
                     if is_nohud_video and not _is_valid_webm_file(target, config):
-                        logger.warning("curl --resolve downloaded corrupt NOHUD video %s", fname)
+                        logger.debug("curl --resolve downloaded corrupt NOHUD video %s", fname)
                         target.unlink(missing_ok=True)
                     else:
-                        logger.info("curl --resolve fallback succeeded for %s", fname)
+                        logger.debug("curl --resolve fallback succeeded for %s", fname)
                         downloaded[fname] = str(target)
                         time.sleep(config.inter_request_delay_s)
                         continue
 
-                logger.warning("Trying PowerShell fallback download for %s", fname)
+                logger.debug("Trying PowerShell fallback download for %s", fname)
                 if _download_with_powershell(url, target, config.download_timeout_s):
                     if is_nohud_video and not _is_valid_webm_file(target, config):
-                        logger.warning("PowerShell fallback downloaded corrupt NOHUD video %s", fname)
+                        logger.debug("PowerShell fallback downloaded corrupt NOHUD video %s", fname)
                         target.unlink(missing_ok=True)
                     else:
-                        logger.info("PowerShell fallback succeeded for %s", fname)
+                        logger.debug("PowerShell fallback succeeded for %s", fname)
                         downloaded[fname] = str(target)
                         time.sleep(config.inter_request_delay_s)
                         continue
@@ -771,7 +771,7 @@ async def _wait_for_login(page, timeout_s: int = 300) -> None:
     textbox = page.locator(_SEL_TEXTBOX)
     try:
         await textbox.wait_for(timeout=15_000)
-        logger.info("Already logged in to Discord.")
+        logger.debug("Already logged in to Discord.")
     except Exception as exc:
         if _is_browser_closed_error(exc):
             raise WebExtractionError("Browser was closed by user. Fetch cancelled.") from exc
@@ -785,7 +785,7 @@ async def _wait_for_login(page, timeout_s: int = 300) -> None:
             if _is_browser_closed_error(inner_exc):
                 raise WebExtractionError("Browser was closed by user. Fetch cancelled.") from inner_exc
             raise
-        logger.info("Login detected.")
+        logger.debug("Login detected.")
         await page.wait_for_timeout(3000)
 
 
@@ -811,7 +811,7 @@ async def _wait_for_new_message(
     page, previous_last_message_id: Optional[str], timeout_s: int = 60
 ) -> str:
     """Poll for a newly appended message list item."""
-    logger.info("Waiting for bot message response...")
+    logger.debug("Waiting for bot message response...")
     deadline = asyncio.get_event_loop().time() + timeout_s
 
     while asyncio.get_event_loop().time() < deadline:
@@ -857,7 +857,7 @@ async def _wait_for_new_message(
                     stable = False
                     break
             if stable:
-                logger.info("Bot message response detected (%s).", result["id"])
+                logger.debug("Bot message response detected (%s).", result["id"])
                 return result["id"]
 
         await page.wait_for_timeout(400)
@@ -916,7 +916,7 @@ async def _send_slash_command(
     try:
         await cmd_option.wait_for(timeout=8000)
         await cmd_option.click()
-        logger.info("Selected /%s command.", command)
+        logger.debug("Selected /%s command.", command)
     except Exception:
         raise WebExtractionError(
             f"Could not find /{command} in the autocomplete. "
@@ -935,7 +935,7 @@ async def _send_slash_command(
         try:
             await choice_option.wait_for(timeout=8000)
             await choice_option.click()
-            logger.info("Selected choice: %s", choice)
+            logger.debug("Selected choice: %s", choice)
         except Exception:
             # Looser match fallback
             loose = (
@@ -946,7 +946,7 @@ async def _send_slash_command(
             try:
                 await loose.wait_for(timeout=3000)
                 await loose.click()
-                logger.info("Selected choice (loose): %s", choice)
+                logger.debug("Selected choice (loose): %s", choice)
             except Exception:
                 raise WebExtractionError(
                     f'Could not find "{choice}" in the parameter options.'
@@ -955,10 +955,10 @@ async def _send_slash_command(
 
     # Type codename and send
     await page.keyboard.type(codename, delay=20)
-    logger.info("Typed codename: %s", codename)
+    logger.debug("Typed codename: %s", codename)
     await page.wait_for_timeout(200)
     await page.keyboard.press("Enter")
-    logger.info("Command sent.")
+    logger.debug("Command sent.")
 
 
 async def _wait_for_new_embed(
@@ -1021,7 +1021,7 @@ async def _wait_for_new_embed(
                     stable = False
                     break
             if stable:
-                logger.info("Bot response detected (%s).", result["id"])
+                logger.debug("Bot response detected (%s).", result["id"])
                 return result["id"]
 
         await page.wait_for_timeout(500)
@@ -1321,7 +1321,7 @@ async def _fetch_jdnext_button_metadata(
             label_patterns=patterns,
         )
         if not clicked:
-            logger.warning("Could not find JDNext metadata button for %s", key)
+            logger.debug("Could not find JDNext metadata button for %s", key)
             continue
 
         response_msg_id = await _wait_for_new_message(page, pre_msg_id, timeout_s=timeout_s)
@@ -1348,7 +1348,7 @@ async def _fetch_command_with_retry(
     """
     for attempt in range(max_retries + 1):
         if attempt > 0:
-            logger.info("Retrying %s (attempt %d/%d)...", label, attempt + 1, max_retries + 1)
+            logger.debug("Retrying %s (attempt %d/%d)...", label, attempt + 1, max_retries + 1)
             try:
                 await page.wait_for_timeout(3000)
             except Exception as exc:
@@ -1363,7 +1363,7 @@ async def _fetch_command_with_retry(
             html = await _extract_embed_html(page, embed_id)
 
             if _is_valid_embed_response(html, require_gameplay_video=require_gameplay_video):
-                logger.info("Extracted %s embed HTML.", label)
+                logger.debug("Extracted %s embed HTML.", label)
                 return html
 
             if require_gameplay_video:
@@ -1379,13 +1379,13 @@ async def _fetch_command_with_retry(
         except WebExtractionError as e:
             if attempt == max_retries:
                 raise
-            logger.warning("%s attempt %d failed: %s", label, attempt + 1, e)
+            logger.debug("%s attempt %d failed: %s", label, attempt + 1, e)
         except Exception as e:
             if _is_browser_closed_error(e):
                 raise WebExtractionError("Browser was closed by user. Fetch cancelled.") from e
             if attempt == max_retries:
                 raise
-            logger.warning("%s attempt %d failed: %s", label, attempt + 1, e)
+            logger.debug("%s attempt %d failed: %s", label, attempt + 1, e)
 
     if require_gameplay_video:
         raise WebExtractionError(
@@ -1588,9 +1588,9 @@ class WebPlaywrightExtractor(BaseExtractor):
                                     shutil.copytree(child, dst, dirs_exist_ok=True)
                                 else:
                                     shutil.copy2(child, dst)
-                        logger.info("JDNext mapPackage strategy winner: %s", summary.winner)
+                        logger.debug("JDNext mapPackage strategy winner: %s", summary.winner)
                     except Exception as exc:
-                        logger.warning("JDNext mapPackage strategy extraction failed: %s", exc)
+                        logger.debug("JDNext mapPackage strategy extraction failed: %s", exc)
 
                     try:
                         _extract_jdnext_aux_texture_bundles(
@@ -1600,7 +1600,7 @@ class WebPlaywrightExtractor(BaseExtractor):
                             codename=codename,
                         )
                     except Exception as exc:
-                        logger.warning("JDNext auxiliary texture extraction failed: %s", exc)
+                        logger.debug("JDNext auxiliary texture extraction failed: %s", exc)
         
         # Post-download: extract MAIN_SCENE_*.zip from download_dir into extract_dir
         self._extract_scene_zips(download_dir, extract_dir)
@@ -1650,26 +1650,26 @@ class WebPlaywrightExtractor(BaseExtractor):
 
         if selected:
             zip_path = src_dir / selected
-            logger.info("Extracting scene ZIP: %s", selected)
+            logger.debug("Extracting scene ZIP: %s", selected)
             with zipfile.ZipFile(zip_path, "r") as z:
                 z.extractall(dst_dir)
         else:
             # Fallback: extract all scene ZIPs
             for f in scene_zips:
                 zip_path = src_dir / f
-                logger.info("Extracting scene ZIP (fallback): %s", f)
+                logger.debug("Extracting scene ZIP (fallback): %s", f)
                 with zipfile.ZipFile(zip_path, "r") as z:
                     z.extractall(dst_dir)
 
         # -- Unpack any .ipk files found after ZIP extraction (mirrors V1 step_04) ---
         for ipk in dst_dir.glob("*.ipk"):
-            logger.info("Unpacking IPK found in scene ZIP: %s", ipk.name)
+            logger.debug("Unpacking IPK found in scene ZIP: %s", ipk.name)
             try:
                 extract_ipk(ipk, dst_dir)
                 # Delete IPK after extraction to keep normalization directory clean
                 ipk.unlink()
             except Exception as e:
-                logger.warning("Failed to unpack IPK %s: %s", ipk.name, e)
+                logger.debug("Failed to unpack IPK %s: %s", ipk.name, e)
 
     # ------------------------------------------------------------------
     # Live Discord scraping  (async, called via asyncio.run from QThread)
@@ -1708,10 +1708,10 @@ class WebPlaywrightExtractor(BaseExtractor):
             page = context.pages[0] if context.pages else await context.new_page()
 
             try:
-                logger.info("Fetching codename: %s", codename)
+                logger.debug("Fetching codename: %s", codename)
 
                 # Navigate to Discord channel
-                logger.info("Navigating to Discord channel...")
+                logger.debug("Navigating to Discord channel...")
                 await page.goto(channel_url, wait_until="domcontentloaded")
                 await _wait_for_login(page, self._config.fetch_login_timeout_s)
 
@@ -1730,7 +1730,7 @@ class WebPlaywrightExtractor(BaseExtractor):
                 nohud_html: Optional[str] = None
                 jdnext_metadata_payloads: Dict[str, Dict[str, str]] = {}
                 if self._source_game == "jdnext":
-                    logger.info("[1/1] /asset server:jdnext %s", codename)
+                    logger.debug("[1/1] /asset server:jdnext %s", codename)
                     assets_html = await _fetch_command_with_retry(
                         page,
                         command="asset",
@@ -1749,10 +1749,10 @@ class WebPlaywrightExtractor(BaseExtractor):
                                 timeout_s=bot_timeout,
                             )
                         except Exception as meta_exc:
-                            logger.warning("JDNext metadata button capture failed: %s", meta_exc)
+                            logger.debug("JDNext metadata button capture failed: %s", meta_exc)
                 else:
                     # Step 1: /assets jdu <codename>
-                    logger.info("[1/2] /assets jdu %s", codename)
+                    logger.debug("[1/2] /assets jdu %s", codename)
                     assets_html = await _fetch_command_with_retry(
                         page,
                         command="assets",
@@ -1764,7 +1764,7 @@ class WebPlaywrightExtractor(BaseExtractor):
                     await page.wait_for_timeout(500)
 
                     # Step 2: /nohud <codename>
-                    logger.info("[2/2] /nohud %s", codename)
+                    logger.debug("[2/2] /nohud %s", codename)
                     nohud_html = await _fetch_command_with_retry(
                         page,
                         command="nohud",
@@ -1799,7 +1799,7 @@ class WebPlaywrightExtractor(BaseExtractor):
                         json.dumps(metadata_summary, indent=2, sort_keys=True),
                         encoding="utf-8",
                     )
-                logger.info("Saved HTML to %s", output_dir)
+                logger.debug("Saved HTML to %s", output_dir)
 
             finally:
                 try:

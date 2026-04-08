@@ -204,7 +204,7 @@ def dds_to_image(dds_data: bytes, output_path: Path, canvas_size: Optional[int] 
     try:
         from PIL import Image
     except ImportError:
-        logger.warning("Pillow not installed; saving raw DDS instead")
+        logger.debug("Pillow not installed; saving raw DDS instead")
         dds_path = output_path.with_suffix('.dds')
         dds_path.write_bytes(dds_data)
         return True
@@ -220,7 +220,7 @@ def dds_to_image(dds_data: bytes, output_path: Path, canvas_size: Optional[int] 
         # Fallback: save as DDS
         dds_fallback = output_path.with_suffix('.dds')
         shutil.copy2(str(temp_dds), str(dds_fallback))
-        logger.warning("Pillow can't decode this DDS format (%s); saved raw DDS", e)
+        logger.debug("Pillow can't decode this DDS format (%s); saved raw DDS", e)
         return True
     finally:
         if temp_dds.exists():
@@ -278,7 +278,7 @@ def decode_ckd_texture(
         for mip in result:
             dds_data += mip
     except ImportError:
-        logger.warning("xtx_extractor not available; saving raw XTX for %s", ckd_path.name)
+        logger.debug("xtx_extractor not available; saving raw XTX for %s", ckd_path.name)
         xtx_path = output_path.with_suffix('.xtx')
         xtx_path.write_bytes(raw_data)
         return False
@@ -341,7 +341,7 @@ def decode_pictograms(picto_dir: Path, output_dir: Path, canvas_size: Optional[i
         try:
             if ext == ".png":
                 if Image is None:
-                    logger.warning("Pillow missing; skipping non-PNG picto %s", src.name)
+                    logger.debug("Pillow missing; skipping non-PNG picto %s", src.name)
                     continue
                 with Image.open(src) as img:
                     _save_picto_on_canvas(img, out_path, canvas_size)
@@ -350,16 +350,16 @@ def decode_pictograms(picto_dir: Path, output_dir: Path, canvas_size: Optional[i
 
             # Convert TGA/JPG to PNG when Pillow is available.
             if Image is None:
-                logger.warning("Pillow missing; skipping non-PNG picto %s", src.name)
+                logger.debug("Pillow missing; skipping non-PNG picto %s", src.name)
                 continue
 
             with Image.open(src) as img:
                 _save_picto_on_canvas(img, out_path, canvas_size)
             success += 1
         except Exception as e:
-            logger.warning("Failed to process loose picto %s: %s", src.name, e)
+            logger.debug("Failed to process loose picto %s: %s", src.name, e)
 
-    logger.info("Decoded %d pictogram textures from %s", success, picto_dir)
+    logger.debug("Decoded %d pictogram textures from %s", success, picto_dir)
     return success
 
 
@@ -410,14 +410,14 @@ def decode_menuart_textures(menuart_dir: Path, output_dir: Path) -> int:
             try:
                 from PIL import Image
             except ImportError:
-                logger.warning("Pillow missing; skipping loose MenuArt %s", src.name)
+                logger.debug("Pillow missing; skipping loose MenuArt %s", src.name)
                 continue
 
             with Image.open(src) as img:
                 img.save(out_path)
             success += 1
         except Exception as e:
-            logger.warning("Failed to process loose MenuArt %s: %s", src.name, e)
+            logger.debug("Failed to process loose MenuArt %s: %s", src.name, e)
 
-    logger.info("Decoded %d MenuArt textures from %s", success, menuart_dir)
+    logger.debug("Decoded %d MenuArt textures from %s", success, menuart_dir)
     return success

@@ -182,10 +182,11 @@ class MainWindow(QMainWindow):
         self._completed_install_maps: list[NormalizedMapData] = []
 
         # -- Window setup -----------------------------------------------------
-        self.setWindowTitle("JD2021 Map Installer v2")
+        self.setWindowTitle("JD2021 Map Installer")
         self._apply_window_size_config()
 
         self._build_ui()
+        self._apply_window_size_config(force_to_configured_size=True)
         self._config.log_detail_level = apply_log_detail(self._config.log_detail_level)
         self._wire_signals()
 
@@ -248,11 +249,16 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error("Failed to save settings: %s", e)
 
-    def _apply_window_size_config(self) -> None:
+    def _apply_window_size_config(self, force_to_configured_size: bool = False) -> None:
         if getattr(self._config, "enforce_min_window_size", True):
             min_w = max(640, int(getattr(self._config, "min_window_width", 1000)))
             min_h = max(480, int(getattr(self._config, "min_window_height", 920)))
             self.setMinimumSize(min_w, min_h)
+
+            if force_to_configured_size:
+                self.resize(min_w, min_h)
+            elif self.width() < min_w or self.height() < min_h:
+                self.resize(max(self.width(), min_w), max(self.height(), min_h))
             return
 
         self.setMinimumSize(0, 0)
@@ -1334,7 +1340,7 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             self._config = dialog.get_config()
             self._config.log_detail_level = apply_log_detail(self._config.log_detail_level)
-            self._apply_window_size_config()
+            self._apply_window_size_config(force_to_configured_size=True)
             self._apply_theme()
             self._refresh_media_tool_configuration(persist=False)
             self._save_settings()
@@ -2230,7 +2236,7 @@ class MainWindow(QMainWindow):
             try:
                 target_map_dir = self._resolve_target_map_dir(map_data.codename)
             except Exception as exc:
-                logger.warning("Could not resolve install summary target for '%s': %s", map_data.codename, exc)
+                logger.debug("Could not resolve install summary target for '%s': %s", map_data.codename, exc)
                 continue
 
             summaries.append(

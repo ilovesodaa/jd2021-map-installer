@@ -137,7 +137,7 @@ def _load_ckd_json(ckd_path: Path) -> Dict[str, Any]:
         # Try to find JSON start '{' to handle leading binary junk (e.g. from some IPK tools)
         start_idx = content_bytes.find(b'{')
         if start_idx == -1:
-            logger.warning("No JSON object found in CKD %s (it might be binary)", ckd_path.name)
+            logger.debug("No JSON object found in CKD %s (it might be binary)", ckd_path.name)
             return {}
             
         content = content_bytes[start_idx:].decode("utf-8-sig", errors="replace").strip()
@@ -200,7 +200,7 @@ def convert_tape_file(ckd_path: Path, output_path: Path) -> bool:
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(lua_str, encoding="utf-8")
-        logger.info("Converted tape: %s → %s", ckd_path.name, output_path.name)
+        logger.debug("Converted tape: %s → %s", ckd_path.name, output_path.name)
         return True
 
     except Exception as e:
@@ -253,7 +253,7 @@ def _copy_loose_tape(source_path: Path, output_path: Path, tape_label: str) -> b
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_path, output_path)
-        logger.info("Copied %s tape: %s -> %s", tape_label, source_path.name, output_path.name)
+        logger.debug("Copied %s tape: %s -> %s", tape_label, source_path.name, output_path.name)
         return True
     except Exception as e:
         logger.error("Failed to copy %s tape %s: %s", tape_label, source_path.name, e)
@@ -331,5 +331,5 @@ def auto_convert_tapes(source_dir: Path, target_dir: Path, codename: str) -> int
     if beats_src and convert_beats_tape(beats_src, target_dir, codename):
         converted += 1
 
-    logger.info("Auto-converted %d tape(s) for '%s'", converted, codename)
+    logger.debug("Auto-converted %d tape(s) for '%s'", converted, codename)
     return converted

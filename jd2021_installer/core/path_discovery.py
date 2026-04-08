@@ -44,18 +44,18 @@ def resolve_game_paths(search_root: Path) -> Optional[Path]:
     # 1. Classic layout: tool_root/jd21
     candidate = search_root / "jd21"
     if is_valid_game_dir(candidate):
-        logger.info("Found JD2021 layout at: %s", candidate)
+        logger.debug("Found JD2021 layout at: %s", candidate)
         return candidate
 
     # 2. Direct reference
     if is_valid_game_dir(search_root):
-        logger.info("Found JD2021 layout directly at: %s", search_root)
+        logger.debug("Found JD2021 layout directly at: %s", search_root)
         return search_root
 
     # 3. Up one folder
     candidate = search_root.parent / "jd21"
     if is_valid_game_dir(candidate):
-        logger.info("Found JD2021 layout via parent: %s", candidate)
+        logger.debug("Found JD2021 layout via parent: %s", candidate)
         return candidate
 
     logger.debug("Quick heuristics failed.")
@@ -70,7 +70,7 @@ def deep_scan_for_game_dir(search_root: Path) -> Optional[Path]:
     Returns:
         The confirmed Game Root Path, or None if not found.
     """
-    logger.info("Starting deep scan for JD2021 game directory in %s", search_root)
+    logger.debug("Starting deep scan for JD2021 game directory in %s", search_root)
     
     try:
         for root, dirs, files in os.walk(search_root):
@@ -84,12 +84,12 @@ def deep_scan_for_game_dir(search_root: Path) -> Optional[Path]:
                 parts = found_path.parts
                 if len(parts) >= 4 and parts[-4:] == tuple(_TARGET_SUBPATH):
                     game_dir = found_path.parents[3]
-                    logger.info("Deep scan found JD2021 game directory at: %s", game_dir)
+                    logger.debug("Deep scan found JD2021 game directory at: %s", game_dir)
                     return game_dir
     except (OSError, PermissionError) as e:
-        logger.warning("Deep scan interrupted by permissions or IO error: %s", e)
+        logger.debug("Deep scan interrupted by permissions or IO error: %s", e)
         
-    logger.info("Deep scan complete. No JD2021 game directory found.")
+    logger.debug("Deep scan complete. No JD2021 game directory found.")
     return None
 
 

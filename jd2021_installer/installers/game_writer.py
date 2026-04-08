@@ -1053,7 +1053,7 @@ def write_game_files(
                 num_coach = 1
 
         if num_coach > 4:
-            logger.info("Clamping NumCoach from %d to 4 (JD2021 player slot limit)", num_coach)
+            logger.debug("Clamping NumCoach from %d to 4 (JD2021 player slot limit)", num_coach)
             num_coach = 4
 
         media = map_data.media
@@ -1091,7 +1091,7 @@ def write_game_files(
         # Cinematics stubs (MainSequence tape + ISC)
         _write_cinematics_stubs(target, name)
 
-        logger.info("Game files written for '%s' to %s", name, target)
+        logger.debug("Game files written for '%s' to %s", name, target)
         return vst
 
     except Exception as exc:

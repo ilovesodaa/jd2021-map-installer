@@ -211,13 +211,13 @@ def copy_video(
                 src.name,
             )
         shutil.copy2(src, dst)
-        logger.info("Copied video: %s -> %s", src.name, dst)
+        logger.debug("Copied video: %s -> %s", src.name, dst)
         return dst
 
     # Conversion path is only used when caller explicitly requests it or when
     # output container differs from the source extension. We also transcode VP9
     # sources to VP8 for better JD2021 runtime compatibility.
-    logger.info("Converting video to target format: %s -> %s", src.name, dst.name)
+    logger.debug("Converting video to target format: %s -> %s", src.name, dst.name)
     run_ffmpeg(
         [
            "-y",
@@ -244,7 +244,7 @@ def copy_video(
         ],
         config=config,
     )
-    logger.info("Converted video: %s -> %s", src.name, dst)
+    logger.debug("Converted video: %s -> %s", src.name, dst)
     return dst
 
 
@@ -297,7 +297,7 @@ def copy_audio(
     # JD2017 PC requires .wav for stable engine compatibility.
     # If source is .ogg but we are writing .wav, let's transcode:
     if src.suffix.lower() == ".ogg" and dst.suffix.lower() == ".wav":
-        logger.info("Transcoding OGG -> WAV: %s -> %s", src.name, dst.name)
+        logger.debug("Transcoding OGG -> WAV: %s -> %s", src.name, dst.name)
         run_ffmpeg([
             "-y",
             "-i", str(src),
@@ -307,7 +307,7 @@ def copy_audio(
         ])
     else:
         shutil.copy2(src, dst)
-        logger.info("Copied audio: %s -> %s", src.name, dst)
+        logger.debug("Copied audio: %s -> %s", src.name, dst)
         
     return dst
 
@@ -366,7 +366,7 @@ def convert_audio(
         extracted = extract_ckd_audio_v1(audio_path, temp_dir)
         if extracted:
             effective_audio = Path(extracted)
-            logger.info("Using extracted audio payload for conversion: %s", effective_audio.name)
+            logger.debug("Using extracted audio payload for conversion: %s", effective_audio.name)
         else:
             logger.warning(
                 "Could not decode CKD audio '%s'; generating silent fallback audio to allow install.",
@@ -392,11 +392,11 @@ def convert_audio(
 
         # 3. Generate engine WAV with offset/alignment
         if a_offset == 0.0:
-            logger.info("Converting to 48kHz WAV (no offset)...")
+            logger.debug("Converting to 48kHz WAV (no offset)...")
             run_ffmpeg(["-y", "-i", str(effective_audio), "-ar", "48000", str(wav_out)], config=config)
         elif a_offset < 0:
             trim_s = abs(a_offset)
-            logger.info("Converting to 48kHz WAV (trimming first %.3fs)...", trim_s)
+            logger.debug("Converting to 48kHz WAV (trimming first %.3fs)...", trim_s)
             run_ffmpeg([
                 "-y", "-i", str(effective_audio), 
                 "-ss", f"{trim_s:.6f}",
@@ -404,7 +404,7 @@ def convert_audio(
             ], config=config)
         else:
             delay_ms = int(a_offset * 1000)
-            logger.info("Converting to 48kHz WAV (padding %dms silence)...", delay_ms)
+            logger.debug("Converting to 48kHz WAV (padding %dms silence)...", delay_ms)
             af_filter = f"adelay={delay_ms}|{delay_ms},asetpts=PTS-STARTPTS"
             run_ffmpeg([
                 "-y", "-i", str(effective_audio), 
@@ -445,7 +445,7 @@ def apply_audio_gain(
     )
 
     tmp.replace(src)
-    logger.info("Applied %+0.1fdB gain: %s", gain_db, src.name)
+    logger.debug("Applied %+0.1fdB gain: %s", gain_db, src.name)
     return src
 
 
@@ -515,7 +515,7 @@ def generate_intro_amb(
     if marker_preroll_ms is not None and a_offset >= 0:
         audio_content_dur = marker_preroll_ms / 1000.0
         fade_start = audio_delay + audio_content_dur - 0.2
-        logger.info("Using marker-based AMB duration: %.3fs", audio_content_dur)
+        logger.debug("Using marker-based AMB duration: %.3fs", audio_content_dur)
     elif a_offset < 0:
         # For Fetch/HTML maps, match intro AMB to the effective video lead-in and
         # trim the front of AMB source when audio pre-roll is longer.
@@ -523,11 +523,11 @@ def generate_intro_amb(
         audio_content_dur = target_window
         trim_front_s = max(0.0, source_preroll_dur - target_window)
         fade_start = max(0.0, audio_delay + audio_content_dur - 0.2)
-        logger.info("Using video-aligned AMB duration: %.3fs (front trim %.3fs)", audio_content_dur, trim_front_s)
+        logger.debug("Using video-aligned AMB duration: %.3fs (front trim %.3fs)", audio_content_dur, trim_front_s)
     else:
         audio_content_dur = abs(a_offset) + 1.355
         fade_start = audio_delay + abs(a_offset) + 1.155
-        logger.info("Using legacy AMB duration heuristic: %.3fs", audio_content_dur)
+        logger.debug("Using legacy AMB duration heuristic: %.3fs", audio_content_dur)
     
     amb_duration = audio_delay + audio_content_dur
 
@@ -610,7 +610,7 @@ includeReference("world/maps/{map_name}/audio/amb/{intro_name}.ilu")'''
 
         (amb_dir / f"{intro_name}.ilu").write_text(ilu_content, encoding="utf-8")
         (amb_dir / f"{intro_name}.tpl").write_text(tpl_content, encoding="utf-8")
-        logger.info("Created intro AMB files: %s.tpl/.ilu", intro_name)
+        logger.debug("Created intro AMB files: %s.tpl/.ilu", intro_name)
 
     # Always inject AMB actor if not present
     audio_isc_path = target_dir / "audio" / f"{map_name}_audio.isc"
@@ -637,7 +637,7 @@ includeReference("world/maps/{map_name}/audio/amb/{intro_name}.ilu")'''
             # Inject before <sceneConfigs>
             new_isc = isc_data.replace("\t\t<sceneConfigs>", amb_actor + "\t\t<sceneConfigs>")
             audio_isc_path.write_text(new_isc, encoding="utf-8")
-            logger.info("Injected intro AMB actor into audio ISC: %s", intro_name)
+            logger.debug("Injected intro AMB actor into audio ISC: %s", intro_name)
         else:
             logger.debug("Intro AMB actor already present in audio ISC: %s", intro_name)
 
@@ -647,7 +647,7 @@ includeReference("world/maps/{map_name}/audio/amb/{intro_name}.ilu")'''
             f"adelay={delay_ms}|{delay_ms},asetpts=PTS-STARTPTS,"
             f"afade=t=out:st={fade_start:.3f}:d=0.2"
         )
-        logger.info("Intro audio delayed by %.3fs", audio_delay)
+        logger.debug("Intro audio delayed by %.3fs", audio_delay)
     else:
         af_filter = f"afade=t=out:st={fade_start:.3f}:d=0.2"
 
@@ -661,7 +661,7 @@ includeReference("world/maps/{map_name}/audio/amb/{intro_name}.ilu")'''
         "-ar", "48000", str(intro_wav)
     ]
     run_ffmpeg(ffmpeg_args, config=config)
-    logger.info("Generated intro AMB: %s (%.3fs)", intro_wav.name, amb_duration)
+    logger.debug("Generated intro AMB: %s (%.3fs)", intro_wav.name, amb_duration)
 
 
 def extract_amb_clips(
@@ -705,7 +705,7 @@ def extract_amb_clips(
         duration_s = clip.duration / 1000.0
         fade_start = max(0, duration_s - 0.200)
 
-        logger.info("Extracting cinematic AMB clip: %s (%.3fs)", clip_name, duration_s)
+        logger.debug("Extracting cinematic AMB clip: %s (%.3fs)", clip_name, duration_s)
         run_ffmpeg([
             "-y", "-i", str(audio_path),
             "-t", f"{duration_s:.6f}",
@@ -748,7 +748,7 @@ def convert_image(
         img = img.resize(target_size, Image.Resampling.LANCZOS)
 
     img.save(dst)
-    logger.info("Converted image: %s -> %s", src.name, dst)
+    logger.debug("Converted image: %s -> %s", src.name, dst)
     return dst
 
 
@@ -884,11 +884,11 @@ def extract_ckd_audio_v1(ckd_path: str | Path, output_dir: str | Path) -> Option
         decoded = decode_xma2_audio(ckd_path, vgm_raw_out)
         if decoded and decoded.exists():
             if is_valid_wav(decoded):
-                logger.info("Decoded raw CKD directly via vgmstream: %s", decoded.name)
+                logger.debug("Decoded raw CKD directly via vgmstream: %s", decoded.name)
                 return str(decoded)
             else:
                 # Transcode to 48kHz Stereo if it's a valid audio file but wrong format
-                logger.info("Decoded WAV has wrong format; transcoding to 48kHz Stereo...")
+                logger.debug("Decoded WAV has wrong format; transcoding to 48kHz Stereo...")
                 fixed_wav = output_dir / f"{base}_fixed.wav"
                 run_ffmpeg(["-y", "-i", str(decoded), "-ar", "48000", "-ac", "2", str(fixed_wav)])
                 if fixed_wav.exists():
@@ -923,16 +923,16 @@ def extract_ckd_audio_v1(ckd_path: str | Path, output_dir: str | Path) -> Option
                 if decoded and decoded.exists():
                     if is_valid_wav(decoded):
                         return str(decoded)
-                    logger.info("Fallback decoded WAV has wrong format; transcoding...")
+                    logger.debug("Fallback decoded WAV has wrong format; transcoding...")
                     fixed_wav = output_dir / f"{base}_fallback_fixed.wav"
                     run_ffmpeg(["-y", "-i", str(decoded), "-ar", "48000", "-ac", "2", str(fixed_wav)])
                     if fixed_wav.exists():
                         return str(fixed_wav)
             except Exception as e:
-                logger.warning("vgmstream fallback failed for payload %s: %s", ckd_path.name, e)
+                logger.debug("vgmstream fallback failed for payload %s: %s", ckd_path.name, e)
                 ffmpeg_out = output_dir / f"{base}_ffmpeg_fallback.wav"
                 if _ffmpeg_decode_unknown_payload(temp_payload, ffmpeg_out):
-                    logger.info("Recovered audio using FFmpeg fallback: %s", ffmpeg_out.name)
+                    logger.debug("Recovered audio using FFmpeg fallback: %s", ffmpeg_out.name)
                     return str(ffmpeg_out)
             finally:
                 if temp_payload.exists():
@@ -942,7 +942,7 @@ def extract_ckd_audio_v1(ckd_path: str | Path, output_dir: str | Path) -> Option
     # Standard OGG/WAV payload found
     out_path = output_dir / (base + ext)
     out_path.write_bytes(payload)
-    logger.info("Extracted %s payload from CKD: %s", ext.upper()[1:], out_path.name)
+    logger.debug("Extracted %s payload from CKD: %s", ext.upper()[1:], out_path.name)
     return str(out_path)
 
 
@@ -986,7 +986,7 @@ def decode_xma2_audio(
     vgm_bin = _resolve_vgmstream_binary(vgmstream_path)
 
     cmd = [str(vgm_bin), "-o", str(output_wav), str(input_ckd)]
-    logger.info("Decoding X360 audio: %s", input_ckd.name)
+    logger.debug("Decoding X360 audio: %s", input_ckd.name)
     logger.debug("vgmstream cmd: %s", " ".join(cmd))
 
     try:
@@ -1000,7 +1000,7 @@ def decode_xma2_audio(
         )
         if result.stdout:
             logger.debug("vgmstream stdout: %s", result.stdout.strip())
-        logger.info("Decoded X360 audio → %s", output_wav.name)
+        logger.debug("Decoded X360 audio → %s", output_wav.name)
         return output_wav
     except subprocess.CalledProcessError as e:
         if e.returncode == 3221225781:
@@ -1113,7 +1113,7 @@ def copy_moves(
     KINECT_GESTURE_PLATFORMS = {"DURANGO", "X360"}
 
     if skip_gestures:
-        logger.info("Gesture import disabled for this source; only .msm files will be copied.")
+        logger.debug("Gesture import disabled for this source; only .msm files will be copied.")
 
     # Pass 1: Copy Kinect-compatible gestures and universally compatible MSMs
     for plat_dir in src_root.iterdir():
@@ -1265,7 +1265,7 @@ def copy_moves(
                     )
 
     if total_copied:
-        logger.info("Merged %d gesture/msm file(s) from %s into PC/", total_copied, src_root)
+        logger.debug("Merged %d gesture/msm file(s) from %s into PC/", total_copied, src_root)
 
     return total_copied
 
@@ -1278,7 +1278,7 @@ def process_menu_art(target_dir: str | Path, codename: str) -> int:
     """
     tex_dir = Path(target_dir) / "menuart" / "textures"
     if not tex_dir.is_dir():
-        logger.warning("MenuArt textures directory not found at %s", tex_dir)
+        logger.debug("MenuArt textures directory not found at %s", tex_dir)
         return 0
 
     codename_low = codename.lower()
@@ -1331,9 +1331,9 @@ def process_menu_art(target_dir: str | Path, codename: str) -> int:
                     img.save(out_path, format="TGA")
                 found_tgas[key] = out_path
                 actual_lower_map[out_path.name.lower()] = out_path
-                logger.info("Canonicalized MenuArt to TGA: %s -> %s", source_candidate.name, out_path.name)
+                logger.debug("Canonicalized MenuArt to TGA: %s -> %s", source_candidate.name, out_path.name)
             except Exception as e:
-                logger.warning("Failed to canonicalize MenuArt %s: %s", source_candidate.name, e)
+                logger.debug("Failed to canonicalize MenuArt %s: %s", source_candidate.name, e)
 
         # Coaches are also actor-referenced as TGA; synthesize from PNG when needed.
         for png_coach in sorted(tex_dir.glob(f"{codename}_coach_*.png")):
@@ -1347,9 +1347,9 @@ def process_menu_art(target_dir: str | Path, codename: str) -> int:
                     if img.mode != "RGBA":
                         img = img.convert("RGBA")
                     img.save(tga_coach, format="TGA")
-                logger.info("Canonicalized coach texture to TGA: %s", tga_coach.name)
+                logger.debug("Canonicalized coach texture to TGA: %s", tga_coach.name)
             except Exception as e:
-                logger.warning("Failed to canonicalize coach texture %s: %s", png_coach.name, e)
+                logger.debug("Failed to canonicalize coach texture %s: %s", png_coach.name, e)
 
     # V1 Parity Synthesis Logic
     online_key = f"{codename}_cover_online.tga".lower()
@@ -1366,7 +1366,7 @@ def process_menu_art(target_dir: str | Path, codename: str) -> int:
                 dst_name = dst_key
             
             dst_path = tex_dir / dst_name
-            logger.info("Synthesizing missing %s from %s", desc, src_key)
+            logger.debug("Synthesizing missing %s from %s", desc, src_key)
             try:
                 shutil.copy2(found_tgas[src_key], dst_path)
                 found_tgas[dst_key] = dst_path
@@ -1378,7 +1378,7 @@ def process_menu_art(target_dir: str | Path, codename: str) -> int:
 
     # Re-save as 32-bit RGBA TGA (V1 Parity)
     if Image is None:
-        logger.warning("Pillow not installed; skipping TGA re-save/healing")
+        logger.debug("Pillow not installed; skipping TGA re-save/healing")
         return 0
 
     resaved = 0
@@ -1391,10 +1391,10 @@ def process_menu_art(target_dir: str | Path, codename: str) -> int:
                 img.save(path, format='TGA')
                 resaved += 1
         except Exception as e:
-            logger.warning("Could not re-save MenuArt %s: %s", path.name, e)
+            logger.debug("Could not re-save MenuArt %s: %s", path.name, e)
 
     if resaved:
-        logger.info("Validated and re-saved %d MenuArt TGA(s) as uncompressed 32-bit RGBA", resaved)
+        logger.debug("Validated and re-saved %d MenuArt TGA(s) as uncompressed 32-bit RGBA", resaved)
     
     return resaved
 

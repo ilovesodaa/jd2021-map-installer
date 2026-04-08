@@ -198,7 +198,7 @@ class ManualExtractor(BaseExtractor):
                     self._codename,
                 )
             else:
-                logger.info("Inferred manual IPK codename from root: %s", self._codename)
+                logger.debug("Inferred manual IPK codename from root: %s", self._codename)
             return
 
         lower_candidates = {c.lower() for c in candidates}
@@ -337,11 +337,11 @@ class ManualExtractor(BaseExtractor):
         map_output_dir = output_dir / self._codename
         map_output_dir.mkdir(parents=True, exist_ok=True)
         
-        logger.info("Assembling manual files into %s (source_type=%s)", map_output_dir, self._source_type)
+        logger.debug("Assembling manual files into %s (source_type=%s)", map_output_dir, self._source_type)
 
         # Base case: copy everything from root if provided, then overwrite with specific files
         if resolved_root:
-            logger.info("Copying contents of root dir %s", resolved_root)
+            logger.debug("Copying contents of root dir %s", resolved_root)
             shutil.copytree(resolved_root, map_output_dir, dirs_exist_ok=True)
 
         # Copy specific files
@@ -352,7 +352,7 @@ class ManualExtractor(BaseExtractor):
             if src.is_file():
                 dest = map_output_dir / src.name
                 shutil.copy2(src, dest)
-                logger.info("Copied manual file: %s", src.name)
+                logger.debug("Copied manual file: %s", src.name)
             else:
                 self._warn(f"Manual file not found and skipped ({ftype}): {src}")
 
@@ -364,7 +364,7 @@ class ManualExtractor(BaseExtractor):
             if src_dir.is_dir():
                 dest_dir = map_output_dir / src_dir.name
                 shutil.copytree(src_dir, dest_dir, dirs_exist_ok=True)
-                logger.info("Copied manual dir: %s", src_dir.name)
+                logger.debug("Copied manual dir: %s", src_dir.name)
             else:
                 self._warn(f"Manual directory not found and skipped ({dtype}): {src_dir}")
 

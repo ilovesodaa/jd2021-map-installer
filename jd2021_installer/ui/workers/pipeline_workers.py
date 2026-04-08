@@ -282,7 +282,7 @@ class ExtractAndNormalizeWorker(QObject):
                 map_output_dir = self._extractor.extract(self._output_dir)
             except Exception as exc:
                 if isinstance(self._extractor, ArchiveIPKExtractor) and isinstance(exc, _V1_RECOVERABLE_IPK_ERRORS):
-                    logger.warning("IPK extraction issue (continuing for parity): %s", exc)
+                    logger.debug("IPK extraction issue (continuing for parity): %s", exc)
                     self.status.emit(f"Warning: IPK extraction issue: {exc}")
                     # V1 parity: continue with any partial extraction state.
                     map_output_dir = self._output_dir
@@ -337,7 +337,7 @@ class ExtractAndNormalizeWorker(QObject):
                 user_msg = str(e)
                 if _is_user_cancelled_browser_close(e):
                     user_msg = "Browser was closed by user. Fetch cancelled."
-                logger.warning("ExtractAndNormalize failed: %s", user_msg)
+                logger.debug("ExtractAndNormalize failed: %s", user_msg)
                 self.error.emit(failed_stage, user_msg)
                 self.finished.emit(None)
                 return
@@ -412,7 +412,7 @@ def reprocess_audio(
             mainsequence_path.parent.mkdir(parents=True, exist_ok=True)
             mainsequence_path.write_text(mainsequence_backup, encoding="utf-8")
         except OSError as exc:
-            logger.warning("Could not restore existing MainSequence tape for '%s': %s", codename, exc)
+            logger.debug("Could not restore existing MainSequence tape for '%s': %s", codename, exc)
     
     # 2. Ported V1 FFmpeg logic: pad/trim main audio and generate intro AMB
     from jd2021_installer.installers.media_processor import (
@@ -939,7 +939,7 @@ class BatchInstallWorker(QObject):
                         prepared_dir = extractor.extract(batch_cache)
                         html_prepared.append((map_name, prepared_dir))
                     except Exception as e:
-                        logger.warning("Failed HTML prepare for %s: %s", map_name, e)
+                        logger.debug("Failed HTML prepare for %s: %s", map_name, e)
                         self.status.emit(f"Warning: Failed HTML prepare for {map_name} ({str(e)[:40]})")
 
                 emit_progress(20)
@@ -1079,7 +1079,7 @@ class BatchInstallWorker(QObject):
                     
                 except Exception as e:
                     cpath = Path(candidate["path"])
-                    logger.warning("Failed to install map from %s: %s", cpath.name, e)
+                    logger.debug("Failed to install map from %s: %s", cpath.name, e)
                     self.status.emit(f"Warning: Failed {cpath.name} ({str(e)[:30]})")
 
             # Process maps prepared from HTML folders in phase 1.
@@ -1149,7 +1149,7 @@ class BatchInstallWorker(QObject):
                     installed_maps.append(map_data)
                     logger.info("Batch installed HTML map: %s", map_data.codename)
                 except Exception as e:
-                    logger.warning("Failed to install HTML map %s: %s", map_name, e)
+                    logger.debug("Failed to install HTML map %s: %s", map_name, e)
                     self.status.emit(f"Warning: Failed {map_name} ({str(e)[:30]})")
 
             import shutil
@@ -1394,7 +1394,7 @@ def install_map_to_game(
         if audio_wav.exists():
             apply_audio_gain(audio_wav, gain_db=8.0, config=config)
         else:
-            logger.warning("Expected gameplay WAV missing for gain boost: %s", audio_wav)
+            logger.debug("Expected gameplay WAV missing for gain boost: %s", audio_wav)
 
     # 2b. Copy Video
     media = map_data.media
@@ -1594,7 +1594,7 @@ def install_map_to_game(
         from jd2021_installer.installers.sku_scene import register_map
         register_map(game_dir, codename)
     except Exception as e:
-        logger.warning("SkuScene registration failed (non-fatal): %s", e)
+        logger.debug("SkuScene registration failed (non-fatal): %s", e)
 
     if status_callback: status_callback("Finalizing Offsets")
     if progress_callback: progress_callback(100)

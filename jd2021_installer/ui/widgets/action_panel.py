@@ -115,13 +115,6 @@ class ActionWidget(QWidget):
         secondary = QHBoxLayout()
         secondary.setSpacing(6)
 
-        self._btn_readjust = WrapButton("Re-adjust Offset")
-        self._btn_readjust.setObjectName("btn_readjust")
-        self._btn_readjust.setMinimumHeight(38)
-        self._btn_readjust.setToolTip("Open sync refinement to preview and fine-tune installed map timing")
-        self._btn_readjust.clicked.connect(self.readjust_offset_requested.emit)
-        secondary.addWidget(self._btn_readjust)
-
         self._btn_uninstall = WrapButton("Uninstall Map")
         self._btn_uninstall.setObjectName("btn_uninstall")
         self._btn_uninstall.setMinimumHeight(38)
@@ -129,8 +122,15 @@ class ActionWidget(QWidget):
         self._btn_uninstall.clicked.connect(self.uninstall_requested.emit)
         secondary.addWidget(self._btn_uninstall)
 
+        self._btn_readjust = WrapButton("Re-adjust Offset")
+        self._btn_readjust.setObjectName("btn_readjust")
+        self._btn_readjust.setMinimumHeight(38)
+        self._btn_readjust.setToolTip("Open sync refinement to preview and fine-tune installed map timing")
+        self._btn_readjust.clicked.connect(self.readjust_offset_requested.emit)
+        secondary.addWidget(self._btn_readjust)
+
         self._primary_row_buttons = [self._btn_install]
-        self._secondary_row_buttons = [self._btn_readjust, self._btn_uninstall]
+        self._secondary_row_buttons = [self._btn_uninstall, self._btn_readjust]
         root.addLayout(secondary)
 
         # -- Separator ----------------------------------------------------

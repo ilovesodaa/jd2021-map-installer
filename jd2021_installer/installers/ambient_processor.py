@@ -44,7 +44,7 @@ def _silence_intro_amb_wavs(amb_out_dir: Path, codename: str) -> int:
                 wf.writeframes(b"\x00\x00\x00\x00" * frames)
             written += 1
         except Exception as exc:
-            logger.warning("Failed to silence intro AMB '%s': %s", wav_path.name, exc)
+            logger.debug("Failed to silence intro AMB '%s': %s", wav_path.name, exc)
     return written
 
 
@@ -87,12 +87,12 @@ def process_ambient_tpl(
     try:
         components = json_data.get("COMPONENTS", [])
         if not components:
-            logger.warning("No COMPONENTS block in %s", amb_filename)
+            logger.debug("No COMPONENTS block in %s", amb_filename)
             return "", "", []
 
         sound_component = components[0]
         if "soundList" not in sound_component:
-            logger.warning("No soundList in first component of %s", amb_filename)
+            logger.debug("No soundList in first component of %s", amb_filename)
             return "", "", []
 
         raw_sound_list = sound_component["soundList"]
@@ -497,7 +497,7 @@ def _inject_intro_amb_soundset_clip(target_dir: Path, codename: str) -> bool:
 
         if updated_existing != content:
             tape_path.write_text(updated_existing, encoding="utf-8")
-            logger.info("Adjusted existing intro AMB clip timing in %s: start=%d duration=%d", tape_path.name, clip_start_ms, clip_duration_ms)
+            logger.debug("Adjusted existing intro AMB clip timing in %s: start=%d duration=%d", tape_path.name, clip_start_ms, clip_duration_ms)
             return True
         return False
 
@@ -523,7 +523,7 @@ def _inject_intro_amb_soundset_clip(target_dir: Path, codename: str) -> bool:
     )
     updated = _insert_lua_table_entry(content, "Clips", clip_block)
     if updated is None:
-        logger.warning("Could not locate Clips table in %s for AMB intro injection", tape_path.name)
+        logger.debug("Could not locate Clips table in %s for AMB intro injection", tape_path.name)
         return False
 
     updated = _remove_intro_track_entries(updated, intro_tpl_name)
@@ -532,7 +532,7 @@ def _inject_intro_amb_soundset_clip(target_dir: Path, codename: str) -> bool:
     updated = _normalize_tapeclock_zero(updated)
 
     tape_path.write_text(updated, encoding="utf-8")
-    logger.info("Injected intro AMB SoundSetClip into %s: %s", tape_path.name, intro_tpl_name)
+    logger.debug("Injected intro AMB SoundSetClip into %s: %s", tape_path.name, intro_tpl_name)
     return True
 
 
@@ -592,7 +592,7 @@ def process_ambient_directory(source_dir: Path, target_dir: Path, codename: str)
                             if target_wav.exists():
                                 target_wav.unlink()
                             decoded_path.rename(target_wav)
-                        logger.info("Decoded AMB referenced audio: %s", target_wav.name)
+                        logger.debug("Decoded AMB referenced audio: %s", target_wav.name)
                     else:
                         # Keep parity with V1: create a tiny silent fallback when referenced audio is missing.
                         with wave.open(str(target_wav), "w") as wf:
@@ -600,7 +600,7 @@ def process_ambient_directory(source_dir: Path, target_dir: Path, codename: str)
                             wf.setsampwidth(2)
                             wf.setframerate(48000)
                             wf.writeframes(b"\x00\x00" * 4800)
-                        logger.info("Created silent AMB placeholder: %s", target_wav.name)
+                        logger.debug("Created silent AMB placeholder: %s", target_wav.name)
 
                 logger.debug("Processed AMB template: %s", ckd.name)
                 count += 1
@@ -628,15 +628,15 @@ def process_ambient_directory(source_dir: Path, target_dir: Path, codename: str)
                     if target_wav.exists():
                         target_wav.unlink()
                     decoded_path.rename(target_wav)
-                logger.info("Decoded source intro AMB audio: %s", target_wav.name)
+                logger.debug("Decoded source intro AMB audio: %s", target_wav.name)
             else:
-                logger.warning("Failed to decode source intro AMB audio from %s; keeping generated intro if available", wav_ckd.name)
+                logger.debug("Failed to decode source intro AMB audio from %s; keeping generated intro if available", wav_ckd.name)
             continue
 
         if base.lower() not in tpl_bases:
             if _generate_synthetic_amb(wav_ckd, amb_out_dir, codename):
                 count += 1
-                logger.info("Generated synthetic AMB for orphan audio: %s", wav_ckd.name)
+                logger.debug("Generated synthetic AMB for orphan audio: %s", wav_ckd.name)
 
     # 3. Inject actors into audio.isc
     inject_ambient_actors(target_dir, codename)

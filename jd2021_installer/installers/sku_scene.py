@@ -99,7 +99,7 @@ def register_map(game_dir: str | Path, codename: str) -> None:
     content = isc.read_text(encoding="utf-8", errors="replace")
 
     if is_registered(game_dir, codename):
-        logger.info("Map '%s' already registered in SkuScene", codename)
+        logger.debug("Map '%s' already registered in SkuScene", codename)
         return
 
     # 1. Insert Actor block before <sceneConfigs>
@@ -126,17 +126,17 @@ def register_map(game_dir: str | Path, codename: str) -> None:
         insert_pos_db = match_db.start()
         content = content[:insert_pos_db] + coverflow_entry + "\n" + content[insert_pos_db:]
     else:
-        logger.warning("Could not find insertion point for Coverflow entries in SkuScene")
+        logger.debug("Could not find insertion point for Coverflow entries in SkuScene")
 
     isc.write_text(content, encoding="utf-8")
-    logger.info("Registered map '%s' in SkuScene ISC (Actor + Coverflow)", codename)
+    logger.debug("Registered map '%s' in SkuScene ISC (Actor + Coverflow)", codename)
 
 
 def unregister_map(game_dir: str | Path, codename: str) -> None:
     """Remove a map's entry from SkuScene_Maps_PC_All.isc."""
     isc = _sku_scene_path(game_dir)
     if not isc.is_file():
-        logger.warning("SkuScene ISC not found; nothing to unregister")
+        logger.debug("SkuScene ISC not found; nothing to unregister")
         return
 
     content = isc.read_text(encoding="utf-8", errors="replace")
@@ -163,6 +163,6 @@ def unregister_map(game_dir: str | Path, codename: str) -> None:
         # Clean up excessive newlines
         content = re.sub(r'\n{3,}', '\n\n', content)
         isc.write_text(content, encoding="utf-8")
-        logger.info("Unregistered map '%s' from SkuScene ISC", codename)
+        logger.debug("Unregistered map '%s' from SkuScene ISC", codename)
     else:
-        logger.info("Map '%s' was not registered in SkuScene", codename)
+        logger.debug("Map '%s' was not registered in SkuScene", codename)

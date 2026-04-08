@@ -60,7 +60,7 @@ class ConfigWidget(QWidget):
         self._dir_line = QLineEdit()
         self._dir_line.setReadOnly(True)
         self._dir_line.setPlaceholderText("Select JD2021 game folder…")
-        self._dir_line.setToolTip("Path to your JD2021 installation root (contains data and engine folders)")
+        self._dir_line.setToolTip("Path to your JD2021 installation root (contains data and engine folders). Ensure this points to the base game folder.")
         dir_row.addWidget(self._dir_line)
 
         # Buttons side-by-side
@@ -68,7 +68,7 @@ class ConfigWidget(QWidget):
         btn_layout.setContentsMargins(0, 0, 0, 0)
         
         self._auto_btn = QPushButton("Auto-Detect")
-        self._auto_btn.setToolTip("Try to locate your JD2021 install automatically")
+        self._auto_btn.setToolTip("Scan common installation directories to locate your JD2021 game automatically.")
         self._auto_btn.clicked.connect(self._auto_detect_game_dir)
         btn_layout.addWidget(self._auto_btn)
 
