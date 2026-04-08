@@ -543,6 +543,26 @@ def reprocess_audio(
         generate_intro_amb,
         extract_amb_clips,
     )
+
+    source_dir = map_data.source_dir
+    source_is_html = bool(getattr(map_data, "is_html_source", False))
+    if not source_is_html and source_dir and source_dir.exists():
+        source_is_html = any(source_dir.glob("*.html")) or any(source_dir.glob("**/assets.html"))
+
+    source_is_jdnext = bool(getattr(map_data, "is_jdnext_source", False))
+    if not source_is_jdnext:
+        if source_dir and source_dir.exists() and (
+            (source_dir / "jdnext_metadata.json").exists()
+            or (source_dir / "monobehaviour" / "map.json").exists()
+        ):
+            source_is_jdnext = True
+        elif map_data.media.video_path and re.match(
+            r"^video_(ultra|high|mid|low)\.(hd|vp8|vp9)\.webm$",
+            map_data.media.video_path.name.lower(),
+        ):
+            source_is_jdnext = True
+
+    intro_amb_attempt_enabled = source_is_html or source_is_jdnext
     
     media = map_data.media
 
@@ -580,7 +600,11 @@ def reprocess_audio(
     try:
         from jd2021_installer.installers.ambient_processor import _inject_intro_amb_soundset_clip
 
-        _inject_intro_amb_soundset_clip(target_dir, codename)
+        _inject_intro_amb_soundset_clip(
+            target_dir,
+            codename,
+            attempt_enabled=intro_amb_attempt_enabled,
+        )
     except Exception as exc:
         logger.debug("AMB SoundSetClip injection skipped for '%s': %s", codename, exc)
 
@@ -624,6 +648,26 @@ def reprocess_audio_readjust(
         extract_amb_clips,
     )
 
+    source_dir = map_data.source_dir
+    source_is_html = bool(getattr(map_data, "is_html_source", False))
+    if not source_is_html and source_dir and source_dir.exists():
+        source_is_html = any(source_dir.glob("*.html")) or any(source_dir.glob("**/assets.html"))
+
+    source_is_jdnext = bool(getattr(map_data, "is_jdnext_source", False))
+    if not source_is_jdnext:
+        if source_dir and source_dir.exists() and (
+            (source_dir / "jdnext_metadata.json").exists()
+            or (source_dir / "monobehaviour" / "map.json").exists()
+        ):
+            source_is_jdnext = True
+        elif map_data.media.video_path and re.match(
+            r"^video_(ultra|high|mid|low)\.(hd|vp8|vp9)\.webm$",
+            map_data.media.video_path.name.lower(),
+        ):
+            source_is_jdnext = True
+
+    intro_amb_attempt_enabled = source_is_html or source_is_jdnext
+
     codename = map_data.codename
     media = map_data.media
 
@@ -657,12 +701,25 @@ def reprocess_audio_readjust(
             map_data.music_track.start_beat,
         )
 
-    generate_intro_amb(ogg_path, codename, target_dir, a_offset, v_override, preroll, config)
+    generate_intro_amb(
+        ogg_path,
+        codename,
+        target_dir,
+        a_offset,
+        v_override,
+        preroll,
+        intro_amb_attempt_enabled,
+        config,
+    )
 
     try:
         from jd2021_installer.installers.ambient_processor import _inject_intro_amb_soundset_clip
 
-        _inject_intro_amb_soundset_clip(target_dir, codename)
+        _inject_intro_amb_soundset_clip(
+            target_dir,
+            codename,
+            attempt_enabled=intro_amb_attempt_enabled,
+        )
     except Exception as exc:
         logger.debug("AMB SoundSetClip injection skipped for '%s' (readjust): %s", codename, exc)
 
@@ -1640,7 +1697,17 @@ def install_map_to_game(
         if status_callback: status_callback("Processing ambient sounds...")
         if progress_callback: progress_callback(70)
         from jd2021_installer.installers.ambient_processor import process_ambient_directory
-        process_ambient_directory(map_data.source_dir, map_target, codename)
+
+        source_is_html = bool(getattr(map_data, "is_html_source", False))
+        if not source_is_html and map_data.source_dir and map_data.source_dir.exists():
+            source_is_html = any(map_data.source_dir.glob("*.html")) or any(map_data.source_dir.glob("**/assets.html"))
+
+        process_ambient_directory(
+            map_data.source_dir,
+            map_target,
+            codename,
+            attempt_enabled=(source_is_html and not _is_jdnext_source_map()),
+        )
         
         if status_callback: status_callback("Decoding MenuArt textures...")
         if progress_callback: progress_callback(80)

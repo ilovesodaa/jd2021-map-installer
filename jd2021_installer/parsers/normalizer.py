@@ -1603,6 +1603,8 @@ def normalize(
         sync=sync_data,
         video_start_time_override=sync_data.video_ms / 1000.0,
         source_dir=source_root,
+        is_html_source=is_html_source,
+        is_jdnext_source=is_jdnext_source,
         has_autodance=has_autodance,
     )
 

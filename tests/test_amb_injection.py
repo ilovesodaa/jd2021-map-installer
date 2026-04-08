@@ -64,8 +64,8 @@ def test_amb_injection_idempotency():
         print("✓ AMB Injection Idempotency OK")
 
 
-def test_negative_offset_uses_legacy_intro_duration_even_with_marker_data():
-    """Fetch/JDU parity: marker-only intro can be silent when a_offset is negative."""
+def test_marker_preroll_controls_intro_duration_even_with_negative_offset():
+    """When marker pre-roll exists, intro cut length should follow marker timing."""
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
         audio_dir = tmp_path / "audio"
@@ -104,8 +104,8 @@ def test_negative_offset_uses_legacy_intro_duration_even_with_marker_data():
         t_idx = ffmpeg_args.index("-t")
         used_duration = float(ffmpeg_args[t_idx + 1])
 
-        # Legacy heuristic: abs(a_offset) + 1.355 (rounded to 3 decimals in command)
-        assert used_duration == 6.329, f"Unexpected intro duration: {used_duration}"
+        # Marker-based rule: use marker pre-roll (rounded to 3 decimals in command).
+        assert used_duration == 4.974, f"Unexpected intro duration: {used_duration}"
 
 if __name__ == "__main__":
     try:

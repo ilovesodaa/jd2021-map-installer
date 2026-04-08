@@ -249,7 +249,7 @@ class ModeSelectorWidget(QWidget):
         lay.setContentsMargins(0, 4, 0, 0)
 
         warn = QLabel(
-            "⚠️ Asset/NoHUD links expire after ~30 minutes! Fetch fresh links if download fails."
+            "⚠️ Asset/NoHUD links expire after ~30 minutes! Fetch fresh links if download fails. If the assets and nohud are already downloaded, ignore this warning."
         )
         warn.setObjectName("modeHtmlWarningLabel")
         warn.setWordWrap(True)
@@ -310,7 +310,7 @@ class ModeSelectorWidget(QWidget):
         lay.setContentsMargins(0, 4, 0, 0)
 
         warn = QLabel(
-            "⚠️ Asset links expire after ~30 minutes! Fetch fresh links if download fails."
+            "⚠️ Asset links expire after ~30 minutes! Fetch fresh links if download fails. If the assets are already downloaded, ignore this warning."
         )
         warn.setObjectName("modeHtmlWarningLabel")
         warn.setWordWrap(True)

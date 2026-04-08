@@ -458,6 +458,7 @@ def generate_intro_amb(
     a_offset: float,
     v_override: Optional[float] = None,
     marker_preroll_ms: Optional[float] = None,
+    attempt_enabled: bool = True,
     config: Optional[AppConfig] = None,
 ) -> None:
     """Ported from V1: Generate an intro AMB WAV for negative videoStartTime.
@@ -476,7 +477,7 @@ def generate_intro_amb(
     ]
     amb_dir = next((p for p in amb_candidates if p.exists()), amb_candidates[0])
 
-    if not INTRO_AMB_ATTEMPT_ENABLED:
+    if not attempt_enabled:
         amb_dir.mkdir(parents=True, exist_ok=True)
         intro_wavs = list(amb_dir.glob("*_intro.wav"))
         if not intro_wavs:
@@ -510,12 +511,17 @@ def generate_intro_amb(
     audio_delay = max(0.0, intro_dur - source_preroll_dur)
     trim_front_s = 0.0
     
-    # Marker-based AMB length is reliable for IPK-style flows where a_offset is
-    # non-negative (typically 0).
-    if marker_preroll_ms is not None and a_offset >= 0:
+    # Marker-based AMB length is the closest match to cutter behavior whenever
+    # beat marker pre-roll is available.
+    if marker_preroll_ms is not None:
         audio_content_dur = marker_preroll_ms / 1000.0
+        trim_front_s = max(0.0, source_preroll_dur - audio_content_dur)
         fade_start = audio_delay + audio_content_dur - 0.2
-        logger.debug("Using marker-based AMB duration: %.3fs", audio_content_dur)
+        logger.debug(
+            "Using marker-based AMB duration: %.3fs (front trim %.3fs)",
+            audio_content_dur,
+            trim_front_s,
+        )
     elif a_offset < 0:
         # For Fetch/HTML maps, match intro AMB to the effective video lead-in and
         # trim the front of AMB source when audio pre-roll is longer.
@@ -672,9 +678,9 @@ def extract_amb_clips(
     config: Optional[AppConfig] = None,
 ) -> int:
     """Extract audio clips for cinematic ambient sounds (V1 parity).
-    
-    Scans the cinematic tape for SoundSetClips with start_time <= 0
-    (intro clips) and extracts them from the main audio source.
+
+    Scans the cinematic tape for SoundSetClips and extracts them from the
+    main audio source using each clip's timeline position and duration.
     """
     if not cinematic_tape or not audio_path.exists():
         return 0
@@ -687,10 +693,6 @@ def extract_amb_clips(
     for clip in cinematic_tape.clips:
         if not hasattr(clip, "sound_set_path"):
             continue
-        
-        # Only extract if it's an intro clip (start_time <= 0)
-        if clip.start_time > 0:
-            continue
 
         clip_name = clip.sound_set_path.split("/")[-1].split(".")[0]
         # Skip if it's the main intro (which we handle separately)
@@ -702,16 +704,26 @@ def extract_amb_clips(
         if output_wav.exists() and output_wav.stat().st_size > 102400:
             continue
 
+        start_s = max(0.0, clip.start_time / 1000.0)
         duration_s = clip.duration / 1000.0
         fade_start = max(0, duration_s - 0.200)
 
-        logger.debug("Extracting cinematic AMB clip: %s (%.3fs)", clip_name, duration_s)
-        run_ffmpeg([
-            "-y", "-i", str(audio_path),
+        logger.debug(
+            "Extracting cinematic AMB clip: %s (start %.3fs, duration %.3fs)",
+            clip_name,
+            start_s,
+            duration_s,
+        )
+        ffmpeg_args = ["-y"]
+        if start_s > 0:
+            ffmpeg_args += ["-ss", f"{start_s:.6f}"]
+        ffmpeg_args += [
+            "-i", str(audio_path),
             "-t", f"{duration_s:.6f}",
             "-af", f"afade=t=out:st={fade_start:.6f}:d=0.200",
-            "-ar", "48000", str(output_wav)
-        ], config=config)
+            "-ar", "48000", str(output_wav),
+        ]
+        run_ffmpeg(ffmpeg_args, config=config)
         count += 1
 
     return count

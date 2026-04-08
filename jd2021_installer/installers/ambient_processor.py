@@ -391,13 +391,13 @@ def _normalize_tapeclock_zero(lua_text: str) -> str:
     return re.sub(r"(\bTapeClock\s*=\s*)\d+", r"\g<1>0", lua_text, count=1)
 
 
-def _inject_intro_amb_soundset_clip(target_dir: Path, codename: str) -> bool:
+def _inject_intro_amb_soundset_clip(target_dir: Path, codename: str, attempt_enabled: bool = True) -> bool:
     """Ensure MainSequence tape triggers intro AMB via SoundSetClip.
 
     Some converted maps end up with empty MainSequence tapes, so intro AMB files
     exist but are never triggered at gameplay start.
     """
-    if not INTRO_AMB_ATTEMPT_ENABLED:
+    if not attempt_enabled:
         logger.debug("Intro AMB SoundSetClip injection disabled for '%s'", codename)
         return False
 
@@ -452,11 +452,9 @@ def _inject_intro_amb_soundset_clip(target_dir: Path, codename: str) -> bool:
         except Exception as exc:
             logger.debug("Could not parse videoStartTime for %s: %s", codename, exc)
 
-    # Keep intro clip start inside the playable timeline window so SoundSetClip
-    # is triggered when the tape starts (critical for some IPK maps).
-    if vst_cap_ms is not None:
-        clip_duration_ms = min(clip_duration_ms, vst_cap_ms)
-    clip_start_ms = -clip_duration_ms
+    # Keep the full intro duration; the tape anchor should be responsible for
+    # aligning playback to t=0, not truncating the generated intro.
+    clip_start_ms = -clip_duration_ms if vst_cap_ms is not None else -clip_duration_ms
 
     tape_candidates = [
         target_dir / "Cinematics" / f"{codename}_MainSequence.tape",
@@ -536,7 +534,7 @@ def _inject_intro_amb_soundset_clip(target_dir: Path, codename: str) -> bool:
     return True
 
 
-def process_ambient_directory(source_dir: Path, target_dir: Path, codename: str) -> int:
+def process_ambient_directory(source_dir: Path, target_dir: Path, codename: str, attempt_enabled: bool = True) -> int:
     """Process all ambient assets (templates and loose CKDs) in a directory."""
     amb_out_dir = _resolve_amb_dir(target_dir)
     amb_out_dir.mkdir(parents=True, exist_ok=True)
@@ -641,7 +639,7 @@ def process_ambient_directory(source_dir: Path, target_dir: Path, codename: str)
     # 3. Inject actors into audio.isc
     inject_ambient_actors(target_dir, codename)
 
-    if not INTRO_AMB_ATTEMPT_ENABLED:
+    if not attempt_enabled:
         silent_count = _silence_intro_amb_wavs(amb_out_dir, codename)
         logger.warning(
             "Intro AMB attempt disabled: forced %d intro AMB WAV(s) to silence for '%s'",
@@ -651,6 +649,6 @@ def process_ambient_directory(source_dir: Path, target_dir: Path, codename: str)
         return count
 
     # 4. Ensure intro AMB is actually triggered from MainSequence.
-    _inject_intro_amb_soundset_clip(target_dir, codename)
+    _inject_intro_amb_soundset_clip(target_dir, codename, attempt_enabled=attempt_enabled)
 
     return count
