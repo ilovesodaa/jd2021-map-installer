@@ -82,6 +82,7 @@ from jd2021_installer.ui.widgets import (
     SyncRefinementWidget,
     LogConsoleWidget,
 )
+from jd2021_installer.ui.widgets.log_console import SUCCESS_LEVEL
 from jd2021_installer.ui.workers.media_workers import (
     SyncRefinementWorker,
 )
@@ -373,15 +374,18 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(0, 0)
 
     def _apply_theme(self) -> None:
-        app = QApplication.instance()
-        if app is None:
+        app_instance = QApplication.instance()
+        if not isinstance(app_instance, QApplication):
             return
+        app = app_instance
 
         project_root = Path(__file__).resolve().parents[2]
         debug_mode = bool(getattr(self._config, "style_debug_mode", False))
         app.setStyleSheet(
             load_theme_stylesheet(self._config.theme, project_root, debug_mode)
         )
+        if hasattr(self, "_log_console") and self._log_console is not None:
+            self._log_console.set_theme_mode(self._config.theme)
         self._update_stylesheet_watch(debug_mode, project_root)
         self._set_panel_map_hints_visible(debug_mode)
 
@@ -904,7 +908,7 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Expanding,
         )
-        right_layout.addWidget(self._preview_widget, stretch=2)
+        right_layout.addWidget(self._preview_widget, stretch=1)
 
         self._sync_hint_label = QLabel("Sync Controls")
         self._sync_hint_label.setObjectName("panelMapHintLabel")
@@ -924,16 +928,16 @@ class MainWindow(QMainWindow):
 
         self._log_console = LogConsoleWidget()
         self._log_console.setObjectName("mainWindowLogConsole")
-        self._log_console.setMinimumHeight(180)
+        self._log_console.setMinimumHeight(30)
         self._log_console.setSizePolicy(
             QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Minimum,
         )
         # Wire root logger to our console
         root_logger = logging.getLogger()
         if self._log_console.log_handler not in root_logger.handlers:
             root_logger.addHandler(self._log_console.log_handler)
-        right_layout.addWidget(self._log_console, stretch=1)
+        right_layout.addWidget(self._log_console, stretch=0)
 
         self._set_panel_map_hints_visible(bool(getattr(self._config, "style_debug_mode", False)))
 
@@ -3275,17 +3279,29 @@ class MainWindow(QMainWindow):
             logger.warning(text)
         elif level <= logging.DEBUG:
             logger.debug(text)
+        elif level == SUCCESS_LEVEL:
+            logger.log(SUCCESS_LEVEL, text)
         else:
             logger.info(text)
 
     def _classify_status_level(self, text: str) -> int:
         lowered = text.strip().lower()
+        # Check for ERROR patterns
         if lowered.startswith("error") or " failed" in lowered or lowered.startswith("failed"):
             return logging.ERROR
+        # Check for WARNING patterns
         if lowered.startswith("warning") or " warning" in lowered:
             return logging.WARNING
+        # Check for DEBUG patterns
         if lowered.startswith("debug"):
             return logging.DEBUG
+        # Check for SUCCESS patterns
+        success_keywords = (
+            "successfully", "completed", "complete", "cleared", "cleaned up",
+            "persisted", "installed", "removed", "processed"
+        )
+        if any(keyword in lowered for keyword in success_keywords):
+            return SUCCESS_LEVEL
         return logging.INFO
 
     def append_log(self, text: str) -> None:

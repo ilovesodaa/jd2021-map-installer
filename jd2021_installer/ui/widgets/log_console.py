@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import QTextEdit, QVBoxLayout, QWidget
 
 
 SUCCESS_LEVEL = 25
+logging.addLevelName(SUCCESS_LEVEL, "SUCCESS")
 
 
 class _Signaller(QObject):
@@ -46,11 +47,23 @@ class LogConsoleWidget(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self._theme_mode = "light"
         self._build_ui()
+        self.set_theme_mode(self._theme_mode)
         
         # Create and connect the logging handler automatically
         self.log_handler = QtLogHandler()
         self.log_handler.signaller.log_emitted.connect(self.append_log)
+
+    def set_theme_mode(self, theme: str) -> None:
+        """Set active theme so log colors remain readable regardless of palette state."""
+        self._theme_mode = "dark" if str(theme).lower() == "dark" else "light"
+
+        default_color = self._line_color(logging.INFO)
+        default_fmt = QTextCharFormat()
+        default_fmt.setForeground(QColor(default_color))
+        self._text_edit.setCurrentCharFormat(default_fmt)
+        self._text_edit.setTextColor(QColor(default_color))
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -97,6 +110,13 @@ class LogConsoleWidget(QWidget):
             return logging.DEBUG
         if lowered.startswith("info:"):
             return logging.INFO
+        # Fallback pattern checks for success keywords
+        success_keywords = (
+            "successfully", "completed", "complete", "cleared", "cleaned up",
+            "persisted", "installed", "removed", "processed"
+        )
+        if any(keyword in lowered for keyword in success_keywords):
+            return SUCCESS_LEVEL
         return level
 
     @staticmethod
@@ -141,11 +161,10 @@ class LogConsoleWidget(QWidget):
         if level == SUCCESS_LEVEL:
             return "#1E8E3E"
 
-        # Light themes need a darker info tone; dark themes benefit from a lighter one.
-        base_lightness = self.palette().base().color().lightness()
-        if base_lightness >= 140:
-            return "#30445F"
-        return "#D9DCE5"
+        # Use explicit theme mode instead of palette heuristics to avoid false detection.
+        if self._theme_mode == "dark":
+            return "#D9DCE5"
+        return "#202C3D"
 
     def append_log(self, text: str, level: int = logging.INFO) -> None:
         """Slot for thread-safe appending to the console."""
