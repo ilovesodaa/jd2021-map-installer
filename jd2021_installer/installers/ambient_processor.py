@@ -48,6 +48,21 @@ def _silence_intro_amb_wavs(amb_out_dir: Path, codename: str) -> int:
     return written
 
 
+def _remove_intro_amb_assets(amb_out_dir: Path) -> int:
+    removed = 0
+    for p in amb_out_dir.glob("*"):
+        if not p.is_file():
+            continue
+        name_low = p.stem.lower()
+        if name_low.startswith("amb_") and "intro" in name_low and p.suffix.lower() in {".wav", ".tpl", ".ilu"}:
+            try:
+                p.unlink()
+                removed += 1
+            except Exception as exc:
+                logger.debug("Failed to remove intro AMB asset '%s': %s", p.name, exc)
+    return removed
+
+
 def _resolve_amb_dir(target_dir: Path) -> Path:
     """Resolve AMB output dir with compatibility for existing lowercase installs."""
     candidates = [
@@ -397,9 +412,7 @@ def _inject_intro_amb_soundset_clip(target_dir: Path, codename: str, attempt_ena
     Some converted maps end up with empty MainSequence tapes, so intro AMB files
     exist but are never triggered at gameplay start.
     """
-    if not attempt_enabled:
-        logger.debug("Intro AMB SoundSetClip injection disabled for '%s'", codename)
-        return False
+    allow_injection = attempt_enabled
 
     amb_dirs = [
         target_dir / "Audio" / "AMB",
@@ -439,6 +452,7 @@ def _inject_intro_amb_soundset_clip(target_dir: Path, codename: str, attempt_ena
     ]
     trk_path = next((p for p in trk_candidates if p.exists()), None)
     vst_cap_ms: int | None = None
+    cutter_cap_ms: int | None = None
     if trk_path is not None:
         try:
             trk_content = trk_path.read_text(encoding="utf-8", errors="replace")
@@ -449,8 +463,19 @@ def _inject_intro_amb_soundset_clip(target_dir: Path, codename: str, attempt_ena
                     vst_cap_ms = max(216, int(round(abs(vst) * 1000.0)))
                     if clip_duration_ms == 432:
                         clip_duration_ms = vst_cap_ms
+
+            sb_match = re.search(r"startBeat\s*=\s*([-+]?\d+)", trk_content)
+            if allow_injection and sb_match:
+                start_idx = abs(int(sb_match.group(1)))
+                marker_vals = [int(v) for v in re.findall(r"VAL\s*=\s*(\d+)", trk_content)]
+                if 0 < start_idx < len(marker_vals):
+                    cutter_cap_ms = max(216, int(round((marker_vals[start_idx] / 48.0) + 85.0)))
+                    clip_duration_ms = cutter_cap_ms
         except Exception as exc:
             logger.debug("Could not parse videoStartTime for %s: %s", codename, exc)
+
+    if cutter_cap_ms is not None:
+        logger.debug("Using cutter-style intro cap from markers for %s: %d ms", codename, cutter_cap_ms)
 
     # Keep the full intro duration; the tape anchor should be responsible for
     # aligning playback to t=0, not truncating the generated intro.
@@ -497,6 +522,10 @@ def _inject_intro_amb_soundset_clip(target_dir: Path, codename: str, attempt_ena
             tape_path.write_text(updated_existing, encoding="utf-8")
             logger.debug("Adjusted existing intro AMB clip timing in %s: start=%d duration=%d", tape_path.name, clip_start_ms, clip_duration_ms)
             return True
+        return False
+
+    if not allow_injection:
+        logger.debug("Intro AMB SoundSetClip injection disabled for '%s' (no existing intro clip to normalize)", codename)
         return False
 
     track_id = zlib.crc32(intro_tpl_name.lower().encode("utf-8")) & 0xFFFFFFFF
@@ -614,14 +643,25 @@ def process_ambient_directory(source_dir: Path, target_dir: Path, codename: str,
             
         base = wav_ckd.name.replace(".wav.ckd", "")
         if base.lower() == generated_intro_base:
-            # Prefer original source intro audio when present, even if a generated
-            # intro already exists from the media step.
+            if not attempt_enabled:
+                logger.debug("Intro AMB disabled: skipping source intro decode for %s", wav_ckd.name)
+                continue
+
+            # Preserve the generated intro if the media step already wrote one.
+            # Replacing it here can reintroduce the source timing gap and make the
+            # intro end early relative to the synced main audio.
+            target_wav = amb_out_dir / f"{base}.wav"
+            if target_wav.exists():
+                logger.debug("Preserving generated intro AMB audio: %s", target_wav.name)
+                continue
+
+            # Otherwise, fall back to the source intro audio when no generated
+            # intro is available yet.
             from jd2021_installer.installers.media_processor import extract_ckd_audio_v1
 
             decoded = extract_ckd_audio_v1(wav_ckd, amb_out_dir)
             if decoded and Path(decoded).exists():
                 decoded_path = Path(decoded)
-                target_wav = amb_out_dir / f"{base}.wav"
                 if decoded_path != target_wav:
                     if target_wav.exists():
                         target_wav.unlink()
@@ -636,17 +676,19 @@ def process_ambient_directory(source_dir: Path, target_dir: Path, codename: str,
                 count += 1
                 logger.debug("Generated synthetic AMB for orphan audio: %s", wav_ckd.name)
 
-    # 3. Inject actors into audio.isc
-    inject_ambient_actors(target_dir, codename)
-
     if not attempt_enabled:
-        silent_count = _silence_intro_amb_wavs(amb_out_dir, codename)
+        removed_count = _remove_intro_amb_assets(amb_out_dir)
+        # Inject non-intro AMB actors only after intro assets are removed.
+        inject_ambient_actors(target_dir, codename)
         logger.warning(
-            "Intro AMB attempt disabled: forced %d intro AMB WAV(s) to silence for '%s'",
-            silent_count,
+            "Intro AMB attempt disabled: removed %d intro AMB asset(s) for '%s'",
+            removed_count,
             codename,
         )
         return count
+
+    # 3. Inject actors into audio.isc
+    inject_ambient_actors(target_dir, codename)
 
     # 4. Ensure intro AMB is actually triggered from MainSequence.
     _inject_intro_amb_soundset_clip(target_dir, codename, attempt_enabled=attempt_enabled)

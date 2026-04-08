@@ -218,9 +218,10 @@ def test_reprocess_audio_recovers_missing_ipk_audio_from_source_tree(
         "jd2021_installer.installers.media_processor.convert_audio",
         lambda audio_path, *_args, **_kwargs: called.setdefault("audio", Path(audio_path)),
     )
+    called_intro: list[tuple] = []
     monkeypatch.setattr(
         "jd2021_installer.installers.media_processor.generate_intro_amb",
-        lambda *_args, **_kwargs: None,
+        lambda *args, **kwargs: called_intro.append((args, kwargs)),
     )
     monkeypatch.setattr(
         "jd2021_installer.installers.media_processor.extract_amb_clips",
@@ -231,3 +232,42 @@ def test_reprocess_audio_recovers_missing_ipk_audio_from_source_tree(
 
     assert map_data.media.audio_path == recovered_audio
     assert called["audio"] == recovered_audio
+    assert not called_intro, "Intro generation should be hard-disabled"
+
+
+def test_reprocess_audio_ipk_does_not_generate_intro_when_audio_present(
+    tmp_path: Path,
+    sample_normalized_data,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "temp_extraction"
+    source_root.mkdir(parents=True, exist_ok=True)
+
+    audio_src = source_root / "mapa.wav"
+    audio_src.write_bytes(b"audio")
+
+    map_data = sample_normalized_data
+    map_data.codename = "mapa"
+    map_data.source_dir = source_root
+    map_data.media.audio_path = audio_src
+    map_data.is_html_source = False
+    map_data.is_jdnext_source = False
+
+    called_intro: list[tuple] = []
+
+    monkeypatch.setattr(
+        "jd2021_installer.installers.media_processor.convert_audio",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "jd2021_installer.installers.media_processor.generate_intro_amb",
+        lambda *args, **_kwargs: called_intro.append(args),
+    )
+    monkeypatch.setattr(
+        "jd2021_installer.installers.media_processor.extract_amb_clips",
+        lambda *_args, **_kwargs: 0,
+    )
+
+    reprocess_audio(map_data, tmp_path / "game_map", a_offset=0.0, config=None)
+
+    assert not called_intro, "Intro generation should be hard-disabled"

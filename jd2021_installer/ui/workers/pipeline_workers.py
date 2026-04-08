@@ -562,7 +562,8 @@ def reprocess_audio(
         ):
             source_is_jdnext = True
 
-    intro_amb_attempt_enabled = source_is_html or source_is_jdnext
+    # User-requested hard disable: do not generate or inject intro AMB.
+    intro_amb_attempt_enabled = False
     
     media = map_data.media
 
@@ -585,28 +586,40 @@ def reprocess_audio(
     ogg_path = target_dir / "audio" / f"{codename}.ogg"
     v_override = map_data.effective_video_start_time
     
-    # Use beat marker data if available for precise pre-roll
-    preroll = None
-    if map_data.music_track and map_data.music_track.markers:
-        from jd2021_installer.parsers.binary_ckd import calculate_marker_preroll
-        preroll = calculate_marker_preroll(
-            map_data.music_track.markers, 
-            map_data.music_track.start_beat
-        )
-        
-    generate_intro_amb(ogg_path, codename, target_dir, a_offset, v_override, preroll, config)
+    if intro_amb_attempt_enabled:
+        # Use beat marker data if available for precise pre-roll
+        preroll = None
+        if map_data.music_track and map_data.music_track.markers:
+            from jd2021_installer.parsers.binary_ckd import calculate_marker_preroll
 
-    # Ensure intro AMB is triggerable even when source cinematic clip data is sparse.
-    try:
-        from jd2021_installer.installers.ambient_processor import _inject_intro_amb_soundset_clip
+            preroll = calculate_marker_preroll(
+                map_data.music_track.markers,
+                map_data.music_track.start_beat,
+                include_calibration=True,
+            )
 
-        _inject_intro_amb_soundset_clip(
-            target_dir,
+        generate_intro_amb(
+            ogg_path,
             codename,
-            attempt_enabled=intro_amb_attempt_enabled,
+            target_dir,
+            a_offset,
+            v_override,
+            preroll,
+            True,
+            config,
         )
-    except Exception as exc:
-        logger.debug("AMB SoundSetClip injection skipped for '%s': %s", codename, exc)
+
+        # Ensure intro AMB is triggerable even when source cinematic clip data is sparse.
+        try:
+            from jd2021_installer.installers.ambient_processor import _inject_intro_amb_soundset_clip
+
+            _inject_intro_amb_soundset_clip(
+                target_dir,
+                codename,
+                attempt_enabled=True,
+            )
+        except Exception as exc:
+            logger.debug("AMB SoundSetClip injection skipped for '%s': %s", codename, exc)
 
     # Ported V1: Extract cinematic AMB clips from the main audio
     if map_data.cinematic_tape:
@@ -666,7 +679,8 @@ def reprocess_audio_readjust(
         ):
             source_is_jdnext = True
 
-    intro_amb_attempt_enabled = source_is_html or source_is_jdnext
+    # User-requested hard disable: do not generate or inject intro AMB.
+    intro_amb_attempt_enabled = False
 
     codename = map_data.codename
     media = map_data.media
@@ -692,36 +706,38 @@ def reprocess_audio_readjust(
     convert_audio(media.audio_path, codename, target_dir, a_offset, config)
 
     ogg_path = target_dir / "audio" / f"{codename}.ogg"
-    preroll = None
-    if map_data.music_track and map_data.music_track.markers:
-        from jd2021_installer.parsers.binary_ckd import calculate_marker_preroll
+    if intro_amb_attempt_enabled:
+        preroll = None
+        if map_data.music_track and map_data.music_track.markers:
+            from jd2021_installer.parsers.binary_ckd import calculate_marker_preroll
 
-        preroll = calculate_marker_preroll(
-            map_data.music_track.markers,
-            map_data.music_track.start_beat,
-        )
+            preroll = calculate_marker_preroll(
+                map_data.music_track.markers,
+                map_data.music_track.start_beat,
+                include_calibration=True,
+            )
 
-    generate_intro_amb(
-        ogg_path,
-        codename,
-        target_dir,
-        a_offset,
-        v_override,
-        preroll,
-        intro_amb_attempt_enabled,
-        config,
-    )
-
-    try:
-        from jd2021_installer.installers.ambient_processor import _inject_intro_amb_soundset_clip
-
-        _inject_intro_amb_soundset_clip(
-            target_dir,
+        generate_intro_amb(
+            ogg_path,
             codename,
-            attempt_enabled=intro_amb_attempt_enabled,
+            target_dir,
+            a_offset,
+            v_override,
+            preroll,
+            True,
+            config,
         )
-    except Exception as exc:
-        logger.debug("AMB SoundSetClip injection skipped for '%s' (readjust): %s", codename, exc)
+
+        try:
+            from jd2021_installer.installers.ambient_processor import _inject_intro_amb_soundset_clip
+
+            _inject_intro_amb_soundset_clip(
+                target_dir,
+                codename,
+                attempt_enabled=True,
+            )
+        except Exception as exc:
+            logger.debug("AMB SoundSetClip injection skipped for '%s' (readjust): %s", codename, exc)
 
     if map_data.cinematic_tape:
         extract_amb_clips(map_data.cinematic_tape, media.audio_path, target_dir, codename, config)
@@ -1706,7 +1722,7 @@ def install_map_to_game(
             map_data.source_dir,
             map_target,
             codename,
-            attempt_enabled=(source_is_html and not _is_jdnext_source_map()),
+            attempt_enabled=False,
         )
         
         if status_callback: status_callback("Decoding MenuArt textures...")

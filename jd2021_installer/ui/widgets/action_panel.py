@@ -115,7 +115,7 @@ class ActionWidget(QWidget):
         secondary = QHBoxLayout()
         secondary.setSpacing(6)
 
-        self._btn_uninstall = WrapButton("Uninstall Map")
+        self._btn_uninstall = WrapButton("Uninstall a Map")
         self._btn_uninstall.setObjectName("btn_uninstall")
         self._btn_uninstall.setMinimumHeight(38)
         self._btn_uninstall.setToolTip("Remove an installed map and its generated cache/index entries")
