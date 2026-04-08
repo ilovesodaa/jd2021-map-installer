@@ -70,6 +70,13 @@ QDoubleSpinBox::down-button:hover {
 	background: #3a4253;
 }
 
+QSpinBox::up-arrow,
+QDoubleSpinBox::up-arrow {
+	image: url(assets/icons/chevron-up-light.svg);
+	width: 8px;
+	height: 8px;
+}
+
 QSpinBox::down-arrow,
 QDoubleSpinBox::down-arrow {
 	image: url(assets/icons/chevron-down-light.svg);

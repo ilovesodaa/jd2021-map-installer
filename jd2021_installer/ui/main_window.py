@@ -2966,7 +2966,7 @@ class MainWindow(QMainWindow):
                 self,
                 "Cleanup Source Files?",
                 "The installation and sync are complete.\n\n"
-                "Would you like to delete the temporary downloaded/extracted source files to save space?",
+                "Would you like to delete the temporary downloaded/extracted source files to save space? You will lose the ability to re-adjust offset if the installed map turns out to be out of sync.",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No
             )

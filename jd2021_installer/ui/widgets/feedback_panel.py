@@ -46,6 +46,25 @@ _STATUS_ICONS = {
     StepStatus.ERROR: "❌",
 }
 
+_STEP_DONE_TEXT = {
+    "Extracting map data...": "Extracted map data",
+    "Parsing CKDs and metadata...": "Parsed CKDs and metadata",
+    "Normalizing assets...": "Normalized assets",
+    "Decoding XMA2 audio...": "Decoded XMA2 audio",
+    "Converting audio (pad/trim)...": "Converted audio (pad/trim)",
+    "Generating intro AMB...": "Generated intro AMB",
+    "Copying video files...": "Copied video files",
+    "Converting dance tapes...": "Converted dance tapes",
+    "Converting karaoke tapes...": "Converted karaoke tapes",
+    "Converting cinematic tapes...": "Converted cinematic tapes",
+    "Processing ambient sounds...": "Processed ambient sounds",
+    "Decoding MenuArt textures...": "Decoded MenuArt textures",
+    "Decoding pictograms...": "Decoded pictograms",
+    "Integrating move data...": "Integrated move data",
+    "Registering in SkuScene...": "Registered in SkuScene",
+    "Finalizing offsets...": "Finalized offsets",
+}
+
 
 class ProgressLogWidget(QWidget):
     """Combined progress checklist, progress bar, and live log panel."""
@@ -107,10 +126,11 @@ class ProgressLogWidget(QWidget):
             logger.warning("Checklist step not found: %s", step_name)
             return
         icon = _STATUS_ICONS[status]
+        step_label = _STEP_DONE_TEXT.get(step_name, step_name) if status == StepStatus.DONE else step_name
         display_text = f"{icon}  "
         if prefix:
             display_text += f"{prefix} "
-        display_text += step_name
+        display_text += step_label
         if suffix:
             display_text += f"  ({suffix})"
         item.setText(display_text)

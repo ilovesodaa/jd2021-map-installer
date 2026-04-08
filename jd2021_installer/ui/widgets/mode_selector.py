@@ -236,8 +236,8 @@ class ModeSelectorWidget(QWidget):
         return self._build_codename_fetch_page(
             input_key="jdnext",
             warning_text=(
-                "JDNext Fetch runs the JDHelper /asset flow with server:jdnext. "
-                "This mode currently uses a single asset HTML response per codename."
+                "Fetch automates acquiring the asset HTML file and downloads. "
+                "Make sure to set your Discord channel link that can access JDHelper."
             ),
             placeholder="e.g. TelephoneALT",
         )
@@ -310,8 +310,7 @@ class ModeSelectorWidget(QWidget):
         lay.setContentsMargins(0, 4, 0, 0)
 
         warn = QLabel(
-            "JDNext HTML mode uses the JDHelper /asset server:jdnext export. "
-            "Only Asset HTML is required."
+            "⚠️ Asset/NoHUD links expire after ~30 minutes! Fetch fresh links if download fails."
         )
         warn.setObjectName("modeHtmlWarningLabel")
         warn.setWordWrap(True)

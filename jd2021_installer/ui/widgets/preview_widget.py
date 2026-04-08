@@ -66,6 +66,8 @@ class _AspectRatioLabel(QLabel):
         super().resizeEvent(event)
 
     def _scaled_pixmap(self) -> QPixmap:
+        if self._base_pixmap.isNull():
+            return QPixmap()
         return self._base_pixmap.scaled(
             self.size(),
             Qt.AspectRatioMode.KeepAspectRatio,
@@ -713,6 +715,9 @@ class PreviewWidget(QWidget):
         if self._playing:
             self.stop(reset_position=False, clear_canvas=False)
         else:
+            if self._ended_naturally:
+                self._position = 0.0
+                self.position_changed.emit(self._position)
             self._relaunch(self._position)
 
     def _seek_relative(self, delta: float) -> None:

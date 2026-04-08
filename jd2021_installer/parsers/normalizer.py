@@ -67,6 +67,14 @@ def _is_effectively_missing_text(value: object) -> bool:
 
 def _is_jdnext_source(source_dir: Path, media: MapMedia) -> bool:
     """Best-effort detection for JDNext-origin maps in normalized sources."""
+    if (source_dir / "jdnext_metadata.json").exists():
+        return True
+
+    # JDNext bundle flows often map mapPackage metadata to monobehaviour/map.json.
+    # Presence of this payload is a strong JDNext indicator for extracted sources.
+    if (source_dir / "monobehaviour" / "map.json").exists():
+        return True
+
     assets_html = source_dir / "assets.html"
     if assets_html.exists():
         try:
@@ -1499,7 +1507,6 @@ def normalize(
     song_desc = _extract_song_desc(source_root_str, codename)
     effective_codename = codename or song_desc.map_name
     _apply_jdnext_metadata_songdesc_overrides(source_root_str, song_desc)
-    _apply_jdnext_songdb_cache_overrides(effective_codename, song_desc, music_track)
     dance_tape = _extract_dance_tape(source_root_str, codename)
     karaoke_tape = _extract_karaoke_tape(source_root_str, codename)
     cinematic_tape = _extract_cinematic_tape(source_root_str, codename)
@@ -1544,6 +1551,8 @@ def normalize(
 
     # 5. Calculate effective video start time (with V1-style fallbacks)
     is_jdnext_source = _is_jdnext_source(source_dir, media)
+    if is_jdnext_source:
+        _apply_jdnext_songdb_cache_overrides(effective_codename, song_desc, music_track)
 
     sync_data = normalize_sync(
         music_track, 
