@@ -12,6 +12,7 @@ from jd2021_installer.extractors.web_playwright import (
     _classify_urls,
     _extract_embed_fields_from_html,
     _has_valid_cdn_links,
+    _is_valid_webm_file,
     _parse_jdnext_button_payloads,
     download_files,
 )
@@ -429,6 +430,29 @@ def test_download_files_retries_when_nohud_webm_is_corrupt(tmp_path, monkeypatch
     assert "TestMap_ULTRA.hd.webm" in downloaded
     assert fake_session.calls == 2
     assert (tmp_path / "TestMap_ULTRA.hd.webm").read_bytes().startswith(b"\x1a\x45\xdf\xa3")
+
+
+def test_is_valid_webm_file_uses_cached_result_for_unchanged_file(tmp_path, monkeypatch):
+    probe_calls = {"count": 0}
+
+    class FakeProc:
+        returncode = 0
+        stderr = ""
+
+    def _fake_run(*args, **kwargs):
+        probe_calls["count"] += 1
+        return FakeProc()
+
+    monkeypatch.setattr("subprocess.run", _fake_run)
+
+    webm = tmp_path / "cached_nohud.webm"
+    webm.write_bytes(b"\x1a\x45\xdf\xa3" + b"v" * 5000)
+
+    cfg = AppConfig(download_timeout_s=5)
+
+    assert _is_valid_webm_file(webm, cfg) is True
+    assert _is_valid_webm_file(webm, cfg) is True
+    assert probe_calls["count"] == 1
 
 
 def test_classify_urls_supports_jdnext_mappackage_opus_and_private_video():

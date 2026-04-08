@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import os
 import re
 import shutil
 import struct
@@ -954,34 +955,35 @@ class BatchInstallWorker(QObject):
                 if not folder.is_dir():
                     return False
 
-                has_ckd = any(folder.rglob("*.ckd"))
-                if has_ckd:
-                    return True
-
                 has_audio = False
-                for pattern in ("*.ogg", "*.wav", "*.wav.ckd"):
-                    for p in folder.rglob(pattern):
-                        low_name = p.name.lower()
-                        low_path = str(p).lower().replace("\\", "/")
-                        if "audiopreview" in low_name:
-                            continue
-                        if "/amb/" in low_path or "/autodance/" in low_path:
-                            continue
-                        if low_name.startswith("amb_"):
-                            continue
-                        has_audio = True
-                        break
-                    if has_audio:
-                        break
+                has_video = False
+                has_musictrack = False
 
-                has_video = any(
-                    p.is_file()
-                    and "mappreview" not in p.name.lower()
-                    and "videopreview" not in p.name.lower()
-                    for p in folder.rglob("*.webm")
-                )
+                try:
+                    for root, _dirs, files in os.walk(folder):
+                        for filename in files:
+                            low_name = filename.lower()
 
-                has_musictrack = any(folder.rglob("*musictrack*.tpl.ckd"))
+                            # Keep legacy behavior: any CKD in the tree qualifies as prepared.
+                            if low_name.endswith(".ckd"):
+                                return True
+
+                            if not has_audio and (low_name.endswith(".ogg") or low_name.endswith(".wav")):
+                                low_path = str(Path(root) / filename).lower().replace("\\", "/")
+                                if "audiopreview" not in low_name and "/amb/" not in low_path and "/autodance/" not in low_path and not low_name.startswith("amb_"):
+                                    has_audio = True
+
+                            if not has_video and low_name.endswith(".webm"):
+                                if "mappreview" not in low_name and "videopreview" not in low_name:
+                                    has_video = True
+
+                            if not has_musictrack and low_name.endswith(".tpl.ckd") and "musictrack" in low_name:
+                                has_musictrack = True
+
+                        if has_audio and has_video and has_musictrack:
+                            return True
+                except OSError:
+                    return False
 
                 return has_audio and has_video and has_musictrack
 

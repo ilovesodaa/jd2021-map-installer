@@ -58,6 +58,7 @@ _SEL_MESSAGE_LIST_ITEMS = 'li[id^="chat-messages-"]'
 # CDN link validation patterns
 _UBI_CDN_HOST_PATTERN = re.compile(r"https?://[^\s\"']*(?:cdn\.ubi\.com|cdn\.ubisoft\.cn)", re.IGNORECASE)
 _MAP_PATH_PATTERN = re.compile(r"/(?:public|private)/(?:map|jdnext/maps)/", re.IGNORECASE)
+_WEBM_VALIDATION_CACHE: Dict[str, tuple[int, int, bool]] = {}
 
 
 def _is_browser_closed_error(exc: BaseException) -> bool:
@@ -167,18 +168,34 @@ def _is_valid_webm_file(path: Path, config: AppConfig) -> bool:
     EBML magic check if ffmpeg is unavailable.
     """
     try:
-        if not path.exists() or path.stat().st_size <= 1024:
+        if not path.exists():
+            return False
+        st = path.stat()
+        if st.st_size <= 1024:
             return False
     except OSError:
         return False
 
     try:
+        cache_key = str(path.resolve())
+    except OSError:
+        cache_key = str(path)
+
+    cached = _WEBM_VALIDATION_CACHE.get(cache_key)
+    if cached and cached[0] == st.st_size and cached[1] == st.st_mtime_ns:
+        return cached[2]
+
+    def _cache_result(result: bool) -> bool:
+        _WEBM_VALIDATION_CACHE[cache_key] = (st.st_size, st.st_mtime_ns, result)
+        return result
+
+    try:
         with open(path, "rb") as fh:
             header = fh.read(4)
         if header != b"\x1a\x45\xdf\xa3":
-            return False
+            return _cache_result(False)
     except OSError:
-        return False
+        return _cache_result(False)
 
     cmd = [
         config.ffmpeg_path,
@@ -197,16 +214,16 @@ def _is_valid_webm_file(path: Path, config: AppConfig) -> bool:
             check=False,
         )
         if proc.returncode != 0:
-            return False
+            return _cache_result(False)
         if proc.stderr and proc.stderr.strip():
-            return False
-        return True
+            return _cache_result(False)
+        return _cache_result(True)
     except (FileNotFoundError, OSError):
         logger.debug("ffmpeg not available for integrity check; using header-only validation.")
-        return True
+        return _cache_result(True)
     except subprocess.TimeoutExpired:
         logger.debug("Timed out while validating webm integrity for %s", path.name)
-        return False
+        return _cache_result(False)
 
 
 def _download_with_powershell(url: str, target: Path, timeout_s: int) -> bool:
@@ -436,6 +453,11 @@ def _classify_urls(
             tier = m.group(1).upper()
             variant = m.group(2).lower()
             jdnext_variant = variant
+            # Some mirrored/private links omit '/jdnext/maps/' but still expose
+            # JDNext-style video_*.(hd|vp8|vp9).webm variants. Treat VP9 gameplay
+            # variants as JDNext-compatible so fallback_compatible_down is applied.
+            if variant == "vp9":
+                is_jdnext_url_set = True
             # JDNext tier mapping:
             # - *_HD tiers use .hd variants
             # - non-HD tiers use .vp9 variants (later converted to VP8 on install)

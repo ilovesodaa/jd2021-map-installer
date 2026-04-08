@@ -997,8 +997,18 @@ class MainWindow(QMainWindow):
         self._set_status(f"Mode: {mode}")
 
     def _on_target_selected(self, target: str) -> None:
-        self._current_target = target
-        logger.debug("Target selected: %s", target)
+        normalized_target = target.strip()
+        previous_target = (self._current_target or "").strip()
+
+        # Avoid duplicate events from overlapping UI signals.
+        if normalized_target == previous_target:
+            return
+
+        self._current_target = normalized_target or None
+        if normalized_target:
+            logger.debug("Target selected: %s", normalized_target)
+        elif previous_target:
+            logger.debug("Target cleared")
         self._set_preview_controls_ready(False)
 
     def _on_game_dir_changed(self, path: str) -> None:

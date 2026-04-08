@@ -271,18 +271,24 @@ def auto_convert_tapes(source_dir: Path, target_dir: Path, codename: str) -> int
     """
     converted = 0
 
+    all_files = [p for p in source_dir.rglob("*") if p.is_file()]
+    ckd_files = [p for p in all_files if p.name.lower().endswith(".ckd")]
+
     dance_candidates = [
-        p for p in source_dir.rglob("*dtape*.ckd")
-        if "adtape" not in p.name.lower()
+        p for p in ckd_files
+        if "dtape" in p.name.lower() and "adtape" not in p.name.lower()
     ]
     karaoke_candidates = [
-        p for p in source_dir.rglob("*ktape*.ckd")
+        p for p in ckd_files
+        if "ktape" in p.name.lower()
     ]
     cinematic_candidates = [
-        p for p in source_dir.rglob("*mainsequence*tape*.ckd")
+        p for p in ckd_files
+        if "mainsequence" in p.name.lower() and "tape" in p.name.lower()
     ]
     beats_candidates = [
-        p for p in source_dir.rglob("*btape*.ckd")
+        p for p in ckd_files
+        if "btape" in p.name.lower()
     ]
 
     dance_src = _pick_best_tape(dance_candidates, codename, ["tml_dance", "dance"])
@@ -292,8 +298,8 @@ def auto_convert_tapes(source_dir: Path, target_dir: Path, codename: str) -> int
     else:
         # Manual/IPK maps can already ship plain .dtape (non-CKD).
         loose_dance_candidates = [
-            p for p in source_dir.rglob("*dtape*")
-            if p.is_file()
+            p for p in all_files
+            if "dtape" in p.name.lower()
             and "adtape" not in p.name.lower()
             and ".ckd" not in p.name.lower()
         ]
@@ -312,8 +318,8 @@ def auto_convert_tapes(source_dir: Path, target_dir: Path, codename: str) -> int
     else:
         # Manual/IPK maps can already ship plain .ktape (non-CKD).
         loose_karaoke_candidates = [
-            p for p in source_dir.rglob("*ktape*")
-            if p.is_file() and ".ckd" not in p.name.lower()
+            p for p in all_files
+            if "ktape" in p.name.lower() and ".ckd" not in p.name.lower()
         ]
         loose_karaoke_src = _pick_best_tape(loose_karaoke_candidates, codename, ["tml_karaoke", "karaoke"])
         if loose_karaoke_src and _copy_loose_tape(

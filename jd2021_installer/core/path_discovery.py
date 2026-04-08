@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -18,6 +19,21 @@ _SCAN_SKIP_DIRS = {
 
 _TARGET_FILE = "SkuScene_Maps_PC_All.isc"
 _TARGET_SUBPATH = ("data", "World", "SkuScenes", _TARGET_FILE)
+_DEEP_SCAN_CACHE_TTL_S = 600.0
+_DEEP_SCAN_CACHE: dict[Path, tuple[float, Optional[Path]]] = {}
+
+
+def clear_deep_scan_cache(search_root: Optional[Path] = None) -> None:
+    """Clear cached deep-scan results.
+
+    Args:
+        search_root: Optional root to clear a single cache entry. If omitted,
+            clears all cached entries.
+    """
+    if search_root is None:
+        _DEEP_SCAN_CACHE.clear()
+        return
+    _DEEP_SCAN_CACHE.pop(search_root.resolve(), None)
 
 
 def is_valid_game_dir(candidate: Path) -> bool:
@@ -70,6 +86,13 @@ def deep_scan_for_game_dir(search_root: Path) -> Optional[Path]:
     Returns:
         The confirmed Game Root Path, or None if not found.
     """
+    cache_key = search_root.resolve()
+    now = time.monotonic()
+    cached = _DEEP_SCAN_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < _DEEP_SCAN_CACHE_TTL_S:
+        logger.debug("Using cached deep-scan result for %s", search_root)
+        return cached[1]
+
     logger.debug("Starting deep scan for JD2021 game directory in %s", search_root)
     
     try:
@@ -85,11 +108,13 @@ def deep_scan_for_game_dir(search_root: Path) -> Optional[Path]:
                 if len(parts) >= 4 and parts[-4:] == tuple(_TARGET_SUBPATH):
                     game_dir = found_path.parents[3]
                     logger.debug("Deep scan found JD2021 game directory at: %s", game_dir)
+                    _DEEP_SCAN_CACHE[cache_key] = (now, game_dir)
                     return game_dir
     except (OSError, PermissionError) as e:
         logger.debug("Deep scan interrupted by permissions or IO error: %s", e)
         
     logger.debug("Deep scan complete. No JD2021 game directory found.")
+    _DEEP_SCAN_CACHE[cache_key] = (now, None)
     return None
 
 
