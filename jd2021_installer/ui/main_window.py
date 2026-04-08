@@ -97,6 +97,72 @@ from jd2021_installer.ui.workers.pipeline_workers import (
 
 logger = logging.getLogger("jd2021.ui.main_window")
 
+_SETTINGS_CHANGE_LABELS: dict[str, str] = {
+    "skip_preflight": "Skip pre-flight checks",
+    "suppress_offset_notification": "Offset reminder",
+    "cleanup_behavior": "After install cleanup",
+    "locked_status_behavior": "Song unlock status",
+    "show_preflight_success_popup": "Pre-flight success popup",
+    "show_install_summary_popup": "Install summary popup",
+    "show_quickstart_on_launch": "Quick-start on launch",
+    "log_detail_level": "Log detail level",
+    "theme": "Theme",
+    "enforce_min_window_size": "Enforce minimum window size",
+    "min_window_width": "Minimum window width",
+    "min_window_height": "Minimum window height",
+    "show_window_size_overlay": "Window size overlay",
+    "style_debug_mode": "Style debug mode",
+    "video_quality": "Default download quality",
+    "ffmpeg_hwaccel": "FFmpeg acceleration",
+    "vp9_handling_mode": "VP9 handling",
+    "preview_video_mode": "Preview source",
+    "discord_channel_url": "Discord channel URL",
+    "download_timeout_s": "Download timeout",
+    "max_retries": "Download retries",
+    "retry_base_delay_s": "Retry base delay",
+    "inter_request_delay_s": "Inter-request delay",
+    "fetch_login_timeout_s": "Fetch login timeout",
+    "fetch_bot_response_timeout_s": "Fetch bot response timeout",
+    "window_size_overlay_timeout_ms": "Window size overlay timeout",
+    "preview_fps": "Preview FPS",
+    "preview_startup_compensation_ms": "Preview startup compensation",
+    "preview_only_audio_offset_ms": "Audio-only preview offset",
+    "audio_preview_fade_s": "Audio preview fade",
+}
+
+_SETTINGS_CHANGE_ORDER: tuple[str, ...] = (
+    "skip_preflight",
+    "suppress_offset_notification",
+    "cleanup_behavior",
+    "locked_status_behavior",
+    "show_preflight_success_popup",
+    "show_install_summary_popup",
+    "show_quickstart_on_launch",
+    "log_detail_level",
+    "theme",
+    "enforce_min_window_size",
+    "min_window_width",
+    "min_window_height",
+    "show_window_size_overlay",
+    "style_debug_mode",
+    "video_quality",
+    "ffmpeg_hwaccel",
+    "vp9_handling_mode",
+    "preview_video_mode",
+    "discord_channel_url",
+    "download_timeout_s",
+    "max_retries",
+    "retry_base_delay_s",
+    "inter_request_delay_s",
+    "fetch_login_timeout_s",
+    "fetch_bot_response_timeout_s",
+    "window_size_overlay_timeout_ms",
+    "preview_fps",
+    "preview_startup_compensation_ms",
+    "preview_only_audio_offset_ms",
+    "audio_preview_fade_s",
+)
+
 _READY_STATUS_VALUE = 3
 # Editable status meaning labels live in code (not installer_settings.json).
 # Add or change entries here as new statuses are understood.
@@ -248,6 +314,36 @@ class MainWindow(QMainWindow):
                 json.dump(data, f, indent=4)
         except Exception as e:
             logger.error("Failed to save settings: %s", e)
+
+    @staticmethod
+    def _config_snapshot(config: AppConfig) -> dict:
+        # Compare JSON-safe values so Path and optional fields are stable.
+        if hasattr(config, "model_dump"):
+            data = config.model_dump(mode="json")
+        else:
+            data = json.loads(config.json())
+        return dict(data)
+
+    @staticmethod
+    def _format_setting_value(value: object) -> str:
+        if isinstance(value, bool):
+            return "enabled" if value else "disabled"
+        if value is None:
+            return "none"
+        return str(value)
+
+    def _summarize_settings_changes(self, old_snapshot: dict, new_snapshot: dict) -> list[str]:
+        changes: list[str] = []
+        for key in _SETTINGS_CHANGE_ORDER:
+            old_value = old_snapshot.get(key)
+            new_value = new_snapshot.get(key)
+            if old_value == new_value:
+                continue
+            label = _SETTINGS_CHANGE_LABELS.get(key, key)
+            changes.append(
+                f"{label}: {self._format_setting_value(old_value)} -> {self._format_setting_value(new_value)}"
+            )
+        return changes
 
     def _apply_window_size_config(self, force_to_configured_size: bool = False) -> None:
         if getattr(self._config, "enforce_min_window_size", True):
@@ -1336,10 +1432,16 @@ class MainWindow(QMainWindow):
 
     def _on_settings(self) -> None:
         from jd2021_installer.ui.widgets.settings_dialog import SettingsDialog
+
+        old_snapshot = self._config_snapshot(self._config)
         dialog = SettingsDialog(self._config, self)
         if dialog.exec():
-            self._config = dialog.get_config()
-            self._config.log_detail_level = apply_log_detail(self._config.log_detail_level)
+            new_config = dialog.get_config()
+            new_config.log_detail_level = apply_log_detail(new_config.log_detail_level)
+            new_snapshot = self._config_snapshot(new_config)
+            changes = self._summarize_settings_changes(old_snapshot, new_snapshot)
+
+            self._config = new_config
             self._apply_window_size_config(force_to_configured_size=True)
             self._apply_theme()
             self._refresh_media_tool_configuration(persist=False)
@@ -1347,7 +1449,19 @@ class MainWindow(QMainWindow):
             if not getattr(self._config, "show_window_size_overlay", True):
                 self._hide_size_overlay()
             self._config_panel.set_video_quality(self._config.video_quality)
-            self.append_log(f"Logging detail profile set to '{self._config.log_detail_level}'.")
+
+            if changes:
+                self.append_log("Settings changed: " + "; ".join(changes))
+            else:
+                self.append_log("Settings changed: none.")
+
+            old_log_detail = str(old_snapshot.get("log_detail_level", "")).strip() or "unknown"
+            new_log_detail = str(new_snapshot.get("log_detail_level", "")).strip() or "unknown"
+            if old_log_detail != new_log_detail:
+                self.append_log(
+                    f"Logging detail profile changed: '{old_log_detail}' -> '{new_log_detail}'."
+                )
+
             self._set_status("Settings saved.")
 
     def _on_readjust(self) -> None:

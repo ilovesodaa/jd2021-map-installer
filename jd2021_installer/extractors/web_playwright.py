@@ -419,9 +419,12 @@ def _classify_urls(
     audio_url: Optional[str] = None
     scene_zips: Dict[str, str] = {}
     other_urls: List[str] = []
+    is_jdnext_url_set = False
 
     for u in urls:
         u_low = u.lower()
+        if "/jdnext/maps/" in u_low:
+            is_jdnext_url_set = True
         if any(token in u_low for token in ("audiopreview", "videopreview", "mappreview")):
             continue
 
@@ -496,7 +499,7 @@ def _classify_urls(
 
         # Compatibility mode requested by user: avoid VP9 tiers entirely and
         # pick the next compatible HD tier down.
-        if vp9_mode == "fallback_compatible_down":
+        if vp9_mode == "fallback_compatible_down" and is_jdnext_url_set:
             start_idx = tiers.index(selected_tier)
             if not selected_is_hd:
                 start_idx = min(start_idx + 1, len(tiers) - 1)

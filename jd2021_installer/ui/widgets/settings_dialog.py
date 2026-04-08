@@ -23,11 +23,13 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressDialog,
     QSpinBox,
+    QDoubleSpinBox,
     QWidget,
     QSizePolicy,
 )
 
 from jd2021_installer.core.config import AppConfig
+from jd2021_installer.core.clean_data import clean_game_data
 from jd2021_installer.core.localization_update import (
     resolve_console_save_path,
     update_console_localization,
@@ -324,6 +326,135 @@ class SettingsDialog(QDialog):
 
         tabs.addTab(tab_media, "Media")
 
+        # ----- Advanced tab -----
+        tab_advanced = QWidget()
+        advanced_layout = QVBoxLayout(tab_advanced)
+        advanced_layout.setContentsMargins(10, 10, 10, 10)
+        advanced_layout.setSpacing(10)
+
+        advanced_note = QLabel(
+            "Advanced runtime behavior for downloads and preview timing. "
+            "Core engine constants and binary path overrides remain JSON-only."
+        )
+        advanced_note.setWordWrap(True)
+        advanced_layout.addWidget(advanced_note)
+
+        advanced_form = QFormLayout()
+        advanced_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        advanced_form.setHorizontalSpacing(12)
+        advanced_form.setVerticalSpacing(10)
+
+        self.spin_download_timeout = QSpinBox()
+        self.spin_download_timeout.setRange(15, 3600)
+        self.spin_download_timeout.setValue(int(getattr(self._config, "download_timeout_s", 600)))
+        self.spin_download_timeout.setSuffix(" s")
+        self.spin_download_timeout.setToolTip(
+            "Maximum wait time for network downloads before timeout."
+        )
+        advanced_form.addRow("Download timeout:", self.spin_download_timeout)
+
+        self.spin_max_retries = QSpinBox()
+        self.spin_max_retries.setRange(0, 12)
+        self.spin_max_retries.setValue(int(getattr(self._config, "max_retries", 3)))
+        self.spin_max_retries.setToolTip(
+            "How many retry attempts are allowed for failed downloads."
+        )
+        advanced_form.addRow("Download retries:", self.spin_max_retries)
+
+        self.spin_retry_base_delay = QSpinBox()
+        self.spin_retry_base_delay.setRange(0, 60)
+        self.spin_retry_base_delay.setValue(int(getattr(self._config, "retry_base_delay_s", 2)))
+        self.spin_retry_base_delay.setSuffix(" s")
+        self.spin_retry_base_delay.setToolTip(
+            "Base delay used for retry backoff after failed network requests."
+        )
+        advanced_form.addRow("Retry base delay:", self.spin_retry_base_delay)
+
+        self.spin_inter_request_delay = QDoubleSpinBox()
+        self.spin_inter_request_delay.setRange(0.0, 20.0)
+        self.spin_inter_request_delay.setDecimals(2)
+        self.spin_inter_request_delay.setSingleStep(0.1)
+        self.spin_inter_request_delay.setValue(float(getattr(self._config, "inter_request_delay_s", 1.5)))
+        self.spin_inter_request_delay.setSuffix(" s")
+        self.spin_inter_request_delay.setToolTip(
+            "Delay inserted between sequential download requests."
+        )
+        advanced_form.addRow("Inter-request delay:", self.spin_inter_request_delay)
+
+        self.spin_fetch_login_timeout = QSpinBox()
+        self.spin_fetch_login_timeout.setRange(30, 1800)
+        self.spin_fetch_login_timeout.setValue(int(getattr(self._config, "fetch_login_timeout_s", 300)))
+        self.spin_fetch_login_timeout.setSuffix(" s")
+        self.spin_fetch_login_timeout.setToolTip(
+            "How long Fetch mode waits for Discord login before giving up."
+        )
+        advanced_form.addRow("Fetch login timeout:", self.spin_fetch_login_timeout)
+
+        self.spin_fetch_bot_timeout = QSpinBox()
+        self.spin_fetch_bot_timeout.setRange(10, 600)
+        self.spin_fetch_bot_timeout.setValue(int(getattr(self._config, "fetch_bot_response_timeout_s", 60)))
+        self.spin_fetch_bot_timeout.setSuffix(" s")
+        self.spin_fetch_bot_timeout.setToolTip(
+            "How long Fetch mode waits for bot links before timing out."
+        )
+        advanced_form.addRow("Fetch bot response timeout:", self.spin_fetch_bot_timeout)
+
+        self.spin_overlay_timeout = QSpinBox()
+        self.spin_overlay_timeout.setRange(200, 6000)
+        self.spin_overlay_timeout.setSingleStep(100)
+        self.spin_overlay_timeout.setValue(int(getattr(self._config, "window_size_overlay_timeout_ms", 1100)))
+        self.spin_overlay_timeout.setSuffix(" ms")
+        self.spin_overlay_timeout.setToolTip(
+            "How long the floating window size indicator remains visible after resize stops."
+        )
+        advanced_form.addRow("Window size overlay timeout:", self.spin_overlay_timeout)
+
+        self.spin_preview_fps = QSpinBox()
+        self.spin_preview_fps.setRange(12, 120)
+        self.spin_preview_fps.setValue(int(getattr(self._config, "preview_fps", 25)))
+        self.spin_preview_fps.setToolTip(
+            "Default preview FPS when source metadata does not force a specific value."
+        )
+        advanced_form.addRow("Preview FPS:", self.spin_preview_fps)
+
+        self.spin_preview_startup_comp = QDoubleSpinBox()
+        self.spin_preview_startup_comp.setRange(0.0, 1000.0)
+        self.spin_preview_startup_comp.setDecimals(1)
+        self.spin_preview_startup_comp.setSingleStep(5.0)
+        self.spin_preview_startup_comp.setValue(float(getattr(self._config, "preview_startup_compensation_ms", 100.0)))
+        self.spin_preview_startup_comp.setSuffix(" ms")
+        self.spin_preview_startup_comp.setToolTip(
+            "Playback startup compensation applied when preview begins."
+        )
+        advanced_form.addRow("Preview startup compensation:", self.spin_preview_startup_comp)
+
+        self.spin_preview_audio_only_offset = QDoubleSpinBox()
+        self.spin_preview_audio_only_offset.setRange(-2000.0, 2000.0)
+        self.spin_preview_audio_only_offset.setDecimals(1)
+        self.spin_preview_audio_only_offset.setSingleStep(5.0)
+        self.spin_preview_audio_only_offset.setValue(float(getattr(self._config, "preview_only_audio_offset_ms", -125.0)))
+        self.spin_preview_audio_only_offset.setSuffix(" ms")
+        self.spin_preview_audio_only_offset.setToolTip(
+            "Offset nudge used when previewing audio-only mode."
+        )
+        advanced_form.addRow("Audio-only preview offset:", self.spin_preview_audio_only_offset)
+
+        self.spin_audio_preview_fade = QDoubleSpinBox()
+        self.spin_audio_preview_fade.setRange(0.0, 10.0)
+        self.spin_audio_preview_fade.setDecimals(2)
+        self.spin_audio_preview_fade.setSingleStep(0.1)
+        self.spin_audio_preview_fade.setValue(float(getattr(self._config, "audio_preview_fade_s", 2.0)))
+        self.spin_audio_preview_fade.setSuffix(" s")
+        self.spin_audio_preview_fade.setToolTip(
+            "Fade duration used for generated audio preview assets."
+        )
+        advanced_form.addRow("Audio preview fade:", self.spin_audio_preview_fade)
+
+        advanced_layout.addLayout(advanced_form)
+        advanced_layout.addStretch()
+
+        tabs.addTab(tab_advanced, "Advanced")
+
         # ----- Integrations tab -----
         tab_integrations = QWidget()
         integrations_layout = QVBoxLayout(tab_integrations)
@@ -361,6 +492,14 @@ class SettingsDialog(QDialog):
         songdb_row.addWidget(self.btn_update_songdb)
         songdb_row.addStretch()
         integrations_layout.addLayout(songdb_row)
+
+        clean_data_row = QHBoxLayout()
+        clean_data_row.addWidget(QLabel("Reset installed custom maps and caches:"))
+        self.btn_clean_data = QPushButton("Clean Game Data...")
+        self.btn_clean_data.clicked.connect(self._on_clean_game_data)
+        clean_data_row.addWidget(self.btn_clean_data)
+        clean_data_row.addStretch()
+        integrations_layout.addLayout(clean_data_row)
 
         integrations_layout.addStretch()
 
@@ -406,6 +545,17 @@ class SettingsDialog(QDialog):
         self._config.vp9_handling_mode = str(self.combo_vp9_mode.currentData())
         self._config.preview_video_mode = self._combo_value(self.combo_preview_mode)
         self._config.discord_channel_url = self.txt_discord_url.text().strip()
+        self._config.download_timeout_s = self.spin_download_timeout.value()
+        self._config.max_retries = self.spin_max_retries.value()
+        self._config.retry_base_delay_s = self.spin_retry_base_delay.value()
+        self._config.inter_request_delay_s = self.spin_inter_request_delay.value()
+        self._config.fetch_login_timeout_s = self.spin_fetch_login_timeout.value()
+        self._config.fetch_bot_response_timeout_s = self.spin_fetch_bot_timeout.value()
+        self._config.window_size_overlay_timeout_ms = self.spin_overlay_timeout.value()
+        self._config.preview_fps = self.spin_preview_fps.value()
+        self._config.preview_startup_compensation_ms = self.spin_preview_startup_comp.value()
+        self._config.preview_only_audio_offset_ms = self.spin_preview_audio_only_offset.value()
+        self._config.audio_preview_fade_s = self.spin_audio_preview_fade.value()
         
         self.accept()
 
@@ -534,6 +684,71 @@ class SettingsDialog(QDialog):
             f"Output: {result.output_path}\n"
             f"{backup_line}"
             "If this cache is missing later, installer fallback remains active.",
+        )
+
+    def _on_clean_game_data(self) -> None:
+        if not self._config.game_directory:
+            QMessageBox.warning(
+                self,
+                "Game Directory Required",
+                "Set your JD2021 game directory first, then run Clean Game Data.",
+            )
+            return
+
+        confirm = QMessageBox.warning(
+            self,
+            "Confirm Game Data Cleanup",
+            "This will remove all installed maps from your game cooked map CACHE, MAPS directory, SkuScene entries, \n\n"
+            "Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        progress = QProgressDialog("Cleaning game data...", "", 0, 0, self)
+        progress.setWindowTitle("Clean Game Data")
+        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        progress.setMinimumDuration(0)
+        progress.setCancelButton(None)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.show()
+        QApplication.processEvents()
+
+        try:
+            result = clean_game_data(Path(self._config.game_directory))
+            logger.info(
+                "Clean data completed: game_dir=%s baseline_source=%s original_maps=%d removed_maps=%d removed_sku=%d removed_cooked=%d",
+                result.game_directory,
+                result.baseline_source,
+                result.original_maps_count,
+                result.removed_custom_maps,
+                result.removed_skuscene_entries,
+                result.removed_cooked_cache_maps,
+            )
+        except Exception as exc:
+            logger.exception("Clean game data failed: %s", exc)
+            QMessageBox.critical(
+                self,
+                "Clean Game Data Failed",
+                f"Could not clean game data:\n{exc}",
+            )
+            return
+        finally:
+            progress.close()
+
+        source_line = f"\nBaseline source: {result.baseline_source}"
+        QMessageBox.information(
+            self,
+            "Clean Game Data Complete",
+            "Cleanup completed successfully.\n\n"
+            f"Game directory: {result.game_directory}\n"
+            f"Baseline maps tracked: {result.original_maps_count}\n"
+            f"Custom map folders removed: {result.removed_custom_maps}\n"
+            f"SkuScene entries removed: {result.removed_skuscene_entries}\n"
+            f"Cooked cache map folders removed: {result.removed_cooked_cache_maps}"
+            f"{source_line}",
         )
 
     def get_config(self) -> AppConfig:

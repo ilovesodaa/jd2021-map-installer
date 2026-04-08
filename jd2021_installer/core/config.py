@@ -66,7 +66,7 @@ class AppConfig(BaseModel):
     audio_preview_fade_s: float = 2.0
 
     # Discord Fetch Mode (replaces Node.js JDH_Downloader)
-    discord_channel_url: str = "https://discord.com/channels/0000000000000000000/0000000000000000000"
+    discord_channel_url: str = ""
     browser_profile_dir: Path = Path("./.browser-profile")
     fetch_login_timeout_s: int = 300
     fetch_bot_response_timeout_s: int = 60

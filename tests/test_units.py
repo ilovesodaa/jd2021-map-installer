@@ -313,10 +313,10 @@ def test_copy_video_force_reencode_even_if_vp9(monkeypatch, tmp_path: Path):
     assert dst.exists()
 
 
-def test_classify_urls_prefers_ultra_then_ultra_hd():
+def test_classify_urls_non_jdnext_keeps_requested_tier_under_vp9_compat_mode():
     urls = [
         "https://example.com/private/map/x/video_ULTRA.hd.webm/hash.webm",
-        "https://example.com/private/map/x/video_ULTRA.vp9.webm/hash.webm",
+        "https://example.com/private/map/x/video_ULTRA.vp8.webm/hash.webm",
         "https://example.com/private/map/x/video_HIGH.hd.webm/hash.webm",
     ]
 
@@ -324,8 +324,9 @@ def test_classify_urls_prefers_ultra_then_ultra_hd():
     selected = classified.get("video")
 
     assert isinstance(selected, str)
-    # Default vp9 mode is fallback_compatible_down for non-HD selections.
-    assert "video_HIGH.hd.webm" in selected
+    # VP9 compatibility downgrade must remain JDNext-only.
+    assert "video_ULTRA." in selected
+    assert "video_HIGH." not in selected
 
 
 def test_classify_urls_ignores_jdnext_vp9_variants():
