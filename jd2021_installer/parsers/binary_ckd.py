@@ -520,7 +520,7 @@ def parse_cinematic_tape(data: bytes, map_name: str) -> CinematicTape:
                 break  # Unknown class, break to avoid desync
 
     except Exception as e:
-        logger.warning("binary_ckd: partial/failed parse on cinematic tape: %s", e)
+        logger.debug("binary_ckd: partial/failed parse on cinematic tape: %s", e)
 
     return CinematicTape(clips=clips, map_name=map_name)
 

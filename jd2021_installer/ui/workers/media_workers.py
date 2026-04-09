@@ -61,7 +61,7 @@ class PreviewMediaWorker(QObject):
     def start(self) -> None:
         """Launch FFplay asynchronously."""
         if self._process is not None and self._process.state() != QProcess.ProcessState.NotRunning:
-            logger.warning("Preview already running; stopping first.")
+            logger.debug("Preview already running; stopping first.")
             self.stop()
 
         self._process = QProcess(self)
@@ -86,7 +86,7 @@ class PreviewMediaWorker(QObject):
             logger.debug("Stopping ffplay process gracefully...")
             self._process.terminate()
             if not self._process.waitForFinished(3000):
-                logger.warning("ffplay did not terminate gracefully; killing.")
+                logger.debug("ffplay did not terminate gracefully; killing.")
                 self._process.kill()
                 self._process.waitForFinished(1000)
         self.stopped.emit()
@@ -162,7 +162,7 @@ class SyncRefinementWorker(QObject):
             self.finished.emit(self._map_data)
 
         except Exception as e:
-            logger.error("SyncRefinement failed: %s\n%s", e, traceback.format_exc())
+            logger.exception("SyncRefinement failed: %s\n%s", e, traceback.format_exc())
             self.error.emit(str(e))
             self.finished.emit(None)
 

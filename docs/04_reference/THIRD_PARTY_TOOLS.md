@@ -97,6 +97,30 @@ Requires a one-time setup: `playwright install chromium`.
 
 These tools were used as references during development. Their logic has been ported into the pipeline.
 
+Setup bootstrap behavior for JDNext support:
+
+1. `setup.bat` clones/upgrades source trees into `tools/AssetStudio`, `tools/UnityPy`, and `tools/Unity2UbiArt`.
+2. `setup.bat` does not download the `AssetStudioModCLI` runtime bundle.
+3. JDNext extraction resolves `AssetStudioModCLI.exe` from local `tools` paths only.
+
+### AssetStudioMod / AssetStudioModCLI
+
+**Source:** [github.com/aelurum/AssetStudio](https://github.com/aelurum/AssetStudio)
+
+Used for JDNext `mapPackage` bundle extraction and asset export. The CLI binary is staged locally under `tools/Unity2UbiArt/bin/AssetStudioModCLI/` on machines that have the extracted toolchain.
+
+### Unity2UbiArt
+
+**Source:** [github.com/Itaybl14/Unity2UbiArt](https://github.com/Itaybl14/Unity2UbiArt)
+
+Used as the local conversion toolchain that hosts the AssetStudioModCLI runtime bundle.
+
+### UnityPy
+
+**Source:** [github.com/K0lb3/UnityPy](https://github.com/K0lb3/UnityPy)
+
+Used as the Python fallback / inspection path for JDNext bundle parsing and extraction.
+
 ### JDTools by BLDS
 
 Tape processing logic was analyzed and ported into the binary CKD parser. Contributions include:

@@ -18,15 +18,17 @@ Layout::
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import QObject, QThread, Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, QThread, QTimer, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QHBoxLayout,
@@ -41,11 +43,15 @@ from PyQt6.QtWidgets import (
 logger = logging.getLogger("jd2021.ui.widgets.preview")
 
 PREVIEW_FPS = 24
+PREVIEW_PROXY_WIDTH = 960
 _CFLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
 class _AspectRatioLabel(QLabel):
     """A QLabel that automatically scales its pixmap while maintaining aspect ratio on resize."""
+
+    clicked = pyqtSignal()
+
     def __init__(self, text: str = "") -> None:
         super().__init__(text)
         self._base_pixmap = QPixmap()
@@ -60,11 +66,44 @@ class _AspectRatioLabel(QLabel):
         super().resizeEvent(event)
 
     def _scaled_pixmap(self) -> QPixmap:
+        if self._base_pixmap.isNull():
+            return QPixmap()
         return self._base_pixmap.scaled(
             self.size(),
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+class _AspectRatioViewport(QWidget):
+    """Container that forces a fixed aspect ratio for its child widget."""
+
+    def __init__(self, child: QWidget, ratio_w: int = 16, ratio_h: int = 9) -> None:
+        super().__init__()
+        self._child = child
+        self._ratio_w = max(1, int(ratio_w))
+        self._ratio_h = max(1, int(ratio_h))
+        self._child.setParent(self)
+        self._child.show()
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    def resizeEvent(self, event) -> None:
+        rect = self.contentsRect()
+        max_w = max(1, rect.width())
+        max_h = max(1, rect.height())
+
+        target_w = min(max_w, int(max_h * self._ratio_w / self._ratio_h))
+        target_h = min(max_h, int(target_w * self._ratio_h / self._ratio_w))
+
+        x = rect.x() + (max_w - target_w) // 2
+        y = rect.y() + (max_h - target_h) // 2
+        self._child.setGeometry(x, y, target_w, target_h)
+        super().resizeEvent(event)
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +131,8 @@ class _FrameReaderWorker(QObject):
         height: int,
         ffplay_cmd: Optional[list[str]] = None,
         start_position: float = 0.0,
+        fps: float = PREVIEW_FPS,
+        startup_compensation_ms: float = 0.0,
     ) -> None:
         super().__init__()
         self._ffmpeg_cmd = ffmpeg_cmd
@@ -99,6 +140,8 @@ class _FrameReaderWorker(QObject):
         self._width = width
         self._height = height
         self._start_position = start_position
+        self._fps = max(1.0, float(fps))
+        self._startup_compensation_s = max(0.0, float(startup_compensation_ms) / 1000.0)
         self._stop_flag = threading.Event()
         self._ffmpeg: Optional[subprocess.Popen] = None
         self._ffplay: Optional[subprocess.Popen] = None
@@ -125,34 +168,42 @@ class _FrameReaderWorker(QObject):
                 creationflags=_CFLAGS,
             )
 
+            wall_start = 0.0
+
             while not self._stop_flag.is_set():
                 data = b""
+                ffmpeg_stdout = self._ffmpeg.stdout if self._ffmpeg else None
+                if ffmpeg_stdout is None:
+                    self.playback_ended.emit()
+                    return
                 while len(data) < frame_size:
-                    chunk = self._ffmpeg.stdout.read(frame_size - len(data))
+                    chunk = ffmpeg_stdout.read(frame_size - len(data))
                     if not chunk:
                         # EOF — video over
                         self.playback_ended.emit()
                         return
                     data += chunk
 
-                # Launch ffplay once the first frame is ready
-                if frames_read == 0 and self._ffplay_cmd:
-                    try:
-                        self._ffplay = subprocess.Popen(
-                            self._ffplay_cmd,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            creationflags=_CFLAGS,
-                        )
-                    except FileNotFoundError:
-                        logger.warning("ffplay not found — audio preview disabled.")
-                        self.ffplay_missing.emit()
-                    except Exception as exc:
-                        logger.error("Could not launch ffplay: %s", exc)
-                    wall_start = time.time() + 0.1
-
                 frames_read += 1
-                position += 1.0 / PREVIEW_FPS
+
+                if frames_read == 1:
+                    # Anchor both audio and video timing to first decoded frame.
+                    # This avoids per-timestamp drift where some seek targets need
+                    # more decode warm-up before video output becomes available.
+                    wall_start = time.time() + self._startup_compensation_s
+                    if self._ffplay_cmd:
+                        try:
+                            self._ffplay = subprocess.Popen(
+                                self._ffplay_cmd,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                creationflags=_CFLAGS,
+                            )
+                        except FileNotFoundError:
+                            logger.warning("ffplay not found — audio preview disabled.")
+                            self.ffplay_missing.emit()
+                        except Exception as exc:
+                            logger.error("Could not launch ffplay: %s", exc)
 
                 if self._stop_flag.is_set():
                     return
@@ -168,13 +219,16 @@ class _FrameReaderWorker(QObject):
                 pixmap = QPixmap.fromImage(q_img.copy())  # .copy() — data outlives loop
                 self.frame_ready.emit(pixmap)
 
-                # Emit position every 12 frames (~0.5 s)
-                if frames_read % 12 == 0:
-                    self.position_updated.emit(position)
-
-                # Simple wall-clock throttle to ~24 FPS
                 if wall_start > 0:
-                    expected = frames_read / float(PREVIEW_FPS)
+                    position = self._start_position + max(0.0, time.time() - wall_start)
+
+                # Emit position every frame so seek/relaunch operations use
+                # up-to-date timestamps instead of 0.5s-quantized values.
+                self.position_updated.emit(position)
+
+                # Keep preview rendering near target FPS without relying on ffmpeg -re.
+                if wall_start > 0:
+                    expected = frames_read / float(self._fps)
                     now = time.time()
                     remaining = (wall_start + expected) - now
                     if remaining > 0:
@@ -188,7 +242,10 @@ class _FrameReaderWorker(QObject):
     # -- internal ----------------------------------------------------------
 
     def _cleanup(self) -> None:
-        for proc, label in [(self._ffmpeg, "ffmpeg"), (self._ffplay, "ffplay")]:
+        for proc, label in [
+            (self._ffmpeg, "ffmpeg"),
+            (self._ffplay, "ffplay"),
+        ]:
             if proc is None:
                 continue
             try:
@@ -248,6 +305,15 @@ class PreviewWidget(QWidget):
         self._ffmpeg_path: str = "ffmpeg"
         self._ffprobe_path: str = "ffprobe"
         self._ffplay_path: str = "ffplay"
+        self._ffmpeg_hwaccel: str = "auto"
+        self._preview_video_mode: str = "proxy_low"
+        self._preview_fps_default: float = float(PREVIEW_FPS)
+        self._playback_fps: float = float(PREVIEW_FPS)
+        self._accurate_seek: bool = False
+        self._preview_startup_compensation_ms: float = 100.0
+        self._startup_compensation_override_ms: Optional[float] = None
+        self._preview_proxy_cache: dict[str, str] = {}
+        self._ended_naturally: bool = False
 
         self._build_ui()
 
@@ -271,11 +337,15 @@ class PreviewWidget(QWidget):
         self._canvas.setObjectName("previewCanvas")
         self._canvas.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._canvas.setMinimumSize(480, 270)
-        self._canvas.setToolTip("Video preview area for sync checking")
+        self._canvas.setToolTip("Video preview area for sync checking. Click here to play or pause the video.")
         self._canvas.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding,
         )
-        root.addWidget(self._canvas, stretch=1)
+        self._canvas.clicked.connect(self._toggle_playback)
+
+        self._canvas_host = _AspectRatioViewport(self._canvas, ratio_w=16, ratio_h=9)
+        self._canvas_host.setMinimumSize(480, 270)
+        root.addWidget(self._canvas_host, stretch=1)
 
         # -- Seek bar -------------------------------------------------------
         seek_row = QHBoxLayout()
@@ -292,7 +362,7 @@ class PreviewWidget(QWidget):
         self._seek_slider.setRange(0, 1000)
         self._seek_slider.setValue(0)
         self._seek_slider.setTracking(True)
-        self._seek_slider.setToolTip("Drag to seek within the preview timeline")
+        self._seek_slider.setToolTip("Drag to seek within the preview timeline. The video will update as you scrub.")
         self._seek_slider.valueChanged.connect(self._on_seek_value_changed)
         self._seek_slider.sliderPressed.connect(self._on_seek_pressed)
         self._seek_slider.sliderReleased.connect(self._on_seek_released)
@@ -302,7 +372,7 @@ class PreviewWidget(QWidget):
         self._lbl_dur.setObjectName("previewDurationLabel")
         self._lbl_dur.setMinimumWidth(40)
         self._lbl_dur.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-        self._lbl_dur.setToolTip("Total preview duration")
+        self._lbl_dur.setToolTip("Total preview duration. Compare this to the song length to ensure nothing is cut off.")
         seek_row.addWidget(self._lbl_dur)
 
         root.addLayout(seek_row)
@@ -317,7 +387,7 @@ class PreviewWidget(QWidget):
         self._btn_rewind.setText("-5s")
         self._btn_rewind.setMinimumWidth(52)
         self._btn_rewind.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-        self._btn_rewind.setToolTip("Rewind 5 seconds")
+        self._btn_rewind.setToolTip("Rewind the preview by 5 seconds.")
         self._btn_rewind.clicked.connect(lambda: self._seek_relative(-5))
         btn_row.addWidget(self._btn_rewind)
 
@@ -334,7 +404,7 @@ class PreviewWidget(QWidget):
         self._btn_forward.setText("+5s")
         self._btn_forward.setMinimumWidth(52)
         self._btn_forward.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-        self._btn_forward.setToolTip("Forward 5 seconds")
+        self._btn_forward.setToolTip("Advance the preview by 5 seconds.")
         self._btn_forward.clicked.connect(lambda: self._seek_relative(5))
         btn_row.addWidget(self._btn_forward)
 
@@ -345,11 +415,32 @@ class PreviewWidget(QWidget):
     # PUBLIC API
     # ==================================================================
 
-    def set_tool_paths(self, ffmpeg_path: str, ffprobe_path: str, ffplay_path: str) -> None:
+    def set_tool_paths(
+        self,
+        ffmpeg_path: str,
+        ffprobe_path: str,
+        ffplay_path: str,
+        ffmpeg_hwaccel: str = "auto",
+        preview_video_mode: str = "proxy_low",
+        preview_fps: int = PREVIEW_FPS,
+        preview_startup_compensation_ms: float = 100.0,
+    ) -> None:
         """Update ffmpeg tool paths used by preview subprocesses."""
         self._ffmpeg_path = ffmpeg_path or "ffmpeg"
         self._ffprobe_path = ffprobe_path or "ffprobe"
         self._ffplay_path = ffplay_path or "ffplay"
+        self._ffmpeg_hwaccel = ffmpeg_hwaccel or "auto"
+        self._preview_video_mode = preview_video_mode or "proxy_low"
+        try:
+            fps = float(preview_fps)
+        except (TypeError, ValueError):
+            fps = float(PREVIEW_FPS)
+        self._preview_fps_default = fps if fps > 0 else float(PREVIEW_FPS)
+        try:
+            compensation_ms = float(preview_startup_compensation_ms)
+        except (TypeError, ValueError):
+            compensation_ms = 100.0
+        self._preview_startup_compensation_ms = max(0.0, compensation_ms)
 
     def launch(
         self,
@@ -360,6 +451,9 @@ class PreviewWidget(QWidget):
         start_time: float = 0.0,
         loop_start: float = 0.0,
         loop_end: float = 0.0,
+        preview_fps: Optional[float] = None,
+        startup_compensation_ms: Optional[float] = None,
+        accurate_seek: bool = False,
     ) -> None:
         """Start (or restart) embedded preview playback.
 
@@ -375,6 +469,24 @@ class PreviewWidget(QWidget):
         if not video_path or not audio_path:
             return
 
+        if preview_fps is None:
+            effective_fps = self._preview_fps_default
+        else:
+            try:
+                fps_val = float(preview_fps)
+            except (TypeError, ValueError):
+                fps_val = self._preview_fps_default
+            effective_fps = fps_val if fps_val > 0 else self._preview_fps_default
+
+        if startup_compensation_ms is None:
+            effective_startup_compensation_ms = self._preview_startup_compensation_ms
+        else:
+            try:
+                effective_startup_compensation_ms = max(0.0, float(startup_compensation_ms))
+            except (TypeError, ValueError):
+                effective_startup_compensation_ms = self._preview_startup_compensation_ms
+
+        resolved_video_path = self._resolve_preview_video_path(video_path)
         resolved_audio_path = self._resolve_preview_audio_path(audio_path)
 
         # Stash for resume / seek
@@ -384,7 +496,11 @@ class PreviewWidget(QWidget):
         self._a_offset = a_offset
         self._loop_start = max(0.0, loop_start)
         self._loop_end = max(0.0, loop_end)
+        self._playback_fps = effective_fps
+        self._startup_compensation_override_ms = startup_compensation_ms
+        self._accurate_seek = bool(accurate_seek)
         self._stop_requested = False
+        self._ended_naturally = False
 
         # Kill previous, but keep position if we are just restarting/seeking
         self.stop(
@@ -395,7 +511,7 @@ class PreviewWidget(QWidget):
         # Probe duration (best effort)
         if start_time == 0.0:
             self._duration = self._probe_duration(
-                video_path,
+                resolved_video_path,
                 resolved_audio_path,
                 v_override,
                 a_offset,
@@ -408,7 +524,8 @@ class PreviewWidget(QWidget):
         h = max(self._canvas.height(), 180)
 
         # Compute seek positions
-        vid_seek = abs(v_override) if v_override else 0.0
+        vid_seek = abs(v_override) if v_override < 0 else 0.0
+        video_delay_s = v_override if v_override > 0 else 0.0
         aud_delay_ms = 0
         if a_offset and a_offset < 0:
             aud_seek = abs(a_offset)
@@ -421,18 +538,33 @@ class PreviewWidget(QWidget):
         vid_seek += start_time
         aud_seek += start_time
 
-        vf_chain = (
-            f"scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos,"
-            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black"
+        fine_video_seek = max(0.0, vid_seek)
+
+        vf_filters: list[str] = []
+        if self._accurate_seek and fine_video_seek > 1e-6:
+            vf_filters.extend([
+                f"trim=start={fine_video_seek:.6f}",
+                "setpts=PTS-STARTPTS",
+            ])
+        if video_delay_s > 0:
+            vf_filters.append(f"tpad=start_duration={video_delay_s:.6f}")
+        vf_filters.append(
+            f"scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos"
         )
+        vf_filters.append(f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black")
+        vf_chain = ",".join(vf_filters)
+
+        fps_arg = str(int(effective_fps)) if abs(effective_fps - round(effective_fps)) < 1e-6 else f"{effective_fps:.6f}"
 
         ffmpeg_cmd: list[str] = [self._ffmpeg_path, "-loglevel", "error"]
-        if vid_seek > 0:
-            ffmpeg_cmd += ["-ss", f"{vid_seek:.6f}"]
+        if self._ffmpeg_hwaccel == "auto":
+            ffmpeg_cmd += ["-hwaccel", "auto"]
+        if not self._accurate_seek and fine_video_seek > 1e-6:
+            ffmpeg_cmd += ["-ss", f"{fine_video_seek:.6f}"]
         ffmpeg_cmd += [
-            "-i", video_path,
+            "-i", resolved_video_path,
             "-vf", vf_chain,
-            "-r", str(PREVIEW_FPS),
+            "-r", fps_arg,
             "-pix_fmt", "rgb24",
             "-f", "rawvideo",
             "-",
@@ -441,15 +573,22 @@ class PreviewWidget(QWidget):
         ffplay_cmd: list[str] = [
             self._ffplay_path, "-nodisp", "-autoexit", "-loglevel", "quiet",
         ]
-        if aud_seek > 0:
-            ffplay_cmd += ["-ss", f"{aud_seek:.6f}"]
+        fine_audio_seek = max(0.0, aud_seek)
+        if not self._accurate_seek and fine_audio_seek > 1e-6:
+            ffplay_cmd += ["-ss", f"{fine_audio_seek:.6f}"]
+        ffplay_cmd += ["-i", resolved_audio_path]
+
+        afilters: list[str] = []
+        if self._accurate_seek and fine_audio_seek > 1e-6:
+            # Fine decoder-side trim preserves fractional precision after coarse seek.
+            afilters.extend([
+                f"atrim=start={fine_audio_seek:.6f}",
+                "asetpts=PTS-STARTPTS",
+            ])
         if aud_delay_ms > 0:
-            ffplay_cmd += [
-                "-i", resolved_audio_path,
-                "-af", f"adelay={aud_delay_ms}|{aud_delay_ms},asetpts=PTS-STARTPTS",
-            ]
-        else:
-            ffplay_cmd += ["-i", resolved_audio_path]
+            afilters.append(f"adelay={aud_delay_ms}|{aud_delay_ms}")
+        if afilters:
+            ffplay_cmd += ["-af", ",".join(afilters)]
 
         # Build worker + thread
         self._position = start_time
@@ -461,6 +600,8 @@ class PreviewWidget(QWidget):
             ffmpeg_cmd, w, h,
             ffplay_cmd=ffplay_cmd,
             start_position=start_time,
+            fps=effective_fps,
+            startup_compensation_ms=effective_startup_compensation_ms,
         )
         thread = QThread()
         worker.moveToThread(thread)
@@ -489,6 +630,7 @@ class PreviewWidget(QWidget):
             clear_canvas: If True, clears the preview canvas to "No Preview".
         """
         self._stop_requested = True
+        self._ended_naturally = False
         if self._worker is not None:
             self._worker.request_stop()
         
@@ -576,10 +718,14 @@ class PreviewWidget(QWidget):
                 start_time=self._loop_start,
                 loop_start=self._loop_start,
                 loop_end=self._loop_end,
+                preview_fps=self._playback_fps,
+                startup_compensation_ms=self._startup_compensation_override_ms,
+                accurate_seek=self._accurate_seek,
             )
             return
 
         self._playing = False
+        self._ended_naturally = True
         self._set_play_button_icon(False)
         self.preview_stopped.emit()
 
@@ -598,6 +744,9 @@ class PreviewWidget(QWidget):
         if self._playing:
             self.stop(reset_position=False, clear_canvas=False)
         else:
+            if self._ended_naturally:
+                self._position = 0.0
+                self.position_changed.emit(self._position)
             self._relaunch(self._position)
 
     def _seek_relative(self, delta: float) -> None:
@@ -605,6 +754,8 @@ class PreviewWidget(QWidget):
         self._position = new_pos
         self.position_changed.emit(self._position)
         if self._playing:
+            self._relaunch(new_pos)
+        elif self._ended_naturally and self._video_path and self._audio_path:
             self._relaunch(new_pos)
         else:
             self._lbl_time.setText(self._fmt(new_pos))
@@ -618,6 +769,8 @@ class PreviewWidget(QWidget):
         self.position_changed.emit(self._position)
         self._lbl_time.setText(self._fmt(self._position))
         if self._playing or self._resume_after_seek:
+            self._relaunch(self._position)
+        elif self._ended_naturally and self._video_path and self._audio_path:
             self._relaunch(self._position)
         self._resume_after_seek = False
 
@@ -636,6 +789,12 @@ class PreviewWidget(QWidget):
             self._position = target
             self.position_changed.emit(self._position)
             self._relaunch(self._position)
+            return
+
+        if self._ended_naturally and abs(target - self._position) >= 0.25:
+            self._position = target
+            self.position_changed.emit(self._position)
+            self._relaunch(self._position)
 
     def _relaunch(self, start_time: float = 0.0) -> None:
         if self._video_path and self._audio_path:
@@ -645,20 +804,64 @@ class PreviewWidget(QWidget):
                 start_time=start_time,
                 loop_start=self._loop_start,
                 loop_end=self._loop_end,
+                preview_fps=self._playback_fps,
+                startup_compensation_ms=self._startup_compensation_override_ms,
+                accurate_seek=self._accurate_seek,
             )
 
     # ==================================================================
     # HELPERS
     # ==================================================================
 
-    @staticmethod
-    def _resolve_preview_audio_path(audio_path: str) -> str:
+    def _resolve_preview_audio_path(self, audio_path: str) -> str:
         """Resolve a preview-playable audio path.
 
         Preview input may be a cooked `.wav.ckd` path that ffplay cannot decode.
         Prefer existing decoded siblings first, then try a one-time decode fallback.
         """
         path = Path(audio_path)
+
+        # Convert streaming formats to a seek-friendly PCM WAV cache for stable preview jumps.
+        if path.suffix.lower() in {".ogg", ".opus"}:
+            try:
+                stat = path.stat()
+                cache_key_src = f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}"
+                cache_key = hashlib.sha1(cache_key_src.encode("utf-8")).hexdigest()
+                cache_dir = Path(tempfile.gettempdir()) / "jd2021_preview_audio_cache"
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                cached_wav = cache_dir / f"{path.stem}_{cache_key[:10]}_seek.wav"
+                if cached_wav.exists() and cached_wav.stat().st_size > 1024:
+                    return str(cached_wav)
+
+                cmd = [
+                    self._ffmpeg_path,
+                    "-y",
+                    "-v",
+                    "error",
+                    "-i",
+                    str(path),
+                    "-ac",
+                    "2",
+                    "-ar",
+                    "48000",
+                    "-c:a",
+                    "pcm_s16le",
+                    str(cached_wav),
+                ]
+                completed = subprocess.run(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=_CFLAGS,
+                    timeout=120,
+                    check=False,
+                )
+                if completed.returncode == 0 and cached_wav.exists() and cached_wav.stat().st_size > 1024:
+                    logger.info("Preview audio cache created: %s", cached_wav.name)
+                    return str(cached_wav)
+            except Exception as exc:
+                logger.debug("Preview audio cache conversion skipped for %s: %s", path.name, exc)
+
         if path.suffix.lower() != ".ckd":
             return audio_path
 
@@ -697,6 +900,80 @@ class PreviewWidget(QWidget):
 
         logger.warning("Preview audio remains cooked CKD; ffplay may be silent: %s", path.name)
         return audio_path
+
+    def _resolve_preview_video_path(self, video_path: str) -> str:
+        """Resolve a preview-friendly proxy video for heavy source codecs.
+
+        For VP9/large WebM sources, repeated seeks can become expensive on some
+        machines. A cached low-res H.264 proxy keeps preview controls responsive.
+        """
+        path = Path(video_path)
+        if path.suffix.lower() != ".webm":
+            return video_path
+        if self._preview_video_mode == "original":
+            return video_path
+
+        try:
+            stat = path.stat()
+        except OSError:
+            return video_path
+
+        cache_key_src = f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}"
+        cache_key = hashlib.sha1(cache_key_src.encode("utf-8")).hexdigest()
+        cached = self._preview_proxy_cache.get(cache_key)
+        if cached and Path(cached).exists():
+            return cached
+
+        cache_dir = Path(tempfile.gettempdir()) / "jd2021_preview_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        proxy_path = cache_dir / f"{path.stem}_{cache_key[:10]}_preview.mp4"
+
+        if proxy_path.exists() and proxy_path.stat().st_size > 1024:
+            self._preview_proxy_cache[cache_key] = str(proxy_path)
+            return str(proxy_path)
+
+        # Keep transcode fast; quality only needs to be good enough for sync checks.
+        cmd = [
+            self._ffmpeg_path,
+            "-y",
+            "-v",
+            "error",
+        ]
+        if self._ffmpeg_hwaccel == "auto":
+            cmd += ["-hwaccel", "auto"]
+        cmd += [
+            "-i",
+            str(path),
+            "-vf",
+            f"scale=min({PREVIEW_PROXY_WIDTH}\\,iw):-2:flags=lanczos",
+            "-an",
+            "-pix_fmt",
+            "yuv420p",
+            # Keep proxy generation fast and game-like (WebM/VP8 style).
+            "-c:v", "libvpx",
+            "-deadline", "realtime",
+            "-cpu-used", "8",
+            "-b:v", "900k",
+            str(proxy_path),
+        ]
+
+        try:
+            completed = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=_CFLAGS,
+                timeout=120,
+                check=False,
+            )
+            if completed.returncode == 0 and proxy_path.exists() and proxy_path.stat().st_size > 1024:
+                logger.info("Preview proxy created: %s", proxy_path.name)
+                self._preview_proxy_cache[cache_key] = str(proxy_path)
+                return str(proxy_path)
+        except Exception as exc:
+            logger.debug("Preview proxy transcode skipped for %s: %s", path.name, exc)
+
+        return video_path
 
     @staticmethod
     def _fmt(seconds: float) -> str:
@@ -767,8 +1044,12 @@ class PreviewWidget(QWidget):
 
         playable_values: list[float] = []
         if v_dur is not None:
-            vid_beat0 = abs(v_override) if v_override else 0.0
-            playable_values.append(v_dur - vid_beat0)
+            if v_override < 0:
+                playable_values.append(v_dur - abs(v_override))
+            elif v_override > 0:
+                playable_values.append(v_dur + v_override)
+            else:
+                playable_values.append(v_dur)
 
         if a_dur is not None:
             if a_offset and a_offset < 0:

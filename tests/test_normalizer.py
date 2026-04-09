@@ -198,8 +198,8 @@ class TestNormalizerMusicTrack:
             assert abs(res.video_start_time - expected) < 0.0001
 
 
-    def test_html_source_forces_marker_sync(self):
-        """Metadata vst should be ignored for HTML sources (V1 Parity)."""
+    def test_html_source_uses_marker_audio_without_additional_calibration(self):
+        """HTML sources use marker-derived audio offset while preserving non-zero metadata video offset."""
         from jd2021_installer.parsers.normalizer import normalize_sync
         from jd2021_installer.core.models import MusicTrackStructure
         import unittest
@@ -216,11 +216,29 @@ class TestNormalizerMusicTrack:
         
         # Expected:
         # prms = 54687 / 48 = 1139.3125
-        # video_ms = -1139.3125
-        # audio_ms = -(1139.3125 + 85) = -1224.3125
+        # video_ms preserves metadata = -2658.0
+        # audio_ms = -(1139.3125)
         case = unittest.TestCase()
-        case.assertAlmostEqual(sync.video_ms, -1139.3125, places=3)
-        case.assertAlmostEqual(sync.audio_ms, -1224.3125, places=3)
+        case.assertAlmostEqual(sync.video_ms, -2658.0, places=3)
+        case.assertAlmostEqual(sync.audio_ms, -1139.3125, places=3)
+
+    def test_html_jdnext_source_uses_marker_audio_without_additional_calibration(self):
+        """JDNext HTML sources should use marker-derived audio offset."""
+        from jd2021_installer.parsers.normalizer import normalize_sync
+        from jd2021_installer.core.models import MusicTrackStructure
+        import unittest
+
+        mt = MusicTrackStructure(
+            markers=[0, 10000, 20000, 40000, 54687],
+            start_beat=-4,
+            video_start_time=-2.658,
+        )
+
+        sync = normalize_sync(mt, is_html_source=True, is_jdnext_source=True)
+
+        case = unittest.TestCase()
+        case.assertAlmostEqual(sync.video_ms, -2658.0, places=3)
+        case.assertAlmostEqual(sync.audio_ms, -1139.3125, places=3)
 
     def test_ipk_source_preserves_vst(self):
         """Metadata vst should be preserved for IPK sources if non-zero."""
@@ -274,3 +292,311 @@ class TestNormalizerMusicTrack:
         assert result.music_track.preview_entry == 287
         assert result.music_track.preview_loop_start == 287
         assert result.music_track.preview_loop_end == 574
+
+    def test_missing_songdesc_uses_assets_html_metadata(self, tmp_path: Path) -> None:
+        import json
+
+        mt_data = {
+            "COMPONENTS": [{
+                "trackData": {
+                    "structure": {
+                        "markers": [0, 2400, 4800],
+                        "signatures": [{"beats": 4, "marker": 0}],
+                        "sections": [{"sectionType": 0, "marker": 0}],
+                        "startBeat": 0,
+                        "endBeat": 2,
+                        "videoStartTime": 0.0,
+                    }
+                }
+            }]
+        }
+        (tmp_path / "AQueda_musictrack.tpl.ckd").write_text(json.dumps(mt_data), encoding="utf-8")
+        (tmp_path / "assets.html").write_text(
+            '<div class="embedTitle__x"><span>A QUEDA</span></div>'
+            '<div class="embedDescription__x"><span>by Gloria Groove</span></div>',
+            encoding="utf-8",
+        )
+
+        result = normalize(tmp_path, codename="AQueda")
+
+        assert result.song_desc.title == "A QUEDA"
+        assert result.song_desc.artist == "Gloria Groove"
+
+    def test_missing_songdesc_uses_map_json_songdesc_fallback(self, tmp_path: Path) -> None:
+        import json
+
+        mt_data = {
+            "COMPONENTS": [{
+                "trackData": {
+                    "structure": {
+                        "markers": [0, 2400, 4800],
+                        "signatures": [{"beats": 4, "marker": 0}],
+                        "sections": [{"sectionType": 0, "marker": 0}],
+                        "startBeat": 0,
+                        "endBeat": 2,
+                        "videoStartTime": 0.0,
+                    }
+                }
+            }]
+        }
+        map_json = {
+            "MapName": "SweetButPsycho",
+            "SongDesc": {
+                "MapName": "SweetButPsycho",
+                "JDVersion": 2024,
+                "OriginalJDVersion": 2024,
+                "Artist": "Ava Max",
+                "DancerName": "Coach",
+                "Title": "Sweet but Psycho",
+                "Credits": "Test Credits",
+                "NumCoach": 1,
+                "MainCoach": 0,
+                "Difficulty": 3,
+                "SweatDifficulty": 2,
+            },
+        }
+
+        (tmp_path / "SweetButPsycho_musictrack.tpl.ckd").write_text(json.dumps(mt_data), encoding="utf-8")
+        mono = tmp_path / "monobehaviour"
+        mono.mkdir(parents=True, exist_ok=True)
+        (mono / "map.json").write_text(json.dumps(map_json), encoding="utf-8")
+
+        result = normalize(tmp_path, codename="SweetButPsycho")
+
+        assert result.song_desc.title == "Sweet but Psycho"
+        assert result.song_desc.artist == "Ava Max"
+        assert result.song_desc.credits == "Test Credits"
+        assert result.song_desc.main_coach == 0
+        assert result.song_desc.difficulty == 3
+        assert result.song_desc.sweat_difficulty == 2
+        assert result.song_desc.jd_version == 2024
+        assert result.song_desc.original_jd_version == 2024
+
+    def test_map_json_songdesc_blank_text_fields_use_assets_html(self, tmp_path: Path) -> None:
+        import json
+
+        mt_data = {
+            "COMPONENTS": [{
+                "trackData": {
+                    "structure": {
+                        "markers": [0, 2400, 4800],
+                        "signatures": [{"beats": 4, "marker": 0}],
+                        "sections": [{"sectionType": 0, "marker": 0}],
+                        "startBeat": 0,
+                        "endBeat": 2,
+                        "videoStartTime": 0.0,
+                    }
+                }
+            }]
+        }
+        map_json = {
+            "MapName": "AQueda",
+            "SongDesc": {
+                "MapName": "AQueda",
+                "Artist": "",
+                "Title": "",
+                "NumCoach": 1,
+                "MainCoach": 0,
+                "Difficulty": 4,
+                "SweatDifficulty": 3,
+            },
+        }
+
+        (tmp_path / "AQueda_musictrack.tpl.ckd").write_text(json.dumps(mt_data), encoding="utf-8")
+        mono = tmp_path / "monobehaviour"
+        mono.mkdir(parents=True, exist_ok=True)
+        (mono / "map.json").write_text(json.dumps(map_json), encoding="utf-8")
+        (tmp_path / "assets.html").write_text(
+            '<div class="embedTitle__x"><span>A QUEDA</span></div>'
+            '<div class="embedDescription__x"><span>by Gloria Groove</span></div>',
+            encoding="utf-8",
+        )
+
+        result = normalize(tmp_path, codename="AQueda")
+
+        assert result.song_desc.title == "A QUEDA"
+        assert result.song_desc.artist == "Gloria Groove"
+        assert result.song_desc.difficulty == 4
+        assert result.song_desc.sweat_difficulty == 3
+
+    def test_jdnext_metadata_json_overlays_jd2021_relevant_fields(self, tmp_path: Path) -> None:
+        import json
+
+        mt_data = {
+            "COMPONENTS": [{
+                "trackData": {
+                    "structure": {
+                        "markers": [0, 2400, 4800],
+                        "signatures": [{"beats": 4, "marker": 0}],
+                        "sections": [{"sectionType": 0, "marker": 0}],
+                        "startBeat": 0,
+                        "endBeat": 2,
+                        "videoStartTime": 0.0,
+                    }
+                }
+            }]
+        }
+        map_json = {
+            "MapName": "SweetButPsycho",
+            "SongDesc": {
+                "MapName": "SweetButPsycho",
+                "Artist": "Ava Max",
+                "Title": "Sweet but Psycho",
+                "NumCoach": 1,
+                "MainCoach": 0,
+                "Difficulty": 2,
+                "SweatDifficulty": 1,
+                "OriginalJDVersion": 2021,
+                "Credits": "",
+            },
+        }
+        jdnext_metadata = {
+            "tags": ["Pop", "Main"],
+            "credits": "License holder credits",
+            "other_info": {
+                "difficulty": "Extreme",
+                "sweat_difficulty": "Hard",
+                "coach_count": "4",
+                "original_jd_version": "2023",
+                "camera_support": True,
+            },
+        }
+
+        (tmp_path / "SweetButPsycho_musictrack.tpl.ckd").write_text(json.dumps(mt_data), encoding="utf-8")
+        mono = tmp_path / "monobehaviour"
+        mono.mkdir(parents=True, exist_ok=True)
+        (mono / "map.json").write_text(json.dumps(map_json), encoding="utf-8")
+        (tmp_path / "jdnext_metadata.json").write_text(json.dumps(jdnext_metadata), encoding="utf-8")
+
+        result = normalize(tmp_path, codename="SweetButPsycho")
+
+        assert result.song_desc.tags == ["Pop", "Main"]
+        assert result.song_desc.credits == "License holder credits"
+        assert result.song_desc.difficulty == 4
+        assert result.song_desc.sweat_difficulty == 3
+        assert result.song_desc.num_coach == 4
+        assert result.song_desc.original_jd_version == 2023
+
+    def test_jdnext_songdb_cache_overlays_placeholder_original_version(self, tmp_path: Path, monkeypatch) -> None:
+        import json
+
+        mt_data = {
+            "COMPONENTS": [{
+                "trackData": {
+                    "structure": {
+                        "markers": [0, 2400, 4800],
+                        "signatures": [{"beats": 4, "marker": 0}],
+                        "sections": [{"sectionType": 0, "marker": 0}],
+                        "startBeat": 0,
+                        "endBeat": 2,
+                        "videoStartTime": 0.0,
+                    }
+                }
+            }]
+        }
+        map_json = {
+            "MapName": "Judas",
+            "SongDesc": {
+                "MapName": "Judas",
+                "Artist": "Unknown Artist",
+                "DancerName": "Unknown Dancer",
+                "Title": "Unknown Title",
+                "Credits": "Empty Credits",
+                "NumCoach": 1,
+                "MainCoach": 0,
+                "Difficulty": 2,
+                "SweatDifficulty": 1,
+                "OriginalJDVersion": -1,
+            },
+        }
+        songdb = {
+            "schema_version": 1,
+            "index": {
+                "judas": {
+                    "entry_id": "998b2cd2-02ff-4c73-8aac-54065aebee36",
+                    "map_name": "Judas",
+                    "parent_map_name": "Judas",
+                    "title": "Judas",
+                    "artist": "Lady Gaga",
+                    "credits": "Licensed Credits",
+                    "tags": ["Main", "jdplus"],
+                    "difficulty": 2,
+                    "sweat_difficulty": 1,
+                    "coach_count": 1,
+                    "original_jd_version": 2022,
+                    "status": None,
+                    "lyrics_color": "#FFA416FF",
+                    "preview_entry": None,
+                    "preview_loop_start": None,
+                    "preview_loop_end": None,
+                    "video_start_time": None,
+                }
+            },
+        }
+
+        (tmp_path / "Judas_musictrack.tpl.ckd").write_text(json.dumps(mt_data), encoding="utf-8")
+        mono = tmp_path / "monobehaviour"
+        mono.mkdir(parents=True, exist_ok=True)
+        (mono / "map.json").write_text(json.dumps(map_json), encoding="utf-8")
+        synth_path = tmp_path / "jdnext_songdb_synth.json"
+        synth_path.write_text(json.dumps(songdb), encoding="utf-8")
+
+        monkeypatch.setattr("jd2021_installer.parsers.normalizer.resolve_songdb_synth_path", lambda: synth_path)
+
+        result = normalize(tmp_path, codename="Judas")
+
+        assert result.song_desc.title == "Judas"
+        assert result.song_desc.artist == "Lady Gaga"
+        assert result.song_desc.credits == "Licensed Credits"
+        assert result.song_desc.original_jd_version == 2022
+
+    def test_synthesized_tapes_with_top_level_clips_are_counted(self, tmp_path: Path) -> None:
+        import json
+
+        mt_data = {
+            "COMPONENTS": [{
+                "trackData": {
+                    "structure": {
+                        "markers": [0, 2400, 4800],
+                        "signatures": [{"beats": 4, "marker": 0}],
+                        "sections": [{"sectionType": 0, "marker": 0}],
+                        "startBeat": 0,
+                        "endBeat": 2,
+                        "videoStartTime": 0.0,
+                    }
+                }
+            }]
+        }
+        sd_data = {
+            "COMPONENTS": [{
+                "MapName": "AQueda",
+                "Title": "A Queda",
+                "Artist": "Gloria Groove",
+                "NumCoach": 1,
+            }]
+        }
+        dtape_data = {
+            "__class": "Tape",
+            "Clips": [
+                {"__class": "MotionClip", "StartTime": 0, "Duration": 10},
+                {"__class": "PictogramClip", "StartTime": 20, "Duration": 10},
+            ],
+        }
+        ktape_data = {
+            "__class": "Tape",
+            "Clips": [
+                {"__class": "KaraokeClip", "StartTime": 0, "Duration": 10, "Lyrics": "a"},
+            ],
+        }
+
+        (tmp_path / "aqueda_musictrack.tpl.ckd").write_text(json.dumps(mt_data), encoding="utf-8")
+        (tmp_path / "aqueda_songdesc.tpl.ckd").write_text(json.dumps(sd_data), encoding="utf-8")
+        (tmp_path / "aqueda_tml_dance.dtape.ckd").write_text(json.dumps(dtape_data), encoding="utf-8")
+        (tmp_path / "aqueda_tml_karaoke.ktape.ckd").write_text(json.dumps(ktape_data), encoding="utf-8")
+
+        result = normalize(tmp_path, codename="AQueda")
+
+        assert result.dance_tape is not None
+        assert result.karaoke_tape is not None
+        assert len(result.dance_tape.clips) == 2
+        assert len(result.karaoke_tape.clips) == 1

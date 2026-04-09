@@ -20,6 +20,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -54,7 +55,7 @@ class SyncRefinementWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _set_preview_icon(self, playing: bool) -> None:
-        text = "Stop" if playing else "Preview"
+        text = "Stop Preview" if playing else "Start Preview"
         self._btn_preview.setText(text)
 
     def _build_ui(self) -> None:
@@ -65,78 +66,81 @@ class SyncRefinementWidget(QWidget):
         group_layout = QVBoxLayout(group)
         root.addWidget(group)
 
-        # -- Offset spinboxes -----------------------------------------------
-        offsets_row = QHBoxLayout()
+        # -- Offset controls -------------------------------------------------
+        controls_grid = QGridLayout()
+        controls_grid.setHorizontalSpacing(4)
+        controls_grid.setVerticalSpacing(6)
+        controls_grid.setColumnStretch(0, 3)
+        controls_grid.setColumnStretch(1, 7)
 
-        # Audio offset
-        audio_offset_label = QLabel("Audio Offset (ms):")
+        audio_offset_label = QLabel("Audio Offset")
         audio_offset_label.setObjectName("syncOffsetLabel")
-        offsets_row.addWidget(audio_offset_label)
+        controls_grid.addWidget(audio_offset_label, 0, 0)
         self._audio_spin = QDoubleSpinBox()
         self._audio_spin.setRange(-50000.0, 50000.0)
         self._audio_spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
         self._audio_spin.setDecimals(1)
         self._audio_spin.setValue(0.0)
-        self._audio_spin.setToolTip("Shift audio timing (negative = earlier)")
-        offsets_row.addWidget(self._audio_spin)
+        self._audio_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._audio_spin.setToolTip("Shift audio timing (negative starts audio earlier). Use this to fix in-game sync where audio lags.")
+        controls_grid.addWidget(self._audio_spin, 0, 1)
 
-        offsets_row.addSpacing(12)
+        video_offset_label = QLabel("Video Offset")
+        video_offset_label.setObjectName("syncOffsetLabel")
+        controls_grid.addWidget(video_offset_label, 2, 0)
 
-        # Video offset toggle + spin
-        self._video_check = QCheckBox("Video Offset (ms):")
-        self._video_check.setObjectName("videoOffsetCheck")
-        self._video_check.setToolTip("Enable to override the engine's videoStartTime")
-        self._video_check.toggled.connect(self._on_video_toggle)
-        offsets_row.addWidget(self._video_check)
-        
+        # Create spinbox first before connecting signals
         self._video_spin = QDoubleSpinBox()
         self._video_spin.setRange(-50000.0, 50000.0)
         self._video_spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
         self._video_spin.setDecimals(1)
         self._video_spin.setValue(0.0)
-        self._video_spin.setEnabled(False)
-        self._video_spin.setToolTip("Shift video timing (negative = earlier)")
-        offsets_row.addWidget(self._video_spin)
+        self._video_spin.setEnabled(True)
+        self._video_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._video_spin.setToolTip("Shift video timing (negative starts video earlier). Use this to synchronize the dancers to the beat.")
+        controls_grid.addWidget(self._video_spin, 2, 1)
 
-        group_layout.addLayout(offsets_row)
+        # Hidden toggle retained for compatibility with existing logic paths.
+        self._video_check = QCheckBox("Video Offset (ms):")
+        self._video_check.setObjectName("videoOffsetCheck")
+        self._video_check.setToolTip("Enable to override the game engine's video start time. Leave unchecked to use original timing.")
+        self._video_check.toggled.connect(self._on_video_toggle)
+        self._video_check.setChecked(True)
+        self._video_check.setVisible(False)
+        # Intentionally not added to layout; remains hidden but functional for code paths.
 
         # -- Increment Buttons Row ------------------------------------------
         # V1 Parity: +/- 1000, 100, 10, 1 (ms)
         self._audio_buttons = []
         self._video_buttons = []
+
         inc_row_audio = QHBoxLayout()
         inc_row_audio.setSpacing(4)
-        audio_label = QLabel("Adj Audio:")
-        audio_label.setObjectName("syncOffsetLabel")
-        audio_label.setMinimumWidth(70)
-        inc_row_audio.addWidget(audio_label)
-        
         for delta in [-1000.0, -100.0, -10.0, -1.0, 1.0, 10.0, 100.0, 1000.0]:
             btn = QPushButton(f"{delta:+.0f}")
-            btn.setMinimumWidth(50)
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             btn.setProperty("syncAdjustButton", True)
+            direction = "Increase" if delta > 0 else "Decrease"
+            btn.setToolTip(f"{direction} audio offset by {abs(delta):.0f} ms")
             btn.clicked.connect(lambda _, d=delta: self._adjust_audio(d))
             inc_row_audio.addWidget(btn, 1)
             self._audio_buttons.append(btn)
-        group_layout.addLayout(inc_row_audio)
+        controls_grid.addLayout(inc_row_audio, 1, 0, 1, 2)
 
         inc_row_video = QHBoxLayout()
         inc_row_video.setSpacing(4)
-        video_label = QLabel("Adj Video:")
-        video_label.setObjectName("syncOffsetLabel")
-        video_label.setMinimumWidth(70)
-        inc_row_video.addWidget(video_label)
         for delta in [-1000.0, -100.0, -10.0, -1.0, 1.0, 10.0, 100.0, 1000.0]:
             btn = QPushButton(f"{delta:+.0f}")
-            btn.setMinimumWidth(50)
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             btn.setProperty("syncAdjustButton", True)
+            direction = "Increase" if delta > 0 else "Decrease"
+            btn.setToolTip(f"{direction} video offset by {abs(delta):.0f} ms")
             btn.clicked.connect(lambda _, d=delta: self._adjust_video(d))
             inc_row_video.addWidget(btn, 1)
             self._video_buttons.append(btn)
+        controls_grid.addLayout(inc_row_video, 3, 0, 1, 2)
 
-        group_layout.addLayout(inc_row_video)
+        group_layout.addLayout(controls_grid)
 
 
         # -- Separator -------------------------------------------------------
@@ -154,23 +158,23 @@ class SyncRefinementWidget(QWidget):
         self._btn_preview.setObjectName("btn_preview")
         self._set_preview_icon(False)
         self._btn_preview.setCheckable(True)
-        self._btn_preview.setToolTip("Start/stop the FFplay preview window")
+        self._btn_preview.setToolTip("Start or stop the FFplay preview window.")
         self._btn_preview.clicked.connect(self._on_preview_toggled)
         preview_row.addWidget(self._btn_preview)
 
         self._btn_pad = QPushButton("Pad Audio")
-        self._btn_pad.setToolTip("Auto-calculate audio offset to match video duration")
+        self._btn_pad.setToolTip("Auto-calculate audio offset to match video duration. Required when source audio is shorter than the background video.")
         self._btn_pad.clicked.connect(self.pad_audio_requested.emit)
         preview_row.addWidget(self._btn_pad)
 
         self._btn_sync_beatgrid = QPushButton("Sync Beatgrid")
-        self._btn_sync_beatgrid.setToolTip("Copy video offset to audio offset (1:1 align)")
+        self._btn_sync_beatgrid.setToolTip("Copy the video offset into the audio offset for a 1:1 alignment. Useful for manual tweaks.")
         self._btn_sync_beatgrid.clicked.connect(self._on_sync_beatgrid)
         preview_row.addWidget(self._btn_sync_beatgrid)
 
         self._btn_apply = QPushButton("Apply Offset")
         self._btn_apply.setObjectName("btn_apply_offset")
-        self._btn_apply.setToolTip("Commit the combined offset to the current map data")
+        self._btn_apply.setToolTip("Commit the combined audio and video offsets to the current map data for installation.")
         self._btn_apply.clicked.connect(self._on_apply)
         preview_row.addWidget(self._btn_apply)
 
@@ -283,9 +287,9 @@ class SyncRefinementWidget(QWidget):
         self.set_audio_editable(not is_ipk)
         if is_ipk:
             self._audio_spin.setValue(0.0)
-            self._audio_spin.setToolTip("Audio reprocessing disabled for IPK sources")
+            self._audio_spin.setToolTip("Audio reprocessing is disabled for IPK sources. IPK audio cannot be trimmed or padded.")
         else:
-            self._audio_spin.setToolTip("Shift audio timing (negative = earlier)")
+            self._audio_spin.setToolTip("Shift audio timing (negative starts audio earlier). Use this to fix in-game sync where audio lags.")
 
     def set_audio_editable(self, editable: bool) -> None:
         """Enable or disable audio offset controls entirely."""
@@ -340,12 +344,15 @@ class SyncRefinementWidget(QWidget):
         logger.debug("SyncRefinementWidget.set_offsets calling: audio=%.1f, video=%.1f", audio_ms, video_ms)
         self._audio_spin.setValue(audio_ms)
         self._video_spin.setValue(video_ms)
-        self._video_check.setChecked(video_ms != 0.0)
+        if self._video_check.isVisible():
+            self._video_check.setChecked(video_ms != 0.0)
+        elif not self._video_check.isChecked():
+            self._video_check.setChecked(True)
         self._update_combined()
 
     def reset(self) -> None:
         """Reset both spinboxes to zero."""
         self._audio_spin.setValue(0.0)
         self._video_spin.setValue(0.0)
-        self._video_check.setChecked(False)
+        self._video_check.setChecked(False if self._video_check.isVisible() else True)
         self._update_combined()

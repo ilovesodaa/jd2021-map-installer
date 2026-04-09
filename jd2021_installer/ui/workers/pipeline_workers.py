@@ -17,8 +17,11 @@ Usage (in controller):
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
+import os
 import re
+import shutil
 import struct
 from pathlib import Path
 from typing import Callable, Optional
@@ -29,6 +32,7 @@ from jd2021_installer.core.config import AppConfig
 from jd2021_installer.core.exceptions import ExtractionError, IPKExtractionError
 from jd2021_installer.core.logging_config import log_exception_for_profile
 from jd2021_installer.core.models import NormalizedMapData
+from jd2021_installer.core.readjust_index import remove_entry
 from jd2021_installer.extractors.base import BaseExtractor
 from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor
 from jd2021_installer.installers.game_writer import write_game_files
@@ -61,8 +65,8 @@ def _path_has_codename_component(path: Path, codename: str) -> bool:
 
 
 def _pick_ipk_audio(search_dirs: list[Path], codename: Optional[str]) -> Optional[Path]:
+    candidates: list[Path] = []
     for pattern in ("*.ogg", "*.wav", "*.wav.ckd"):
-        candidates: list[Path] = []
         for root in search_dirs:
             if not root or not root.is_dir():
                 continue
@@ -77,18 +81,36 @@ def _pick_ipk_audio(search_dirs: list[Path], codename: Optional[str]) -> Optiona
                     continue
                 candidates.append(p)
 
-        if not candidates:
-            continue
+    if not candidates:
+        return None
 
-        if codename:
-            scoped = [p for p in candidates if _path_has_codename_component(p, codename)]
-            if scoped:
-                return scoped[0]
+    if codename:
+        scoped = [p for p in candidates if _path_has_codename_component(p, codename)]
+        if scoped:
+            candidates = scoped
+        else:
             # V1 behavior: do not pick random media from another map when codename is known.
-            continue
-        return candidates[0]
+            return None
 
-    return None
+    codename_low = (codename or "").lower()
+    if codename_low:
+        exact_wav_ckd = [p for p in candidates if p.name.lower() == f"{codename_low}.wav.ckd"]
+        if exact_wav_ckd:
+            return exact_wav_ckd[0]
+
+    has_x360_path = any("/x360/" in str(p).lower().replace("\\", "/") for p in candidates)
+    preferred_suffixes = (".wav.ckd", ".wav", ".ogg") if has_x360_path else (".ogg", ".wav", ".wav.ckd")
+
+    for suffix in preferred_suffixes:
+        for p in candidates:
+            low_name = p.name.lower()
+            if suffix == ".wav.ckd":
+                if low_name.endswith(".wav.ckd"):
+                    return p
+            elif low_name.endswith(suffix):
+                return p
+
+    return candidates[0]
 
 
 def _pick_ipk_video(search_dirs: list[Path], codename: Optional[str]) -> Optional[Path]:
@@ -138,6 +160,8 @@ def _collect_menuart_texture_sources(source_dir: Path, codename: str) -> list[Pa
             seen.add(key)
             sources.append(path)
 
+    _add(source_dir / "MenuArt")
+    _add(source_dir / "menuart")
     _add(source_dir / "MenuArt" / "textures")
     _add(source_dir / "menuart" / "textures")
 
@@ -161,10 +185,181 @@ def _collect_menuart_texture_sources(source_dir: Path, codename: str) -> list[Pa
     for platform_dir in itf_cooked.iterdir():
         if not platform_dir.is_dir():
             continue
+        _add(platform_dir / "world" / "maps" / codename / "menuart")
+        _add(platform_dir / "world" / "maps" / codename_low / "menuart")
         _add(platform_dir / "world" / "maps" / codename / "menuart" / "textures")
         _add(platform_dir / "world" / "maps" / codename_low / "menuart" / "textures")
 
     return sources
+
+
+def _ensure_optional_menuart_actors_from_textures(map_target: Path, codename: str) -> int:
+    """Create optional MenuArt actor files when matching textures exist.
+
+    Some sources (notably JDNext extraction paths) can populate optional MenuArt
+    textures later in the install flow (pictos/cache decode), after initial
+    `write_game_files` actor generation has already run.
+    """
+    texture_dirs = [
+        map_target / "menuart" / "textures",
+        map_target / "MenuArt" / "textures",
+    ]
+    actor_dir = map_target / "MenuArt" / "Actors"
+    actor_dir.mkdir(parents=True, exist_ok=True)
+
+    optional_suffixes = (
+        "cover_albumbkg",
+        "cover_albumcoach",
+        "banner_bkg",
+        "map_bkg",
+    )
+    texture_exts = (".tga", ".png", ".jpg", ".jpeg", ".tga.ckd", ".png.ckd", ".jpg.ckd", ".jpeg.ckd")
+
+    created = 0
+    for suffix in optional_suffixes:
+        has_texture = False
+        for tex_dir in texture_dirs:
+            for ext in texture_exts:
+                if (tex_dir / f"{codename}_{suffix}{ext}").exists():
+                    has_texture = True
+                    break
+            if has_texture:
+                break
+
+        if not has_texture:
+            continue
+
+        act_path = actor_dir / f"{codename}_{suffix}.act"
+        if act_path.exists():
+            continue
+
+        act_path.write_text(
+            f'''params =
+{{
+    NAME="Actor",
+    Actor =
+    {{
+        RELATIVEZ = 0,
+        LUA = "enginedata/actortemplates/tpl_materialgraphiccomponent2d.tpl",
+        COMPONENTS =
+        {{
+            {{
+                NAME = "MaterialGraphicComponent",
+                MaterialGraphicComponent =
+                {{
+                    disableLight = 0,
+                    material =
+                    {{
+                        GFXMaterialSerializable =
+                        {{
+                            textureSet =
+                            {{
+                                GFXMaterialTexturePathSet =
+                                {{
+                                    diffuse = "World/MAPS/{codename}/menuart/textures/{codename}_{suffix}.tga"
+                                }}
+                            }},
+                            shaderPath = "World/_COMMON/MatShader/MultiTexture_1Layer.msh"
+                        }}
+                    }}
+                }}
+            }}
+        }}
+    }}
+}}''',
+            encoding="utf-8",
+        )
+        created += 1
+
+    return created
+
+
+def _ensure_jdnext_albumcoach_texture_from_coach(map_target: Path, codename: str) -> bool:
+    """Synthesize missing albumcoach texture from coach_1 for JDNext maps.
+
+    JDNext sources commonly do not ship a dedicated albumcoach texture. In that
+    case, mirror the primary coach texture so downstream actor references can be
+    generated consistently.
+    """
+    texture_dirs = [
+        map_target / "menuart" / "textures",
+        map_target / "MenuArt" / "textures",
+    ]
+    texture_exts = (".tga", ".png", ".jpg", ".jpeg", ".tga.ckd", ".png.ckd", ".jpg.ckd", ".jpeg.ckd")
+
+    # If albumcoach already exists in any recognized extension, do nothing.
+    for tex_dir in texture_dirs:
+        for ext in texture_exts:
+            if (tex_dir / f"{codename}_cover_albumcoach{ext}").exists():
+                return False
+
+    src: Optional[Path] = None
+    dst: Optional[Path] = None
+    for tex_dir in texture_dirs:
+        for ext in texture_exts:
+            coach_candidate = tex_dir / f"{codename}_coach_1{ext}"
+            if coach_candidate.exists():
+                src = coach_candidate
+                dst = tex_dir / f"{codename}_cover_albumcoach{ext}"
+                break
+        if src is not None:
+            break
+
+    if src is None or dst is None:
+        return False
+
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        return True
+    except OSError:
+        return False
+
+
+def _install_menuart_companion_assets(menuart_sources: list[Path], map_target: Path) -> int:
+    """Install non-texture MenuArt companion files shipped as *.ckd payloads.
+
+    Some source layouts provide MenuArt actor/scene files as `.act.ckd` and
+    `.isc.ckd` that are already plain payloads. These should be installed as
+    `.act` / `.isc` files rather than fed to the texture decoder.
+    """
+    actor_dir = map_target / "MenuArt" / "Actors"
+    scene_dir = map_target / "MenuArt"
+    actor_dir.mkdir(parents=True, exist_ok=True)
+    scene_dir.mkdir(parents=True, exist_ok=True)
+
+    copied = 0
+    seen_sources: set[str] = set()
+
+    for src_dir in menuart_sources:
+        if not src_dir.is_dir():
+            continue
+        for ckd_path in src_dir.rglob("*.ckd"):
+            if not ckd_path.is_file():
+                continue
+
+            src_key = str(ckd_path).lower()
+            if src_key in seen_sources:
+                continue
+            seen_sources.add(src_key)
+
+            inner_suffix = Path(ckd_path.stem).suffix.lower()
+            if inner_suffix not in {".act", ".isc"}:
+                continue
+
+            out_name = ckd_path.stem
+            if inner_suffix == ".act":
+                dst_path = actor_dir / out_name
+            else:
+                dst_path = scene_dir / out_name
+
+            try:
+                shutil.copy2(ckd_path, dst_path)
+                copied += 1
+            except OSError as exc:
+                logger.debug("Failed to install MenuArt companion %s: %s", ckd_path.name, exc)
+
+    return copied
 
 
 def _collect_pictogram_sources(source_dir: Path, codename: str, preferred: Optional[Path] = None) -> list[Path]:
@@ -261,7 +456,7 @@ class ExtractAndNormalizeWorker(QObject):
         self._codename = codename
 
     def run(self) -> None:
-        failed_stage = "Extract map data"
+        failed_stage = "Extracting map data..."
         try:
             # Clear output_dir (temp extraction dir) before starting
             import shutil
@@ -270,13 +465,13 @@ class ExtractAndNormalizeWorker(QObject):
                 shutil.rmtree(self._output_dir)
             self._output_dir.mkdir(parents=True, exist_ok=True)
 
-            self.status.emit("Extract map data")
+            self.status.emit("Extracting map data...")
             self.progress.emit(10)
             try:
                 map_output_dir = self._extractor.extract(self._output_dir)
             except Exception as exc:
                 if isinstance(self._extractor, ArchiveIPKExtractor) and isinstance(exc, _V1_RECOVERABLE_IPK_ERRORS):
-                    logger.warning("IPK extraction issue (continuing for parity): %s", exc)
+                    logger.debug("IPK extraction issue (continuing for parity): %s", exc)
                     self.status.emit(f"Warning: IPK extraction issue: {exc}")
                     # V1 parity: continue with any partial extraction state.
                     map_output_dir = self._output_dir
@@ -308,12 +503,12 @@ class ExtractAndNormalizeWorker(QObject):
                     logger.error("IPK media validation failed: %s", error)
                 raise RuntimeError(" ".join(media_errors))
 
-            failed_stage = "Parse CKDs & Metadata"
-            self.status.emit("Parse CKDs & Metadata")
+            failed_stage = "Parsing CKDs and metadata..."
+            self.status.emit("Parsing CKDs and metadata...")
             self.progress.emit(40)
             
-            failed_stage = "Normalize assets"
-            self.status.emit("Normalize assets")
+            failed_stage = "Normalizing assets..."
+            self.status.emit("Normalizing assets...")
             self.progress.emit(50)
 
             map_data = normalize(
@@ -323,7 +518,7 @@ class ExtractAndNormalizeWorker(QObject):
             )
 
             self.progress.emit(100)
-            self.status.emit("Normalization complete.")
+            self.status.emit("Normalization completed.")
             self.finished.emit(map_data)
 
         except Exception as e:
@@ -331,7 +526,7 @@ class ExtractAndNormalizeWorker(QObject):
                 user_msg = str(e)
                 if _is_user_cancelled_browser_close(e):
                     user_msg = "Browser was closed by user. Fetch cancelled."
-                logger.warning("ExtractAndNormalize failed: %s", user_msg)
+                logger.debug("ExtractAndNormalize failed: %s", user_msg)
                 self.error.emit(failed_stage, user_msg)
                 self.finished.emit(None)
                 return
@@ -406,7 +601,7 @@ def reprocess_audio(
             mainsequence_path.parent.mkdir(parents=True, exist_ok=True)
             mainsequence_path.write_text(mainsequence_backup, encoding="utf-8")
         except OSError as exc:
-            logger.warning("Could not restore existing MainSequence tape for '%s': %s", codename, exc)
+            logger.debug("Could not restore existing MainSequence tape for '%s': %s", codename, exc)
     
     # 2. Ported V1 FFmpeg logic: pad/trim main audio and generate intro AMB
     from jd2021_installer.installers.media_processor import (
@@ -414,6 +609,28 @@ def reprocess_audio(
         generate_intro_amb,
         extract_amb_clips,
     )
+
+    source_dir = map_data.source_dir
+    source_is_html = bool(getattr(map_data, "is_html_source", False))
+    if not source_is_html and source_dir and source_dir.exists():
+        source_is_html = any(source_dir.glob("*.html")) or any(source_dir.glob("**/assets.html"))
+
+    source_is_jdnext = bool(getattr(map_data, "is_jdnext_source", False))
+    if not source_is_jdnext:
+        if source_dir and source_dir.exists() and (
+            (source_dir / "jdnext_metadata.json").exists()
+            or (source_dir / "monobehaviour" / "map.json").exists()
+        ):
+            source_is_jdnext = True
+        elif map_data.media.video_path and re.match(
+            r"^video_(ultra|high|mid|low)\.(hd|vp8|vp9)\.webm$",
+            map_data.media.video_path.name.lower(),
+        ):
+            source_is_jdnext = True
+
+    # Preserve native IPK intro AMB assets when present; apply generated intro
+    # flow only for JDNext sources.
+    intro_amb_attempt_enabled = source_is_jdnext
     
     media = map_data.media
 
@@ -436,24 +653,40 @@ def reprocess_audio(
     ogg_path = target_dir / "audio" / f"{codename}.ogg"
     v_override = map_data.effective_video_start_time
     
-    # Use beat marker data if available for precise pre-roll
-    preroll = None
-    if map_data.music_track and map_data.music_track.markers:
-        from jd2021_installer.parsers.binary_ckd import calculate_marker_preroll
-        preroll = calculate_marker_preroll(
-            map_data.music_track.markers, 
-            map_data.music_track.start_beat
+    if intro_amb_attempt_enabled:
+        # Use beat marker data if available for precise pre-roll
+        preroll = None
+        if map_data.music_track and map_data.music_track.markers:
+            from jd2021_installer.parsers.binary_ckd import calculate_marker_preroll
+
+            preroll = calculate_marker_preroll(
+                map_data.music_track.markers,
+                map_data.music_track.start_beat,
+                include_calibration=True,
+            )
+
+        generate_intro_amb(
+            ogg_path,
+            codename,
+            target_dir,
+            a_offset,
+            v_override,
+            preroll,
+            True,
+            config,
         )
-        
-    generate_intro_amb(ogg_path, codename, target_dir, a_offset, v_override, preroll, config)
 
-    # Ensure intro AMB is triggerable even when source cinematic clip data is sparse.
-    try:
-        from jd2021_installer.installers.ambient_processor import _inject_intro_amb_soundset_clip
+        # Ensure intro AMB is triggerable even when source cinematic clip data is sparse.
+        try:
+            from jd2021_installer.installers.ambient_processor import _inject_intro_amb_soundset_clip
 
-        _inject_intro_amb_soundset_clip(target_dir, codename)
-    except Exception as exc:
-        logger.debug("AMB SoundSetClip injection skipped for '%s': %s", codename, exc)
+            _inject_intro_amb_soundset_clip(
+                target_dir,
+                codename,
+                attempt_enabled=True,
+            )
+        except Exception as exc:
+            logger.debug("AMB SoundSetClip injection skipped for '%s': %s", codename, exc)
 
     # Ported V1: Extract cinematic AMB clips from the main audio
     if map_data.cinematic_tape:
@@ -495,6 +728,28 @@ def reprocess_audio_readjust(
         extract_amb_clips,
     )
 
+    source_dir = map_data.source_dir
+    source_is_html = bool(getattr(map_data, "is_html_source", False))
+    if not source_is_html and source_dir and source_dir.exists():
+        source_is_html = any(source_dir.glob("*.html")) or any(source_dir.glob("**/assets.html"))
+
+    source_is_jdnext = bool(getattr(map_data, "is_jdnext_source", False))
+    if not source_is_jdnext:
+        if source_dir and source_dir.exists() and (
+            (source_dir / "jdnext_metadata.json").exists()
+            or (source_dir / "monobehaviour" / "map.json").exists()
+        ):
+            source_is_jdnext = True
+        elif map_data.media.video_path and re.match(
+            r"^video_(ultra|high|mid|low)\.(hd|vp8|vp9)\.webm$",
+            map_data.media.video_path.name.lower(),
+        ):
+            source_is_jdnext = True
+
+    # Preserve native IPK intro AMB assets when present; apply generated intro
+    # flow only for JDNext sources.
+    intro_amb_attempt_enabled = source_is_jdnext
+
     codename = map_data.codename
     media = map_data.media
 
@@ -519,23 +774,38 @@ def reprocess_audio_readjust(
     convert_audio(media.audio_path, codename, target_dir, a_offset, config)
 
     ogg_path = target_dir / "audio" / f"{codename}.ogg"
-    preroll = None
-    if map_data.music_track and map_data.music_track.markers:
-        from jd2021_installer.parsers.binary_ckd import calculate_marker_preroll
+    if intro_amb_attempt_enabled:
+        preroll = None
+        if map_data.music_track and map_data.music_track.markers:
+            from jd2021_installer.parsers.binary_ckd import calculate_marker_preroll
 
-        preroll = calculate_marker_preroll(
-            map_data.music_track.markers,
-            map_data.music_track.start_beat,
+            preroll = calculate_marker_preroll(
+                map_data.music_track.markers,
+                map_data.music_track.start_beat,
+                include_calibration=True,
+            )
+
+        generate_intro_amb(
+            ogg_path,
+            codename,
+            target_dir,
+            a_offset,
+            v_override,
+            preroll,
+            True,
+            config,
         )
 
-    generate_intro_amb(ogg_path, codename, target_dir, a_offset, v_override, preroll, config)
+        try:
+            from jd2021_installer.installers.ambient_processor import _inject_intro_amb_soundset_clip
 
-    try:
-        from jd2021_installer.installers.ambient_processor import _inject_intro_amb_soundset_clip
-
-        _inject_intro_amb_soundset_clip(target_dir, codename)
-    except Exception as exc:
-        logger.debug("AMB SoundSetClip injection skipped for '%s' (readjust): %s", codename, exc)
+            _inject_intro_amb_soundset_clip(
+                target_dir,
+                codename,
+                attempt_enabled=True,
+            )
+        except Exception as exc:
+            logger.debug("AMB SoundSetClip injection skipped for '%s' (readjust): %s", codename, exc)
 
     if map_data.cinematic_tape:
         extract_amb_clips(map_data.cinematic_tape, media.audio_path, target_dir, codename, config)
@@ -567,7 +837,7 @@ class ApplyAndFinishWorker(QObject):
 
     def run(self) -> None:
         try:
-            self.status.emit("Finalizing Offsets")
+            self.status.emit("Finalizing offsets...")
             self.progress.emit(30)
             
             # 1. Update configs and audio via reprocess_audio
@@ -609,7 +879,7 @@ class ApplyOffsetsBatchWorker(QObject):
 
             for idx, (map_data, target_dir, a_offset) in enumerate(self._entries, start=1):
                 codename = map_data.codename
-                self.status.emit(f"[{codename}] Finalizing Offsets")
+                self.status.emit(f"[{codename}] Finalizing offsets...")
                 progress = int(((idx - 1) / total) * 100)
                 self.progress.emit(progress)
                 reprocess_audio(map_data, target_dir, a_offset, self._config)
@@ -650,7 +920,7 @@ class ApplyReadjustOffsetsBatchWorker(QObject):
 
             for idx, (map_data, target_dir, a_offset, v_override, update_video, update_audio) in enumerate(self._entries, start=1):
                 codename = map_data.codename
-                self.status.emit(f"[{codename}] Finalizing Offsets")
+                self.status.emit(f"[{codename}] Finalizing offsets...")
                 progress = int(((idx - 1) / total) * 100)
                 self.progress.emit(progress)
                 reprocess_audio_readjust(
@@ -689,6 +959,7 @@ class BatchInstallWorker(QObject):
         config: AppConfig,
         selected_maps: Optional[set[str]] = None,
         fetch_codenames: Optional[list[str]] = None,
+        fetch_source: str = "jdu",
         force_unlock_locked_status: bool = False,
         parent: Optional[QObject] = None,
     ) -> None:
@@ -698,6 +969,7 @@ class BatchInstallWorker(QObject):
         self._config = config
         self._selected_maps = selected_maps
         self._fetch_codenames = [c.strip() for c in (fetch_codenames or []) if c and c.strip()]
+        self._fetch_source = (fetch_source or "jdu").strip().lower() or "jdu"
         self._force_unlock_locked_status = force_unlock_locked_status
 
     def run(self) -> None:
@@ -734,38 +1006,50 @@ class BatchInstallWorker(QObject):
 
                 return asset, nohud
 
+            def detect_html_source_game(asset_html: Optional[Path]) -> str:
+                if asset_html is None or not asset_html.is_file():
+                    return "jdu"
+                try:
+                    content = asset_html.read_text(encoding="utf-8", errors="ignore").lower()
+                except OSError:
+                    return "jdu"
+                if "/jdnext/maps/" in content or "server:jdnext" in content:
+                    return "jdnext"
+                return "jdu"
+
             def looks_like_prepared_map_dir(folder: Path) -> bool:
                 if not folder.is_dir():
                     return False
 
-                has_ckd = any(folder.rglob("*.ckd"))
-                if has_ckd:
-                    return True
-
                 has_audio = False
-                for pattern in ("*.ogg", "*.wav", "*.wav.ckd"):
-                    for p in folder.rglob(pattern):
-                        low_name = p.name.lower()
-                        low_path = str(p).lower().replace("\\", "/")
-                        if "audiopreview" in low_name:
-                            continue
-                        if "/amb/" in low_path or "/autodance/" in low_path:
-                            continue
-                        if low_name.startswith("amb_"):
-                            continue
-                        has_audio = True
-                        break
-                    if has_audio:
-                        break
+                has_video = False
+                has_musictrack = False
 
-                has_video = any(
-                    p.is_file()
-                    and "mappreview" not in p.name.lower()
-                    and "videopreview" not in p.name.lower()
-                    for p in folder.rglob("*.webm")
-                )
+                try:
+                    for root, _dirs, files in os.walk(folder):
+                        for filename in files:
+                            low_name = filename.lower()
 
-                has_musictrack = any(folder.rglob("*musictrack*.tpl.ckd"))
+                            # Keep legacy behavior: any CKD in the tree qualifies as prepared.
+                            if low_name.endswith(".ckd"):
+                                return True
+
+                            if not has_audio and (low_name.endswith(".ogg") or low_name.endswith(".wav")):
+                                low_path = str(Path(root) / filename).lower().replace("\\", "/")
+                                if "audiopreview" not in low_name and "/amb/" not in low_path and "/autodance/" not in low_path and not low_name.startswith("amb_"):
+                                    has_audio = True
+
+                            if not has_video and low_name.endswith(".webm"):
+                                if "mappreview" not in low_name and "videopreview" not in low_name:
+                                    has_video = True
+
+                            if not has_musictrack and low_name.endswith(".tpl.ckd") and "musictrack" in low_name:
+                                has_musictrack = True
+
+                        if has_audio and has_video and has_musictrack:
+                            return True
+                except OSError:
+                    return False
 
                 return has_audio and has_video and has_musictrack
 
@@ -787,14 +1071,16 @@ class BatchInstallWorker(QObject):
                     candidates.append({"kind": "ipk", "path": self._source_dir})
                 elif self._source_dir.is_dir():
                     root_asset, root_nohud = find_html_pair(self._source_dir)
-                    if root_asset and root_nohud:
+                    root_source_game = detect_html_source_game(root_asset)
+                    if root_asset and (root_nohud or root_source_game == "jdnext"):
                         candidates.append(
                             {
-                                "kind": "html",
+                                "kind": "html_jdnext" if root_source_game == "jdnext" else "html",
                                 "path": self._source_dir,
                                 "name": self._source_dir.name,
                                 "asset": root_asset,
                                 "nohud": root_nohud,
+                                "source_game": root_source_game,
                             }
                         )
 
@@ -807,14 +1093,16 @@ class BatchInstallWorker(QObject):
                                 continue
 
                             asset_html, nohud_html = find_html_pair(path)
-                            if asset_html and nohud_html:
+                            source_game = detect_html_source_game(asset_html)
+                            if asset_html and (nohud_html or source_game == "jdnext"):
                                 candidates.append(
                                     {
-                                        "kind": "html",
+                                        "kind": "html_jdnext" if source_game == "jdnext" else "html",
                                         "path": path,
                                         "name": path.name,
                                         "asset": asset_html,
                                         "nohud": nohud_html,
+                                        "source_game": source_game,
                                     }
                                 )
             
@@ -840,7 +1128,7 @@ class BatchInstallWorker(QObject):
                     from jd2021_installer.extractors.archive_ipk import inspect_ipk
                     maps_in_ipk = inspect_ipk(cpath)
                     map_names.extend(maps_in_ipk or [cpath.stem])
-                elif kind == "html":
+                elif kind in {"html", "html_jdnext"}:
                     map_names.append(str(candidate.get("name") or cpath.name))
                 else:
                     map_names.append(cpath.name)
@@ -881,15 +1169,24 @@ class BatchInstallWorker(QObject):
             batch_cache.mkdir(parents=True, exist_ok=True)
 
             # V1-style parity: prepare all HTML-sourced maps first while links are fresh.
-            html_candidates = [c for c in candidates if str(c["kind"]) == "html"]
+            html_candidates = [
+                c
+                for c in candidates
+                if str(c["kind"]) in {"html", "html_jdnext"}
+            ]
             if html_candidates:
                 self.status.emit("Phase 1/2: Preparing HTML-sourced batch maps...")
                 for idx, candidate in enumerate(html_candidates, start=1):
                     map_name = str(candidate.get("name") or Path(candidate["path"]).name)
                     if selected_lookup and map_name.lower() not in selected_lookup:
                         continue
+                    # Reserve an early progress slice for HTML/JDNext preparation so UI does not appear stalled.
+                    phase1_progress = 3 + int((idx / max(len(html_candidates), 1)) * 17)
+                    emit_progress(min(20, phase1_progress))
                     asset_html = Path(candidate["asset"])
-                    nohud_html = Path(candidate["nohud"])
+                    raw_nohud = candidate.get("nohud")
+                    nohud_html = Path(raw_nohud) if raw_nohud else None
+                    source_game = str(candidate.get("source_game") or "jdu").strip().lower() or "jdu"
 
                     self.status.emit(
                         f"[{idx}/{len(html_candidates)}] Downloading/Preparing HTML map {map_name}..."
@@ -899,17 +1196,24 @@ class BatchInstallWorker(QObject):
 
                         extractor = WebPlaywrightExtractor(
                             asset_html=str(asset_html),
-                            nohud_html=str(nohud_html),
+                            nohud_html=str(nohud_html) if nohud_html else None,
+                            source_game=source_game,
                             quality=self._config.video_quality,
                             config=self._config,
                         )
                         prepared_dir = extractor.extract(batch_cache)
                         html_prepared.append((map_name, prepared_dir))
                     except Exception as e:
-                        logger.warning("Failed HTML prepare for %s: %s", map_name, e)
+                        logger.debug("Failed HTML prepare for %s: %s", map_name, e)
                         self.status.emit(f"Warning: Failed HTML prepare for {map_name} ({str(e)[:40]})")
 
-            process_candidates = [c for c in candidates if str(c["kind"]) != "html"]
+                emit_progress(20)
+
+            process_candidates = [
+                c
+                for c in candidates
+                if str(c["kind"]) not in {"html", "html_jdnext"}
+            ]
 
             self.status.emit("Phase 2/2: Installing prepared maps...")
 
@@ -933,6 +1237,7 @@ class BatchInstallWorker(QObject):
                         self.status.emit(f"[{map_name}] Fetch map data")
                         extractor = WebPlaywrightExtractor(
                             codenames=[map_name],
+                            source_game=self._fetch_source,
                             quality=self._config.video_quality,
                             config=self._config,
                         )
@@ -947,7 +1252,7 @@ class BatchInstallWorker(QObject):
                         maps_in_ipk = inspect_ipk(cpath)
                         ipk_name_hint = maps_in_ipk[0] if maps_in_ipk else cpath.name
                         
-                        self.status.emit(f"[{ipk_name_hint}] Extract map data")
+                        self.status.emit(f"[{ipk_name_hint}] Extracting map data...")
                         desired_codename = None
                         if selected_lookup and maps_in_ipk:
                             for discovered_name in maps_in_ipk:
@@ -980,7 +1285,7 @@ class BatchInstallWorker(QObject):
                         attempted_maps += 1
                         emit_map_stage(0)
                             
-                        self.status.emit(f"[{map_name}] Parse CKDs & Metadata")
+                        self.status.emit(f"[{map_name}] Parsing CKDs and metadata...")
                         from jd2021_installer.parsers.normalizer import normalize
                         map_data = normalize(map_dir, codename=map_name, search_root=map_dir)
                         setattr(map_data, "_is_ipk_source", is_candidate_ipk)
@@ -1006,7 +1311,7 @@ class BatchInstallWorker(QObject):
                                 )
                         
                         emit_map_stage(1)
-                        self.status.emit(f"[{map_data.codename}] Normalize assets")
+                        self.status.emit(f"[{map_data.codename}] Normalizing assets...")
                         
                         # V1 Parity: Persist preview assets in map cache so they remain available after batch extraction is cleared
                         map_cache = self._config.cache_directory / map_data.codename
@@ -1039,7 +1344,7 @@ class BatchInstallWorker(QObject):
                     
                 except Exception as e:
                     cpath = Path(candidate["path"])
-                    logger.warning("Failed to install map from %s: %s", cpath.name, e)
+                    logger.debug("Failed to install map from %s: %s", cpath.name, e)
                     self.status.emit(f"Warning: Failed {cpath.name} ({str(e)[:30]})")
 
             # Process maps prepared from HTML folders in phase 1.
@@ -1053,7 +1358,7 @@ class BatchInstallWorker(QObject):
                     attempted_maps += 1
                     emit_map_stage(0)
 
-                    self.status.emit(f"[{map_name}] Parse CKDs & Metadata")
+                    self.status.emit(f"[{map_name}] Parsing CKDs and metadata...")
                     from jd2021_installer.parsers.normalizer import normalize
                     map_data = normalize(map_dir, codename=map_name, search_root=map_dir)
                     setattr(map_data, "_is_ipk_source", False)
@@ -1079,7 +1384,7 @@ class BatchInstallWorker(QObject):
                             )
 
                     emit_map_stage(1)
-                    self.status.emit(f"[{map_data.codename}] Normalize assets")
+                    self.status.emit(f"[{map_data.codename}] Normalizing assets...")
 
                     map_cache = self._config.cache_directory / map_data.codename
                     map_cache.mkdir(parents=True, exist_ok=True)
@@ -1109,7 +1414,7 @@ class BatchInstallWorker(QObject):
                     installed_maps.append(map_data)
                     logger.info("Batch installed HTML map: %s", map_data.codename)
                 except Exception as e:
-                    logger.warning("Failed to install HTML map %s: %s", map_name, e)
+                    logger.debug("Failed to install HTML map %s: %s", map_name, e)
                     self.status.emit(f"Warning: Failed {map_name} ({str(e)[:30]})")
 
             import shutil
@@ -1151,11 +1456,20 @@ def pre_install_cleanup(
     if status_callback:
         status_callback(f"Cleaning up previous installation of {codename}...")
 
-    # 1. Delete main map directory
-    map_dir = game_dir / "data" / "world" / "maps" / codename
-    if map_dir.exists():
-        logger.info("Deleting previous map directory: %s", codename)
-        shutil.rmtree(map_dir, ignore_errors=True)
+    # 1. Delete main map directory (support common case variants)
+    map_dir_candidates = [
+        game_dir / "data" / "world" / "maps" / codename,
+        game_dir / "data" / "World" / "MAPS" / codename,
+    ]
+    seen_paths: set[str] = set()
+    for map_dir in map_dir_candidates:
+        key = str(map_dir).lower()
+        if key in seen_paths:
+            continue
+        seen_paths.add(key)
+        if map_dir.exists():
+            logger.info("Deleting previous map directory: %s", map_dir)
+            shutil.rmtree(map_dir, ignore_errors=True)
 
     # 2. Delete cooked cache directories
     # V1 Parity: engine cache paths are strictly lowercase
@@ -1179,6 +1493,203 @@ def pre_install_cleanup(
     unregister_map(game_dir, codename)
 
 
+@dataclass
+class UninstallResult:
+    codename: str
+    removed_map_dirs: list[Path]
+    removed_cache_dirs: list[Path]
+    sku_unregistered: bool
+    removed_installer_cache: bool
+
+
+@dataclass
+class UninstallBatchResult:
+    selected_count: int
+    changed_codenames: list[str]
+    failed: list[str]
+    no_changes: list[str]
+
+
+def uninstall_map_from_game(
+    game_dir: Path,
+    codename: str,
+    config: Optional[AppConfig] = None,
+    status_callback: Optional[Callable[[str], None]] = None,
+) -> UninstallResult:
+    """Uninstall a map from the game and return verifiable cleanup results."""
+    normalized_game_dir = game_dir
+    while normalized_game_dir.name.lower() in ("world", "data"):
+        normalized_game_dir = normalized_game_dir.parent
+
+    name_lower = codename.lower()
+    map_dir_candidates = [
+        normalized_game_dir / "data" / "world" / "maps" / codename,
+        normalized_game_dir / "data" / "World" / "MAPS" / codename,
+    ]
+    deduped_map_dirs: list[Path] = []
+    seen_map_dirs: set[str] = set()
+    for map_dir in map_dir_candidates:
+        key = str(map_dir).lower()
+        if key in seen_map_dirs:
+            continue
+        seen_map_dirs.add(key)
+        deduped_map_dirs.append(map_dir)
+
+    cache_base = normalized_game_dir / "data" / "cache" / "itf_cooked" / "pc" / "world" / "maps" / name_lower
+    cache_paths = [
+        cache_base,
+        cache_base.with_name(cache_base.name + "_autodance"),
+        cache_base.with_name(cache_base.name + "_cine"),
+        cache_base / "audio",
+    ]
+
+    map_dirs_before = [p for p in deduped_map_dirs if p.exists()]
+    cache_dirs_before = [p for p in cache_paths if p.exists()]
+
+    from jd2021_installer.installers.sku_scene import is_registered
+
+    sku_registered_before = is_registered(normalized_game_dir, codename)
+
+    installer_cache_dir: Optional[Path] = None
+    installer_cache_before = False
+    if config is not None:
+        installer_cache_dir = config.cache_directory / codename
+        installer_cache_before = installer_cache_dir.exists()
+
+    pre_install_cleanup(normalized_game_dir, codename, status_callback=status_callback)
+
+    removed_installer_cache = False
+    if installer_cache_dir is not None and installer_cache_before:
+        if status_callback:
+            status_callback(f"Removing installer cache for {codename}...")
+        shutil.rmtree(installer_cache_dir, ignore_errors=True)
+        removed_installer_cache = not installer_cache_dir.exists()
+        if not removed_installer_cache:
+            raise RuntimeError(f"Installer cache could not be removed: {installer_cache_dir}")
+
+    for path in map_dirs_before:
+        if path.exists():
+            raise RuntimeError(f"Map directory still exists after uninstall: {path}")
+
+    for path in cache_dirs_before:
+        if path.exists():
+            raise RuntimeError(f"Cooked cache directory still exists after uninstall: {path}")
+
+    sku_unregistered = False
+    if sku_registered_before:
+        sku_unregistered = not is_registered(normalized_game_dir, codename)
+        if not sku_unregistered:
+            raise RuntimeError(f"Map is still registered in SkuScene after uninstall: {codename}")
+
+    return UninstallResult(
+        codename=codename,
+        removed_map_dirs=[p for p in map_dirs_before if not p.exists()],
+        removed_cache_dirs=[p for p in cache_dirs_before if not p.exists()],
+        sku_unregistered=sku_unregistered,
+        removed_installer_cache=removed_installer_cache,
+    )
+
+
+class UninstallMapsWorker(QObject):
+    """Uninstall one or more maps in a background thread."""
+
+    progress = pyqtSignal(int)
+    status = pyqtSignal(str)
+    error = pyqtSignal(str)
+    finished = pyqtSignal(object)  # UninstallBatchResult
+
+    def __init__(
+        self,
+        game_dir: Path,
+        selected_codenames: list[str],
+        config: Optional[AppConfig] = None,
+        parent: Optional[QObject] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._game_dir = game_dir
+        self._selected_codenames = list(selected_codenames)
+        self._config = config
+
+    def run(self) -> None:
+        try:
+            total = len(self._selected_codenames)
+            if total == 0:
+                self.finished.emit(
+                    UninstallBatchResult(
+                        selected_count=0,
+                        changed_codenames=[],
+                        failed=[],
+                        no_changes=[],
+                    )
+                )
+                return
+
+            failed: list[str] = []
+            changed_lowers: set[str] = set()
+            no_changes: list[str] = []
+
+            for idx, codename in enumerate(self._selected_codenames, start=1):
+                progress_value = int(((idx - 1) / total) * 100)
+                self.progress.emit(progress_value)
+                self.status.emit(f"[{codename}] Uninstalling map files...")
+
+                try:
+                    result = uninstall_map_from_game(
+                        self._game_dir,
+                        codename,
+                        config=self._config,
+                        status_callback=lambda msg, code=codename: self.status.emit(f"[{code}] {msg}"),
+                    )
+
+                    index_removed = remove_entry(codename)
+                    if index_removed:
+                        self.status.emit(f"[{codename}] Removed from readjust index.")
+
+                    changed = bool(
+                        result.removed_map_dirs
+                        or result.removed_cache_dirs
+                        or result.sku_unregistered
+                        or result.removed_installer_cache
+                        or index_removed
+                    )
+                    if changed:
+                        changed_lowers.add(codename.lower())
+                        self.status.emit(
+                            (
+                                f"[{codename}] Uninstall complete "
+                                f"(map_dirs={len(result.removed_map_dirs)}, "
+                                f"cooked_cache={len(result.removed_cache_dirs)}, "
+                                f"sku_unregistered={'yes' if result.sku_unregistered else 'no'}, "
+                                f"installer_cache={'yes' if result.removed_installer_cache else 'no'}, "
+                                f"index_removed={'yes' if index_removed else 'no'})."
+                            )
+                        )
+                    else:
+                        no_changes.append(codename)
+                        self.status.emit(
+                            f"[{codename}] No uninstallable artifacts found (already removed or never installed)."
+                        )
+
+                except Exception as exc:
+                    logger.exception("Failed to uninstall map '%s': %s", codename, exc)
+                    failed.append(f"{codename}: {exc}")
+                    self.status.emit(f"[{codename}] ERROR: {exc}")
+
+            self.progress.emit(100)
+            self.finished.emit(
+                UninstallBatchResult(
+                    selected_count=total,
+                    changed_codenames=sorted(changed_lowers),
+                    failed=failed,
+                    no_changes=no_changes,
+                )
+            )
+
+        except Exception as exc:
+            log_exception_for_profile(logger, "UninstallMapsWorker failed", exc)
+            self.error.emit(str(exc))
+
+
 def install_map_to_game(
     map_data: NormalizedMapData, 
     game_dir: Path, 
@@ -1189,6 +1700,47 @@ def install_map_to_game(
 ) -> None:
     """Core installation logic: files → game directory."""
     codename = map_data.codename
+
+    def _is_jdnext_source_map() -> bool:
+        mode_low = (source_mode or "").lower()
+        if "jdnext" in mode_low:
+            return True
+
+        source_dir = map_data.source_dir
+        if source_dir and source_dir.exists():
+            assets_html = source_dir / "assets.html"
+            if assets_html.exists():
+                try:
+                    content = assets_html.read_text(encoding="utf-8", errors="ignore").lower()
+                    if "/jdnext/maps/" in content or "server:jdnext" in content:
+                        return True
+                except OSError:
+                    pass
+
+        video_path = map_data.media.video_path
+        if video_path:
+            name = video_path.name.lower()
+            if re.match(r"^video_(ultra|high|mid|low)\.(hd|vp8|vp9)\.webm$", name):
+                return True
+
+        return False
+
+    source_is_jdnext = _is_jdnext_source_map()
+
+    def _mainsequence_has_any_clip_entries(target_root: Path, map_code: str) -> bool:
+        tape_candidates = [
+            target_root / "Cinematics" / f"{map_code}_MainSequence.tape",
+            target_root / "cinematics" / f"{map_code}_MainSequence.tape",
+        ]
+        tape_path = next((p for p in tape_candidates if p.exists()), None)
+        if tape_path is None:
+            return False
+        try:
+            content = tape_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return False
+        # Detect at least one clip entry object inside Tape.Clips table.
+        return re.search(r"Clips\s*=\s*\{\s*\{", content, flags=re.DOTALL) is not None
     
     # 0. Pre-install cleanup
     pre_install_cleanup(game_dir, codename, status_callback)
@@ -1210,21 +1762,21 @@ def install_map_to_game(
     # We'll need to manually emit status for its sub-steps if we want true granularity
     # but for now we'll wrap it.
     
-    if status_callback: status_callback("Decode XMA2 Audio")
+    if status_callback: status_callback("Decoding XMA2 audio...")
     if progress_callback: progress_callback(20)
     
-    if status_callback: status_callback("Convert Audio (Pad/Trim)")
+    if status_callback: status_callback("Converting audio (pad/trim)...")
     if progress_callback: progress_callback(30)
     
-    if status_callback: status_callback("Generate Intro AMB")
+    if status_callback: status_callback("Generating intro AMB...")
     if progress_callback: progress_callback(40)
     
     reprocess_audio(map_data, map_target, initial_a_offset, config)
 
-    # Fetch/HTML parity ticket: boost installed gameplay audio by +8 dB.
+    # Fetch/HTML parity ticket: boost installed gameplay audio by +8 dB (JDU only).
     mode_low = (source_mode or "").lower()
-    if "fetch" in mode_low or "html" in mode_low:
-        if status_callback: status_callback("Apply +8dB JDU audio boost")
+    if ("fetch" in mode_low or "html" in mode_low) and not _is_jdnext_source_map():
+        if status_callback: status_callback("Applying +8dB JDU audio boost...")
         if progress_callback: progress_callback(45)
         from jd2021_installer.installers.media_processor import apply_audio_gain
 
@@ -1232,24 +1784,27 @@ def install_map_to_game(
         if audio_wav.exists():
             apply_audio_gain(audio_wav, gain_db=8.0, config=config)
         else:
-            logger.warning("Expected gameplay WAV missing for gain boost: %s", audio_wav)
+            logger.debug("Expected gameplay WAV missing for gain boost: %s", audio_wav)
 
     # 2b. Copy Video
     media = map_data.media
     if media.video_path and media.video_path.exists():
-        if status_callback: status_callback("Copy Video files")
+        if status_callback: status_callback("Copying video files...")
         if progress_callback: progress_callback(50)
         from jd2021_installer.installers.media_processor import copy_video
         video_dst = map_target / "videoscoach" / f"{codename}.webm"
-        copy_video(media.video_path, video_dst)
+        copy_video(
+            media.video_path,
+            video_dst,
+            config=config,
+        )
         if media.map_preview_video and media.map_preview_video.exists():
             preview_dst = map_target / "videoscoach" / f"{codename}_MapPreview.webm"
-            copy_video(media.map_preview_video, preview_dst)
+            copy_video(media.map_preview_video, preview_dst, config=config)
 
     # 3. Copy/Rename MenuArt assets (Cover, Banner, Coach, etc.)
     textures_dir = map_target / "menuart" / "textures"
     textures_dir.mkdir(parents=True, exist_ok=True)
-    import shutil
     
     # Map of MapMedia fields to V1 canonical art suffixes
     art_map = {
@@ -1278,15 +1833,21 @@ def install_map_to_game(
             shutil.copy2(src_path, textures_dir / dst_name)
     
     def _extract_coach_index(path: Path) -> int:
-        match = re.search(r"coach_(\d+)", path.name.lower())
+        match = re.search(r"coach[_-]?(\d+)", path.name.lower())
         return int(match.group(1)) if match else 0
 
     # Coaches are now separated into main and phone lists in normalize_sync.
     # We use the index from the filename to ensure correct mapping even if some are missing.
+    fallback_idx = 1
+    used_indices: set[int] = set()
     for coach_img in media.coach_images:
         if coach_img.exists():
             idx = _extract_coach_index(coach_img)
-            if idx == 0: continue # Skip if no index found
+            if idx == 0:
+                while fallback_idx in used_indices:
+                    fallback_idx += 1
+                idx = fallback_idx
+            used_indices.add(idx)
             
             suffix = coach_img.suffix.lower()
             if coach_img.name.lower().endswith(".tga.ckd"):
@@ -1299,7 +1860,8 @@ def install_map_to_game(
     for phone_img in media.coach_phone_images:
         if phone_img.exists():
             idx = _extract_coach_index(phone_img)
-            if idx == 0: continue
+            if idx == 0:
+                continue
             
             ext = ".png" # Phone assets are usually PNG
             if phone_img.name.lower().endswith(".tga.ckd"):
@@ -1333,30 +1895,57 @@ def install_map_to_game(
                     target_name = f"{codename}_{target_name}"
                 shutil.copy2(asset, textures_dir / target_name)
 
-        if status_callback: status_callback("Convert Dance Tapes")
+        if status_callback: status_callback("Converting dance tapes...")
         if progress_callback: progress_callback(60)
         from jd2021_installer.installers.tape_converter import auto_convert_tapes
         auto_convert_tapes(map_data.source_dir, map_target, codename)
         
         # We don't have separate steps for Karaoke/Cinematic yet in logic, but status can reflect them
-        if status_callback: status_callback("Convert Karaoke Tapes")
-        if status_callback: status_callback("Convert Cinematic Tapes")
+        if status_callback: status_callback("Converting karaoke tapes...")
+        if status_callback: status_callback("Converting cinematic tapes...")
         
-        if status_callback: status_callback("Process Ambient Sounds")
+        if status_callback: status_callback("Processing ambient sounds...")
         if progress_callback: progress_callback(70)
         from jd2021_installer.installers.ambient_processor import process_ambient_directory
-        process_ambient_directory(map_data.source_dir, map_target, codename)
+
+        source_is_html = bool(getattr(map_data, "is_html_source", False))
+        if not source_is_html and map_data.source_dir and map_data.source_dir.exists():
+            source_is_html = any(map_data.source_dir.glob("*.html")) or any(map_data.source_dir.glob("**/assets.html"))
+
+        normalize_intro_clip = source_is_jdnext
+        if not normalize_intro_clip and not _mainsequence_has_any_clip_entries(map_target, codename):
+            logger.warning(
+                "MainSequence has no clip entries for '%s'; enabling intro clip recovery injection.",
+                codename,
+            )
+            normalize_intro_clip = True
+
+        process_ambient_directory(
+            map_data.source_dir,
+            map_target,
+            codename,
+            attempt_enabled=True,
+            normalize_intro_clip=normalize_intro_clip,
+        )
         
-        if status_callback: status_callback("Decode MenuArt textures")
+        if status_callback: status_callback("Decoding MenuArt textures...")
         if progress_callback: progress_callback(80)
         from jd2021_installer.installers.texture_decoder import decode_menuart_textures, decode_pictograms
+
+        menuart_sources = _collect_menuart_texture_sources(map_data.source_dir, codename)
+        installed_companions = _install_menuart_companion_assets(menuart_sources, map_target)
+        if installed_companions:
+            logger.debug(
+                "Installed %d MenuArt companion asset(s) (.act/.isc) from source payloads.",
+                installed_companions,
+            )
         
         # V1 Parity: Decode textures directly in the target directory 
         # to handle loose assets copied from Fetch/HTML mode.
         decoded_menuart = decode_menuart_textures(textures_dir, textures_dir)
 
         if map_data.source_dir and map_data.source_dir.exists():
-            for menuart_src in _collect_menuart_texture_sources(map_data.source_dir, codename):
+            for menuart_src in menuart_sources:
                 decoded_menuart += decode_menuart_textures(menuart_src, textures_dir)
 
         if decoded_menuart == 0:
@@ -1366,18 +1955,43 @@ def install_map_to_game(
                 codename,
             )
 
+        if _is_jdnext_source_map():
+            synthesized_albumcoach = _ensure_jdnext_albumcoach_texture_from_coach(map_target, codename)
+            if synthesized_albumcoach:
+                logger.debug(
+                    "Synthesized missing albumcoach texture from coach_1 for JDNext map '%s'.",
+                    codename,
+                )
+
             
         # V1 Parity: Validate and heal MenuArt (case-fix + RGBA re-save)
         from jd2021_installer.installers.media_processor import process_menu_art
         process_menu_art(map_target, codename)
+
+        ensured_acts = _ensure_optional_menuart_actors_from_textures(map_target, codename)
+        if ensured_acts:
+            logger.debug(
+                "Created %d optional MenuArt actor file(s) from discovered textures for '%s'.",
+                ensured_acts,
+                codename,
+            )
             
-        if status_callback: status_callback("Decode Pictograms")
+        if status_callback: status_callback("Decoding pictograms...")
         decoded_pictos = 0
+        picto_canvas_size = 512 if _is_jdnext_source_map() else None
         if map_data.source_dir and map_data.source_dir.exists():
             for picto_dir in _collect_pictogram_sources(map_data.source_dir, codename, preferred=picto_src):
-                decoded_pictos += decode_pictograms(picto_dir, map_target / "timeline" / "pictos")
+                decoded_pictos += decode_pictograms(
+                    picto_dir,
+                    map_target / "timeline" / "pictos",
+                    canvas_size=picto_canvas_size,
+                )
         elif picto_src and picto_src.exists():
-            decoded_pictos += decode_pictograms(picto_src, map_target / "timeline" / "pictos")
+            decoded_pictos += decode_pictograms(
+                picto_src,
+                map_target / "timeline" / "pictos",
+                canvas_size=picto_canvas_size,
+            )
 
         if decoded_pictos == 0:
             logger.warning(
@@ -1387,14 +2001,14 @@ def install_map_to_game(
 
     # 5. Moves
     if media.moves_dir and media.moves_dir.exists():
-        if status_callback: status_callback("Integrate Move data")
+        if status_callback: status_callback("Integrating move data...")
         if progress_callback: progress_callback(85)
         from jd2021_installer.installers.media_processor import copy_moves
-        copy_moves(media.moves_dir, map_target)
+        copy_moves(media.moves_dir, map_target, skip_gestures=_is_jdnext_source_map())
 
     # 5b. Autodance + stape payloads (V1 step_11 parity)
     if map_data.has_autodance and map_data.source_dir and map_data.source_dir.exists():
-        if status_callback: status_callback("Extract moves & autodance")
+        if status_callback: status_callback("Extracting moves and autodance...")
         from jd2021_installer.installers.autodance_processor import (
             process_autodance_directory,
             process_stape_file,
@@ -1407,13 +2021,13 @@ def install_map_to_game(
         process_stape_file(map_data.source_dir, map_target, codename)
 
     # 6. Register map in SkuScene ISC
-    if status_callback: status_callback("Register in SkuScene")
+    if status_callback: status_callback("Registering in SkuScene...")
     if progress_callback: progress_callback(95)
     try:
         from jd2021_installer.installers.sku_scene import register_map
         register_map(game_dir, codename)
     except Exception as e:
-        logger.warning("SkuScene registration failed (non-fatal): %s", e)
+        logger.debug("SkuScene registration failed (non-fatal): %s", e)
 
-    if status_callback: status_callback("Finalizing Offsets")
+    if status_callback: status_callback("Finalizing offsets...")
     if progress_callback: progress_callback(100)

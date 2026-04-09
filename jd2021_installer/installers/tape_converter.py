@@ -137,7 +137,7 @@ def _load_ckd_json(ckd_path: Path) -> Dict[str, Any]:
         # Try to find JSON start '{' to handle leading binary junk (e.g. from some IPK tools)
         start_idx = content_bytes.find(b'{')
         if start_idx == -1:
-            logger.warning("No JSON object found in CKD %s (it might be binary)", ckd_path.name)
+            logger.debug("No JSON object found in CKD %s (it might be binary)", ckd_path.name)
             return {}
             
         content = content_bytes[start_idx:].decode("utf-8-sig", errors="replace").strip()
@@ -200,7 +200,7 @@ def convert_tape_file(ckd_path: Path, output_path: Path) -> bool:
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(lua_str, encoding="utf-8")
-        logger.info("Converted tape: %s → %s", ckd_path.name, output_path.name)
+        logger.debug("Converted tape: %s → %s", ckd_path.name, output_path.name)
         return True
 
     except Exception as e:
@@ -253,7 +253,7 @@ def _copy_loose_tape(source_path: Path, output_path: Path, tape_label: str) -> b
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_path, output_path)
-        logger.info("Copied %s tape: %s -> %s", tape_label, source_path.name, output_path.name)
+        logger.debug("Copied %s tape: %s -> %s", tape_label, source_path.name, output_path.name)
         return True
     except Exception as e:
         logger.error("Failed to copy %s tape %s: %s", tape_label, source_path.name, e)
@@ -271,18 +271,24 @@ def auto_convert_tapes(source_dir: Path, target_dir: Path, codename: str) -> int
     """
     converted = 0
 
+    all_files = [p for p in source_dir.rglob("*") if p.is_file()]
+    ckd_files = [p for p in all_files if p.name.lower().endswith(".ckd")]
+
     dance_candidates = [
-        p for p in source_dir.rglob("*dtape*.ckd")
-        if "adtape" not in p.name.lower()
+        p for p in ckd_files
+        if "dtape" in p.name.lower() and "adtape" not in p.name.lower()
     ]
     karaoke_candidates = [
-        p for p in source_dir.rglob("*ktape*.ckd")
+        p for p in ckd_files
+        if "ktape" in p.name.lower()
     ]
     cinematic_candidates = [
-        p for p in source_dir.rglob("*mainsequence*tape*.ckd")
+        p for p in ckd_files
+        if "mainsequence" in p.name.lower() and "tape" in p.name.lower()
     ]
     beats_candidates = [
-        p for p in source_dir.rglob("*btape*.ckd")
+        p for p in ckd_files
+        if "btape" in p.name.lower()
     ]
 
     dance_src = _pick_best_tape(dance_candidates, codename, ["tml_dance", "dance"])
@@ -292,8 +298,8 @@ def auto_convert_tapes(source_dir: Path, target_dir: Path, codename: str) -> int
     else:
         # Manual/IPK maps can already ship plain .dtape (non-CKD).
         loose_dance_candidates = [
-            p for p in source_dir.rglob("*dtape*")
-            if p.is_file()
+            p for p in all_files
+            if "dtape" in p.name.lower()
             and "adtape" not in p.name.lower()
             and ".ckd" not in p.name.lower()
         ]
@@ -312,8 +318,8 @@ def auto_convert_tapes(source_dir: Path, target_dir: Path, codename: str) -> int
     else:
         # Manual/IPK maps can already ship plain .ktape (non-CKD).
         loose_karaoke_candidates = [
-            p for p in source_dir.rglob("*ktape*")
-            if p.is_file() and ".ckd" not in p.name.lower()
+            p for p in all_files
+            if "ktape" in p.name.lower() and ".ckd" not in p.name.lower()
         ]
         loose_karaoke_src = _pick_best_tape(loose_karaoke_candidates, codename, ["tml_karaoke", "karaoke"])
         if loose_karaoke_src and _copy_loose_tape(
@@ -331,5 +337,5 @@ def auto_convert_tapes(source_dir: Path, target_dir: Path, codename: str) -> int
     if beats_src and convert_beats_tape(beats_src, target_dir, codename):
         converted += 1
 
-    logger.info("Auto-converted %d tape(s) for '%s'", converted, codename)
+    logger.debug("Auto-converted %d tape(s) for '%s'", converted, codename)
     return converted

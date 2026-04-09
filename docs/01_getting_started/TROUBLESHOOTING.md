@@ -80,7 +80,8 @@ IPK maps have unique sync characteristics:
 - **Path traversal detected**: IPK contains a path with `..`. Entry skipped for security.
 - **Stale audio/video from previous map** — If installing a second IPK map without resetting, the first map's audio/video paths could carry over. Fixed in current version: browsing a new IPK file clears `_source_spec` and hidden audio/video entries. Use **Reset State** if issues persist.
 - **IPK re-extraction not happening** — If the extracted folder already exists, the pipeline may skip re-extraction. With `manual_ipk_file` set, re-extraction is now forced. If you change the IPK file, click **Reset State** first, then re-analyze.
-- **vgmstream decode failure** — XMA2 audio inside the IPK requires `vgmstream-cli.exe` (bundled in `3rdPartyTools/JDTools`). If the tool is missing or the WAV CKD uses an unsupported codec, audio decode falls back to CKD header stripping. Check that `vgmstream-cli.exe` exists in the expected path.
+- **vgmstream decode failure** — XMA2 audio inside the IPK requires `vgmstream-cli.exe` (installed to `tools/vgmstream/` by setup). If the tool is missing or the WAV CKD uses an unsupported codec, audio decode falls back to CKD header stripping. Check that `vgmstream-cli.exe` exists in the expected path.
+- **JDNext mapPackage extraction fails with `AssetStudioModCLI.exe not found under tools`** — The installer now resolves this binary only from local `tools` paths. Stage the runtime bundle under `tools/Unity2UbiArt/bin/AssetStudioModCLI/` and retry.
 - **Orphan AMB WAV CKDs** — Some IPK maps (e.g., Koi) contain `amb_*_intro.wav.ckd` files without matching `amb_*_intro.tpl.ckd` templates. Step 09 still synthesizes wrappers for compatibility, but intro playback remains intentionally silent in current V2 due to the global intro AMB mitigation.
 
 ## Config Generation Issues

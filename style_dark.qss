@@ -31,6 +31,8 @@ QGroupBox::title {
 QLineEdit,
 QPlainTextEdit,
 QComboBox,
+QSpinBox,
+QDoubleSpinBox,
 QListWidget {
 	background-color: #20242d;
 	color: #e4e8f2;
@@ -44,8 +46,42 @@ QListWidget {
 QLineEdit:focus,
 QPlainTextEdit:focus,
 QComboBox:focus,
+QSpinBox:focus,
+QDoubleSpinBox:focus,
 QListWidget:focus {
 	border: 1px solid #4b82ff;
+}
+
+QSpinBox::up-button,
+QSpinBox::down-button,
+QDoubleSpinBox::up-button,
+QDoubleSpinBox::down-button {
+	border: none;
+	background: #2c3240;
+	width: 16px;
+	border-radius: 4px;
+	margin: 1px;
+}
+
+QSpinBox::up-button:hover,
+QSpinBox::down-button:hover,
+QDoubleSpinBox::up-button:hover,
+QDoubleSpinBox::down-button:hover {
+	background: #3a4253;
+}
+
+QSpinBox::up-arrow,
+QDoubleSpinBox::up-arrow {
+	image: url(assets/icons/chevron-up-light.svg);
+	width: 8px;
+	height: 8px;
+}
+
+QSpinBox::down-arrow,
+QDoubleSpinBox::down-arrow {
+	image: url(assets/icons/chevron-down-light.svg);
+	width: 8px;
+	height: 8px;
 }
 
 QComboBox::drop-down {
@@ -189,6 +225,50 @@ QLabel#settingsDialogTitle {
 	font-size: 14px;
 }
 
+QWidget#settingsDialog {
+	background-color: #181c24;
+}
+
+QLabel#settingsDialogSubtitle {
+	color: #a8b2c6;
+	font-size: 9.5pt;
+	padding: 0 0 2px 0;
+}
+
+QLabel[settingsSectionTitle="true"] {
+	color: #e3ebff;
+	font-size: 10.5pt;
+	font-weight: 700;
+	padding-top: 6px;
+	padding-bottom: 3px;
+	border-bottom: 1px solid #2d3648;
+}
+
+QTabWidget#settingsDialogTabs::pane {
+	border: 1px solid #2b3445;
+	border-radius: 6px;
+	background-color: #151923;
+	top: -1px;
+}
+
+QTabBar::tab {
+	background: #232b3b;
+	color: #cfd8ea;
+	border: 1px solid #2e3950;
+	padding: 6px 12px;
+	min-width: 100px;
+}
+
+QTabBar::tab:selected {
+	background: #2f3d56;
+	color: #f0f5ff;
+	border-bottom-color: #2f3d56;
+}
+
+QTabBar::tab:!selected {
+	margin-top: 2px;
+}
+
 QLabel#modeFetchWarningLabel,
 QLabel#modeHtmlWarningLabel,
 QLabel#modeIpkWarningLabel,
@@ -205,7 +285,7 @@ QLabel#syncOffsetLabel {
 	font-weight: 600;
 }
 
-QPlainTextEdit#logConsoleTextEdit {
+QTextEdit#logConsoleTextEdit {
 	background-color: #14171d;
 	color: #d3d8e5;
 	border: 1px solid #2c3342;

@@ -123,6 +123,30 @@ def _write_musictrack_trk(target: Path, name: str, mt: MusicTrackStructure, vst:
         pls = midpoint
         ple = float(mt.end_beat)
 
+    # Runtime safety: enforce monotonic preview ordering without hard clamping.
+    # Some JDNext maps ship with previewLoopEnd=0 while previewEntry is valid.
+    # That can trigger JD UI conductor assertions ("adding a brick in the past").
+    original = (pe, pls, ple)
+    if pls < pe:
+        pls = pe
+
+    if ple <= pls:
+        # Prefer the authored song end when available.
+        if mt.end_beat > pls:
+            ple = float(mt.end_beat)
+        else:
+            # Last-resort minimal forward loop to keep conductor progression valid.
+            ple = pls + 1.0
+
+    if (pe, pls, ple) != original:
+        logger.warning(
+            "Adjusted preview loop for '%s' to monotonic range: entry=%.1f start=%.1f end=%.1f",
+            name,
+            pe,
+            pls,
+            ple,
+        )
+
     content = (
         f"structure = {{ MusicTrackStructure = {{ markers = {{ {markers} }}, "
         f"signatures = {{ {sigs} }}, sections = {{ {sects} }}, "
@@ -637,8 +661,8 @@ def _write_menuart_files(
 <root>
 \t<Scene ENGINE_VERSION="140999" GRIDUNIT="0.500000" DEPTH_SEPARATOR="0" NEAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000" FAR_SEPARATOR="1.000000 0.000000 0.000000 0.000000, 0.000000 1.000000 0.000000 0.000000, 0.000000 0.000000 1.000000 0.000000, 0.000000 0.000000 0.000000 1.000000" viewFamily="1">
 \t\t<ACTORS NAME="Actor">
-\t\t\t<Actor RELATIVEZ="0.000000" SCALE="0.300000 0.300000" xFLIPPED="0" USERFRIENDLY="{name}_cover_generic" POS2D="266.087555 197.629959" ANGLE="0.000000" INSTANCEDATAFILE="World/MAPS/{name}/menuart/actors/{name}_{art}.act" LUA="enginedata/actortemplates/tpl_materialgraphiccomponent2d.tpl">
-            <Actor RELATIVEZ="0.000000" SCALE="0.300000 0.300000" xFLIPPED="0" USERFRIENDLY="{name}_cover_generic" POS2D="266.087555 197.629959" ANGLE="0.000000" INSTANCEDATAFILE="World/MAPS/{name}/menuart/actors/{name}_cover_generic.act" LUA="enginedata/actortemplates/tpl_materialgraphiccomponent2d.tpl">
+			<Actor RELATIVEZ="0.000000" SCALE="0.300000 0.300000" xFLIPPED="0" USERFRIENDLY="{name}_cover_generic" POS2D="266.087555 197.629959" ANGLE="0.000000" INSTANCEDATAFILE="World/MAPS/{name}/menuart/actors/{name}_cover_generic.act" LUA="enginedata/actortemplates/tpl_materialgraphiccomponent2d.tpl">
+				<COMPONENTS NAME="MaterialGraphicComponent">
 \t\t\t\t\t<MaterialGraphicComponent colorComputerTagId="0" renderInTarget="0" disableLight="0" disableShadow="-1" AtlasIndex="0" customAnchor="0.000000 0.000000" SinusAmplitude="0.000000 0.000000 0.000000" SinusSpeed="1.000000" AngleX="0.000000" AngleY="0.000000">
 \t\t\t\t\t\t<PrimitiveParameters>
 \t\t\t\t\t\t\t<GFXPrimitiveParam colorFactor="1.000000 1.000000 1.000000 1.000000" />
@@ -1014,7 +1038,8 @@ def write_game_files(
     try:
         setup_dirs(target)
 
-        # Determine coach count
+        # Determine coach count.
+        # JD2021 gameplay uses 4 player slots; maps with >4 coaches still map into 4 slots.
         num_coach = sd.num_coach
         if num_coach < 1:
             textures_dir = target / "MenuArt/textures"
@@ -1026,6 +1051,10 @@ def write_game_files(
                 num_coach = len(coach_imgs) if coach_imgs else 1
             else:
                 num_coach = 1
+
+        if num_coach > 4:
+            logger.debug("Clamping NumCoach from %d to 4 (JD2021 player slot limit)", num_coach)
+            num_coach = 4
 
         media = map_data.media
         optional_arts: List[str] = []
@@ -1062,7 +1091,7 @@ def write_game_files(
         # Cinematics stubs (MainSequence tape + ISC)
         _write_cinematics_stubs(target, name)
 
-        logger.info("Game files written for '%s' to %s", name, target)
+        logger.debug("Game files written for '%s' to %s", name, target)
         return vst
 
     except Exception as exc:

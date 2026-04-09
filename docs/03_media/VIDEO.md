@@ -23,7 +23,7 @@ These constraints affect video/audio behavior in current v2 builds:
 
 ## Available Quality Tiers
 
-The pipeline supports 8 video quality tiers (defined in the Playwright fetch extractor). Each tier corresponds to a specific URL/filename suffix pattern on the JDU CDN.
+The pipeline supports 8 logical quality tiers. The concrete filename variant differs by source family (JDU vs JDNext).
 
 | Tier | Suffix Pattern | Description |
 |------|---------------|-------------|
@@ -35,6 +35,25 @@ The pipeline supports 8 video quality tiers (defined in the Playwright fetch ext
 | `MID` | `_MID.webm` | Medium |
 | `LOW_HD` | `_LOW.hd.webm` | Low HD |
 | `LOW` | `_LOW.webm` | Lowest quality |
+
+### JDNext Variant Mapping
+
+JDNext uses explicit `hd`, `vp9`, and sometimes `vp8` variant filenames. The installer maps JDNext links into the same 8 logical tiers:
+
+| Logical Tier | JDNext Preferred Variant | Typical JDNext URL pattern |
+|---|---|---|
+| `ULTRA_HD` | `hd` | `/video_ultra.hd.webm/...` |
+| `ULTRA` | `vp9` | `/video_ultra.vp9.webm/...` |
+| `HIGH_HD` | `hd` | `/video_high.hd.webm/...` |
+| `HIGH` | `vp9` | `/video_high.vp9.webm/...` |
+| `MID_HD` | `hd` | `/video_mid.hd.webm/...` |
+| `MID` | `vp9` | `/video_mid.vp9.webm/...` |
+| `LOW_HD` | `hd` | `/video_low.hd.webm/...` |
+| `LOW` | `vp9` | `/video_low.vp9.webm/...` |
+
+Notes:
+- If both `hd` and legacy `vp8` exist for the same `*_HD` tier, `hd` is preferred.
+- JDNext non-HD tiers are VP9 by design unless compatibility fallback mode is enabled.
 
 ---
 
@@ -50,6 +69,23 @@ Search order: HIGH_HD -> HIGH -> MID_HD -> MID -> LOW_HD -> LOW -> ULTRA_HD -> U
 ```
 
 The first available tier is selected. If it differs from the requested tier, a status message is logged.
+
+### JDNext VP9 Handling Modes
+
+For JDNext links, behavior is controlled by `vp9_handling_mode`:
+
+| Mode | Behavior |
+|---|---|
+| `reencode_to_vp8` | Keeps requested JDNext VP9 tier, then re-encodes VP9 -> VP8 during install for compatibility. |
+| `fallback_compatible_down` | Avoids VP9 tiers and picks the next compatible `*_HD` tier down (no VP9 re-encode path). |
+
+Compatibility-down examples:
+
+```
+Requested: ULTRA   -> search ULTRA_HD -> HIGH_HD -> MID_HD -> LOW_HD
+Requested: HIGH    -> search MID_HD -> LOW_HD
+Requested: MID_HD  -> search MID_HD -> LOW_HD
+```
 
 ### Existing Video Detection
 
@@ -94,13 +130,16 @@ If you run internal/scripted pipeline entry points, pass quality with the corres
 
 ## Quality Persistence
 
-The default video quality is persisted in `installer_settings.json` as `default_quality`.
+Video preferences are persisted in `installer_settings.json` using:
+- `video_quality`
+- `vp9_handling_mode`
 
 Example:
 
 ```json
 {
-  "default_quality": "ULTRA_HD",
+  "video_quality": "ULTRA_HD",
+  "vp9_handling_mode": "fallback_compatible_down",
   "v_override": -2.145,
   "a_offset": -2.060,
   "marker_preroll_ms": 2060.0
@@ -123,7 +162,10 @@ In standard workflows, one quality tier is used per map install target. Switchin
 
 ## NOHUD Video File Analysis
 
-These are **NOHUD (No Heads-Up Display) coach videos**: dance footage without gameplay overlays (score, arrows, coach UI, etc.). The 8 tiers represent **4 quality levels x 2 variants** (`HD` and non-`HD`) plus one shared audio stream.
+These are **NOHUD (No Heads-Up Display) coach videos**: dance footage without gameplay overlays (score, arrows, coach UI, etc.). The 8 logical tiers represent **4 quality levels x 2 slots** (`*_HD` and non-`HD`) plus one shared audio stream.
+
+For JDU, non-HD slots are typically VP8 (`_ULTRA.webm`, `_HIGH.webm`, etc.).
+For JDNext, non-HD slots are typically VP9 (`video_ULTRA.vp9.webm`, etc.) unless compatibility-down mode is used.
 
 **Common `.webm` properties:**
 
