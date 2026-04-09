@@ -1564,6 +1564,18 @@ def normalize(
     # V1 Parity: Detect whether the source contains real autodance data.
     # Many sources ship minimal stub CKDs that should be ignored.
     has_autodance = False
+    cn_low = (effective_codename or "").lower()
+
+    def _is_scoped_autodance_path(path_str: str) -> bool:
+        if not cn_low:
+            return True
+        rel = path_str.replace("\\", "/").lower()
+        parts = [p for p in rel.split("/") if p]
+        if cn_low in parts:
+            return True
+        name = os.path.basename(path_str).lower()
+        return bool(re.match(rf"^{re.escape(cn_low)}(?:[^a-z0-9]|$)", name))
+
     ad_tpls = _find_ckd_files(source_root_str, "*autodance*.tpl.ckd", codename)
     if ad_tpls:
         try:
@@ -1578,6 +1590,11 @@ def normalize(
     if not has_autodance:
         for ext in ("adtape", "advideo", "adrecording"):
             candidates = _find_ckd_files(source_root_str, f"*.{ext}.ckd", codename)
+            loose_candidates = [
+                p
+                for p in glob.glob(os.path.join(source_root_str, "**", f"*.{ext}"), recursive=True)
+                if _is_scoped_autodance_path(p)
+            ]
             valid_candidates = []
             for candidate in candidates:
                 try:
@@ -1585,8 +1602,30 @@ def normalize(
                         valid_candidates.append(candidate)
                 except OSError:
                     continue
+            for candidate in loose_candidates:
+                try:
+                    if Path(candidate).stat().st_size > 64:
+                        valid_candidates.append(candidate)
+                except OSError:
+                    continue
             if valid_candidates:
                 has_autodance = True
+                break
+
+    if not has_autodance:
+        for maybe_dir in glob.glob(os.path.join(source_root_str, "**", "*"), recursive=True):
+            p = Path(maybe_dir)
+            if not p.is_dir() or p.name.lower() != "autodance":
+                continue
+            if not _is_scoped_autodance_path(str(p)):
+                continue
+            for item in p.iterdir():
+                if not item.is_file() or item.suffix.lower() == ".ckd":
+                    continue
+                if item.stat().st_size > 64:
+                    has_autodance = True
+                    break
+            if has_autodance:
                 break
 
     if has_autodance:

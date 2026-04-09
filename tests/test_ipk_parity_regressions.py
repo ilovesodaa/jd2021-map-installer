@@ -9,6 +9,7 @@ from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor
 from jd2021_installer.extractors.manual_extractor import ManualExtractor
 from jd2021_installer.ui.workers.pipeline_workers import (
     ExtractAndNormalizeWorker,
+    _pick_ipk_audio,
     _validate_ipk_media_presence,
     reprocess_audio,
 )
@@ -136,6 +137,21 @@ def test_ipk_media_validation_accepts_sidecar_audio_search_root(tmp_path: Path) 
     _validate_ipk_media_presence(extract_root, "MapA", source_root)
 
 
+def test_pick_ipk_audio_prefers_codename_wav_ckd_for_x360_tree(tmp_path: Path) -> None:
+    source_root = tmp_path / "temp_extraction"
+    x360_audio_dir = source_root / "cache" / "itf_cooked" / "x360" / "world" / "maps" / "MapA" / "audio"
+    x360_audio_dir.mkdir(parents=True, exist_ok=True)
+
+    ogg = x360_audio_dir / "MapA.ogg"
+    wav_ckd = x360_audio_dir / "MapA.wav.ckd"
+    ogg.write_bytes(b"ogg")
+    wav_ckd.write_bytes(b"ckd")
+
+    picked = _pick_ipk_audio([source_root], "MapA")
+
+    assert picked == wav_ckd
+
+
 def test_archive_worker_uses_extraction_root_for_normalize_search_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -232,7 +248,7 @@ def test_reprocess_audio_recovers_missing_ipk_audio_from_source_tree(
 
     assert map_data.media.audio_path == recovered_audio
     assert called["audio"] == recovered_audio
-    assert not called_intro, "Intro generation should remain disabled for IPK"
+    assert called_intro, "Intro generation should run for IPK when audio is available"
 
 
 def test_reprocess_audio_jdnext_generates_intro_when_audio_present(

@@ -33,8 +33,7 @@ from jd2021_installer.core.models import (
 
 logger = logging.getLogger("jd2021.installers.media_processor")
 
-# Temporary emergency switch requested by user: disable intro AMB attempt for
-# both Fetch/HTML and IPK flows until root-cause is fully resolved.
+# Intro AMB generation is enabled by default for all supported source modes.
 INTRO_AMB_ATTEMPT_ENABLED = True
 
 
@@ -864,29 +863,38 @@ def extract_ckd_audio_v1(
     if base.lower().endswith(".wav") or base.lower().endswith(".ogg"):
         base = base[:-4]
 
-    # V1 Parity: Try vgmstream on the RAW CKD file first (some newer versions support it)
+    # V1 Parity: try vgmstream on raw Xbox 360 .wav.ckd first.
+    # For non-.wav.ckd payloads this probe is often unnecessary and can stall.
+    should_try_raw_vgm = ckd_path.name.lower().endswith(".wav.ckd")
+    skip_secondary_vgm_retry = False
+
     vgm_raw_out = output_dir / f"{base}_raw_vgm.wav"
-    try:
-        decoded = decode_xma2_audio(
-            ckd_path,
-            vgm_raw_out,
-            vgmstream_path=getattr(config, "vgmstream_path", None),
-        )
-        if decoded and decoded.exists():
-            if is_valid_wav(decoded):
-                logger.debug("Decoded raw CKD directly via vgmstream: %s", decoded.name)
-                return str(decoded)
-            else:
-                # Transcode to 48kHz Stereo if it's a valid audio file but wrong format
-                logger.debug("Decoded WAV has wrong format; transcoding to 48kHz Stereo...")
-                fixed_wav = output_dir / f"{base}_fixed.wav"
-                run_ffmpeg(["-y", "-i", str(decoded), "-ar", "48000", "-ac", "2", str(fixed_wav)])
-                if fixed_wav.exists():
-                    return str(fixed_wav)
-    except Exception as e:
-        logger.debug("vgmstream raw attempt failed: %s", e)
-        if vgm_raw_out.exists():
-            vgm_raw_out.unlink()
+    if should_try_raw_vgm:
+        try:
+            decoded = decode_xma2_audio(
+                ckd_path,
+                vgm_raw_out,
+                vgmstream_path=getattr(config, "vgmstream_path", None),
+                timeout=45,
+            )
+            if decoded and decoded.exists():
+                if is_valid_wav(decoded):
+                    logger.debug("Decoded raw CKD directly via vgmstream: %s", decoded.name)
+                    return str(decoded)
+                else:
+                    # Transcode to 48kHz Stereo if it's a valid audio file but wrong format
+                    logger.debug("Decoded WAV has wrong format; transcoding to 48kHz Stereo...")
+                    fixed_wav = output_dir / f"{base}_fixed.wav"
+                    run_ffmpeg(["-y", "-i", str(decoded), "-ar", "48000", "-ac", "2", str(fixed_wav)])
+                    if fixed_wav.exists():
+                        return str(fixed_wav)
+        except Exception as e:
+            logger.debug("vgmstream raw attempt failed: %s", e)
+            if "timed out" in str(e).lower():
+                # Do not run another long vgmstream decode pass on the same input.
+                skip_secondary_vgm_retry = True
+            if vgm_raw_out.exists():
+                vgm_raw_out.unlink()
 
     # Fallback: Strip header and try again
     payload = data[CKD_HEADER_SIZE:]
@@ -909,29 +917,38 @@ def extract_ckd_audio_v1(
             out_path = output_dir / (base + "_decoded.wav")
 
             try:
-                decoded = decode_xma2_audio(
-                    temp_payload,
-                    out_path,
-                    vgmstream_path=getattr(config, "vgmstream_path", None),
-                )
-                if decoded and decoded.exists():
-                    if is_valid_wav(decoded):
-                        return str(decoded)
-                    logger.debug("Fallback decoded WAV has wrong format; transcoding...")
-                    fixed_wav = output_dir / f"{base}_fallback_fixed.wav"
-                    run_ffmpeg(["-y", "-i", str(decoded), "-ar", "48000", "-ac", "2", str(fixed_wav)])
-                    if fixed_wav.exists():
-                        return str(fixed_wav)
-            except Exception as e:
-                logger.debug("vgmstream fallback failed for payload %s: %s", ckd_path.name, e)
+                try:
+                    if not skip_secondary_vgm_retry:
+                        decoded = decode_xma2_audio(
+                            temp_payload,
+                            out_path,
+                            vgmstream_path=getattr(config, "vgmstream_path", None),
+                            timeout=45,
+                        )
+                        if decoded and decoded.exists():
+                            if is_valid_wav(decoded):
+                                return str(decoded)
+                            logger.debug("Fallback decoded WAV has wrong format; transcoding...")
+                            fixed_wav = output_dir / f"{base}_fallback_fixed.wav"
+                            run_ffmpeg(["-y", "-i", str(decoded), "-ar", "48000", "-ac", "2", str(fixed_wav)])
+                            if fixed_wav.exists():
+                                return str(fixed_wav)
+                    else:
+                        logger.debug(
+                            "Skipping secondary vgmstream retry for %s after prior timeout",
+                            ckd_path.name,
+                        )
+                except Exception as e:
+                    logger.debug("vgmstream fallback failed for payload %s: %s", ckd_path.name, e)
+
                 ffmpeg_out = output_dir / f"{base}_ffmpeg_fallback.wav"
                 if _ffmpeg_decode_unknown_payload(temp_payload, ffmpeg_out):
                     logger.debug("Recovered audio using FFmpeg fallback: %s", ffmpeg_out.name)
                     return str(ffmpeg_out)
+                return None
             finally:
                 if temp_payload.exists():
                     temp_payload.unlink()
-            return None
 
     # Standard OGG/WAV payload found
     out_path = output_dir / (base + ext)

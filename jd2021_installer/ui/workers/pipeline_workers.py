@@ -65,8 +65,8 @@ def _path_has_codename_component(path: Path, codename: str) -> bool:
 
 
 def _pick_ipk_audio(search_dirs: list[Path], codename: Optional[str]) -> Optional[Path]:
+    candidates: list[Path] = []
     for pattern in ("*.ogg", "*.wav", "*.wav.ckd"):
-        candidates: list[Path] = []
         for root in search_dirs:
             if not root or not root.is_dir():
                 continue
@@ -81,18 +81,36 @@ def _pick_ipk_audio(search_dirs: list[Path], codename: Optional[str]) -> Optiona
                     continue
                 candidates.append(p)
 
-        if not candidates:
-            continue
+    if not candidates:
+        return None
 
-        if codename:
-            scoped = [p for p in candidates if _path_has_codename_component(p, codename)]
-            if scoped:
-                return scoped[0]
+    if codename:
+        scoped = [p for p in candidates if _path_has_codename_component(p, codename)]
+        if scoped:
+            candidates = scoped
+        else:
             # V1 behavior: do not pick random media from another map when codename is known.
-            continue
-        return candidates[0]
+            return None
 
-    return None
+    codename_low = (codename or "").lower()
+    if codename_low:
+        exact_wav_ckd = [p for p in candidates if p.name.lower() == f"{codename_low}.wav.ckd"]
+        if exact_wav_ckd:
+            return exact_wav_ckd[0]
+
+    has_x360_path = any("/x360/" in str(p).lower().replace("\\", "/") for p in candidates)
+    preferred_suffixes = (".wav.ckd", ".wav", ".ogg") if has_x360_path else (".ogg", ".wav", ".wav.ckd")
+
+    for suffix in preferred_suffixes:
+        for p in candidates:
+            low_name = p.name.lower()
+            if suffix == ".wav.ckd":
+                if low_name.endswith(".wav.ckd"):
+                    return p
+            elif low_name.endswith(suffix):
+                return p
+
+    return candidates[0]
 
 
 def _pick_ipk_video(search_dirs: list[Path], codename: Optional[str]) -> Optional[Path]:
@@ -296,6 +314,52 @@ def _ensure_jdnext_albumcoach_texture_from_coach(map_target: Path, codename: str
         return True
     except OSError:
         return False
+
+
+def _install_menuart_companion_assets(menuart_sources: list[Path], map_target: Path) -> int:
+    """Install non-texture MenuArt companion files shipped as *.ckd payloads.
+
+    Some source layouts provide MenuArt actor/scene files as `.act.ckd` and
+    `.isc.ckd` that are already plain payloads. These should be installed as
+    `.act` / `.isc` files rather than fed to the texture decoder.
+    """
+    actor_dir = map_target / "MenuArt" / "Actors"
+    scene_dir = map_target / "MenuArt"
+    actor_dir.mkdir(parents=True, exist_ok=True)
+    scene_dir.mkdir(parents=True, exist_ok=True)
+
+    copied = 0
+    seen_sources: set[str] = set()
+
+    for src_dir in menuart_sources:
+        if not src_dir.is_dir():
+            continue
+        for ckd_path in src_dir.rglob("*.ckd"):
+            if not ckd_path.is_file():
+                continue
+
+            src_key = str(ckd_path).lower()
+            if src_key in seen_sources:
+                continue
+            seen_sources.add(src_key)
+
+            inner_suffix = Path(ckd_path.stem).suffix.lower()
+            if inner_suffix not in {".act", ".isc"}:
+                continue
+
+            out_name = ckd_path.stem
+            if inner_suffix == ".act":
+                dst_path = actor_dir / out_name
+            else:
+                dst_path = scene_dir / out_name
+
+            try:
+                shutil.copy2(ckd_path, dst_path)
+                copied += 1
+            except OSError as exc:
+                logger.debug("Failed to install MenuArt companion %s: %s", ckd_path.name, exc)
+
+    return copied
 
 
 def _collect_pictogram_sources(source_dir: Path, codename: str, preferred: Optional[Path] = None) -> list[Path]:
@@ -564,27 +628,8 @@ def reprocess_audio(
         ):
             source_is_jdnext = True
 
-    # Enable intro AMB only for JDNext sources for now.
-    intro_amb_attempt_enabled = source_is_jdnext
-
-    if not intro_amb_attempt_enabled:
-        try:
-            from jd2021_installer.installers.ambient_processor import (
-                _remove_intro_amb_assets,
-                _remove_intro_amb_soundset_clips,
-            )
-
-            _remove_intro_amb_soundset_clips(target_dir, codename)
-            amb_candidates = [
-                target_dir / "Audio" / "AMB",
-                target_dir / "audio" / "AMB",
-                target_dir / "Audio" / "amb",
-                target_dir / "audio" / "amb",
-            ]
-            amb_dir = next((p for p in amb_candidates if p.exists()), amb_candidates[0])
-            _remove_intro_amb_assets(amb_dir)
-        except Exception as exc:
-            logger.debug("Intro AMB cleanup skipped for '%s': %s", codename, exc)
+    # Keep intro AMB generation enabled for all supported source modes.
+    intro_amb_attempt_enabled = True
     
     media = map_data.media
 
@@ -700,30 +745,11 @@ def reprocess_audio_readjust(
         ):
             source_is_jdnext = True
 
-    # Enable intro AMB only for JDNext sources for now.
-    intro_amb_attempt_enabled = source_is_jdnext
+    # Keep intro AMB generation enabled for all supported source modes.
+    intro_amb_attempt_enabled = True
 
     codename = map_data.codename
     media = map_data.media
-
-    if not intro_amb_attempt_enabled:
-        try:
-            from jd2021_installer.installers.ambient_processor import (
-                _remove_intro_amb_assets,
-                _remove_intro_amb_soundset_clips,
-            )
-
-            _remove_intro_amb_soundset_clips(target_dir, codename)
-            amb_candidates = [
-                target_dir / "Audio" / "AMB",
-                target_dir / "audio" / "AMB",
-                target_dir / "Audio" / "amb",
-                target_dir / "audio" / "amb",
-            ]
-            amb_dir = next((p for p in amb_candidates if p.exists()), amb_candidates[0])
-            _remove_intro_amb_assets(amb_dir)
-        except Exception as exc:
-            logger.debug("Intro AMB cleanup skipped for '%s' (readjust): %s", codename, exc)
 
     if (not media.audio_path or not media.audio_path.exists()) and map_data.source_dir:
         fallback_audio = _pick_ipk_audio([map_data.source_dir], codename)
@@ -1873,19 +1899,27 @@ def install_map_to_game(
             map_data.source_dir,
             map_target,
             codename,
-            attempt_enabled=source_is_jdnext,
+            attempt_enabled=True,
         )
         
         if status_callback: status_callback("Decoding MenuArt textures...")
         if progress_callback: progress_callback(80)
         from jd2021_installer.installers.texture_decoder import decode_menuart_textures, decode_pictograms
+
+        menuart_sources = _collect_menuart_texture_sources(map_data.source_dir, codename)
+        installed_companions = _install_menuart_companion_assets(menuart_sources, map_target)
+        if installed_companions:
+            logger.debug(
+                "Installed %d MenuArt companion asset(s) (.act/.isc) from source payloads.",
+                installed_companions,
+            )
         
         # V1 Parity: Decode textures directly in the target directory 
         # to handle loose assets copied from Fetch/HTML mode.
         decoded_menuart = decode_menuart_textures(textures_dir, textures_dir)
 
         if map_data.source_dir and map_data.source_dir.exists():
-            for menuart_src in _collect_menuart_texture_sources(map_data.source_dir, codename):
+            for menuart_src in menuart_sources:
                 decoded_menuart += decode_menuart_textures(menuart_src, textures_dir)
 
         if decoded_menuart == 0:

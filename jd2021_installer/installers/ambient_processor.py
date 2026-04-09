@@ -22,8 +22,7 @@ from jd2021_installer.installers.tape_converter import _convert_value, _load_ckd
 
 logger = logging.getLogger("jd2021.installers.ambient_processor")
 
-# Temporary emergency switch requested by user: disable intro AMB attempt for
-# both Fetch/HTML and IPK flows until root-cause is fully resolved.
+# Intro AMB generation is enabled by default for all supported source modes.
 INTRO_AMB_ATTEMPT_ENABLED = True
 
 

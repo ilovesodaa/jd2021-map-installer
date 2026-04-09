@@ -376,7 +376,24 @@ def decode_menuart_textures(menuart_dir: Path, output_dir: Path) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     success = 0
 
+    non_texture_companion_suffixes = {
+        ".act",
+        ".isc",
+        ".tpl",
+        ".ilu",
+        ".tape",
+        ".dtape",
+        ".ktape",
+        ".stape",
+    }
+
     for ckd in menuart_dir.rglob("*.ckd"):
+        # MenuArt folders can contain actor/scene companion CKDs that are not
+        # texture payloads. Skip them up-front to avoid noisy decode attempts.
+        inner_suffix = Path(ckd.stem).suffix.lower()
+        if inner_suffix in non_texture_companion_suffixes:
+            continue
+
         out_name = ckd.stem
         if not out_name.lower().endswith(('.tga', '.png')):
             out_name += '.tga'
