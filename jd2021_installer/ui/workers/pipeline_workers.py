@@ -628,8 +628,9 @@ def reprocess_audio(
         ):
             source_is_jdnext = True
 
-    # Keep intro AMB generation enabled for all supported source modes.
-    intro_amb_attempt_enabled = True
+    # Preserve native IPK intro AMB assets when present; apply generated intro
+    # flow only for JDNext sources.
+    intro_amb_attempt_enabled = source_is_jdnext
     
     media = map_data.media
 
@@ -745,8 +746,9 @@ def reprocess_audio_readjust(
         ):
             source_is_jdnext = True
 
-    # Keep intro AMB generation enabled for all supported source modes.
-    intro_amb_attempt_enabled = True
+    # Preserve native IPK intro AMB assets when present; apply generated intro
+    # flow only for JDNext sources.
+    intro_amb_attempt_enabled = source_is_jdnext
 
     codename = map_data.codename
     media = map_data.media
@@ -1724,6 +1726,21 @@ def install_map_to_game(
         return False
 
     source_is_jdnext = _is_jdnext_source_map()
+
+    def _mainsequence_has_any_clip_entries(target_root: Path, map_code: str) -> bool:
+        tape_candidates = [
+            target_root / "Cinematics" / f"{map_code}_MainSequence.tape",
+            target_root / "cinematics" / f"{map_code}_MainSequence.tape",
+        ]
+        tape_path = next((p for p in tape_candidates if p.exists()), None)
+        if tape_path is None:
+            return False
+        try:
+            content = tape_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return False
+        # Detect at least one clip entry object inside Tape.Clips table.
+        return re.search(r"Clips\s*=\s*\{\s*\{", content, flags=re.DOTALL) is not None
     
     # 0. Pre-install cleanup
     pre_install_cleanup(game_dir, codename, status_callback)
@@ -1895,11 +1912,20 @@ def install_map_to_game(
         if not source_is_html and map_data.source_dir and map_data.source_dir.exists():
             source_is_html = any(map_data.source_dir.glob("*.html")) or any(map_data.source_dir.glob("**/assets.html"))
 
+        normalize_intro_clip = source_is_jdnext
+        if not normalize_intro_clip and not _mainsequence_has_any_clip_entries(map_target, codename):
+            logger.warning(
+                "MainSequence has no clip entries for '%s'; enabling intro clip recovery injection.",
+                codename,
+            )
+            normalize_intro_clip = True
+
         process_ambient_directory(
             map_data.source_dir,
             map_target,
             codename,
             attempt_enabled=True,
+            normalize_intro_clip=normalize_intro_clip,
         )
         
         if status_callback: status_callback("Decoding MenuArt textures...")

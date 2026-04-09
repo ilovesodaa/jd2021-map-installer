@@ -689,6 +689,21 @@ def _inject_intro_amb_soundset_clip(target_dir: Path, codename: str, attempt_ena
             clip_duration_ms,
         )
 
+    # Keep intro clips gapless at gameplay boundary: if the selected intro
+    # window ends before timeline 0, shift start so it ends exactly at 0 while
+    # preserving duration and selected StartOffset segment.
+    if start_beat is not None and start_beat < 0 and clip_duration_ms > 0:
+        clip_end = clip_start_ms + clip_duration_ms
+        if clip_end < 0:
+            clip_start_ms = -clip_duration_ms
+            logger.debug(
+                "Normalized intro clip to end at t=0 for %s: start=%d duration=%d (was end=%d)",
+                codename,
+                clip_start_ms,
+                clip_duration_ms,
+                clip_end,
+            )
+
     # If source intro WAV is much longer than the clip window (common on some
     # JDNext maps), play the tail of the intro so the clip is not all silence.
     # JDNext clip timing can be beat-scaled (24 units per beat) rather than ms,
@@ -798,7 +813,13 @@ def _inject_intro_amb_soundset_clip(target_dir: Path, codename: str, attempt_ena
     return True
 
 
-def process_ambient_directory(source_dir: Path, target_dir: Path, codename: str, attempt_enabled: bool = True) -> int:
+def process_ambient_directory(
+    source_dir: Path,
+    target_dir: Path,
+    codename: str,
+    attempt_enabled: bool = True,
+    normalize_intro_clip: bool = True,
+) -> int:
     """Process all ambient assets (templates and loose CKDs) in a directory."""
     amb_out_dir = _resolve_amb_dir(target_dir)
     amb_out_dir.mkdir(parents=True, exist_ok=True)
@@ -927,10 +948,12 @@ def process_ambient_directory(source_dir: Path, target_dir: Path, codename: str,
         return count
 
     # 3. Inject actors into audio.isc
-    _remove_intro_amb_actor_from_isc(target_dir, codename)
+    if normalize_intro_clip:
+        _remove_intro_amb_actor_from_isc(target_dir, codename)
     inject_ambient_actors(target_dir, codename)
 
     # 4. Ensure intro AMB is actually triggered from MainSequence.
-    _inject_intro_amb_soundset_clip(target_dir, codename, attempt_enabled=attempt_enabled)
+    if normalize_intro_clip:
+        _inject_intro_amb_soundset_clip(target_dir, codename, attempt_enabled=attempt_enabled)
 
     return count

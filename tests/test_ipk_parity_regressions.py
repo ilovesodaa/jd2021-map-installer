@@ -248,7 +248,7 @@ def test_reprocess_audio_recovers_missing_ipk_audio_from_source_tree(
 
     assert map_data.media.audio_path == recovered_audio
     assert called["audio"] == recovered_audio
-    assert called_intro, "Intro generation should run for IPK when audio is available"
+    assert not called_intro, "Intro generation should be skipped for IPK to preserve native AMB intro assets"
 
 
 def test_reprocess_audio_jdnext_generates_intro_when_audio_present(

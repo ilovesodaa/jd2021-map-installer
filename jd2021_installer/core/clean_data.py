@@ -17,6 +17,11 @@ from jd2021_installer.core.path_discovery import is_valid_game_dir
 from jd2021_installer.installers.sku_scene import unregister_map
 
 
+# Guardrail: a baseline with only a handful of maps is almost certainly invalid
+# and can cause destructive cleanup (including boot-breaking SkuScene edits).
+_MIN_SAFE_BASELINE_MAP_COUNT = 10
+
+
 @dataclass
 class CleanDataResult:
     game_directory: Path
@@ -112,17 +117,21 @@ def _load_legacy_seed_maps() -> Optional[set[str]]:
 
 def _resolve_baseline_maps(game_dir: Path) -> tuple[set[str], str]:
     manifest_maps = _load_manifest_maps()
-    if manifest_maps:
+    if manifest_maps and len(manifest_maps) >= _MIN_SAFE_BASELINE_MAP_COUNT:
         return manifest_maps, "bundled_manifest"
 
     legacy_maps = _load_legacy_seed_maps()
-    if legacy_maps:
+    if legacy_maps and len(legacy_maps) >= _MIN_SAFE_BASELINE_MAP_COUNT:
         return legacy_maps, "legacy_seed_cache"
 
     live_maps = _list_map_dirs(_maps_dir(game_dir))
-    if not live_maps:
-        raise RuntimeError("Could not determine baseline maps (manifest missing and MAPS is empty).")
-    return live_maps, "live_game_fallback"
+    if len(live_maps) >= _MIN_SAFE_BASELINE_MAP_COUNT:
+        return live_maps, "live_game_fallback"
+
+    raise RuntimeError(
+        "Could not determine a safe baseline map set. "
+        "Baseline manifest/cache appears incomplete and current MAPS content is too small to use as fallback."
+    )
 
 
 def _remove_non_baseline_dirs(root_dir: Path, keep_names: set[str]) -> int:
@@ -140,9 +149,12 @@ def _remove_non_baseline_dirs(root_dir: Path, keep_names: set[str]) -> int:
     return removed
 
 
-def _remove_non_baseline_skuscene_entries(game_dir: Path, keep_names: set[str]) -> int:
+def _remove_non_baseline_skuscene_entries(game_dir: Path, removable_names: set[str]) -> int:
     sku_scene = _skuscenes_file(game_dir)
     if not sku_scene.is_file():
+        return 0
+
+    if not removable_names:
         return 0
 
     content = sku_scene.read_text(encoding="utf-8", errors="replace")
@@ -154,7 +166,7 @@ def _remove_non_baseline_skuscene_entries(game_dir: Path, keep_names: set[str]) 
 
     removed = 0
     for codename in sorted(present, key=str.lower):
-        if codename.lower() in keep_names:
+        if codename.lower() not in removable_names:
             continue
         unregister_map(game_dir, codename)
         removed += 1
@@ -166,8 +178,13 @@ def clean_game_data(configured_game_directory: Optional[Path]) -> CleanDataResul
     game_dir = _resolve_game_dir(configured_game_directory)
     original_maps, baseline_source = _resolve_baseline_maps(game_dir)
 
+    # Snapshot live map folders first; use this as a strict allow-list for
+    # SkuScene removals so non-map USERFRIENDLY entries are never touched.
+    live_maps_before = _list_map_dirs(_maps_dir(game_dir))
+    removable_map_names = {name for name in live_maps_before if name not in original_maps}
+
     removed_custom_maps = _remove_non_baseline_dirs(_maps_dir(game_dir), original_maps)
-    removed_skuscene_entries = _remove_non_baseline_skuscene_entries(game_dir, original_maps)
+    removed_skuscene_entries = _remove_non_baseline_skuscene_entries(game_dir, removable_map_names)
     removed_cooked_cache_maps = _remove_non_baseline_dirs(_itf_cooked_maps_dir(game_dir), original_maps)
 
     return CleanDataResult(

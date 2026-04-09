@@ -112,8 +112,15 @@ class FileRowWidget(QWidget):
         if self.is_dir:
             path = QFileDialog.getExistingDirectory(self, "Select Directory")
         else:
+            # For HTML files, default to mapDownloads folder
+            initial_dir = ""
+            if "html" in self.file_filter.lower():
+                map_downloads = Path(__file__).parent.parent.parent.parent / "mapDownloads"
+                if map_downloads.exists():
+                    initial_dir = str(map_downloads)
+            
             path, _ = QFileDialog.getOpenFileName(
-                self, "Select File", "", self.file_filter
+                self, "Select File", initial_dir, self.file_filter
             )
 
         if path:
