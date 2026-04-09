@@ -612,7 +612,7 @@ appendTable(component.SoundComponent_Template.soundList,DESCRIPTOR)'''
 \t}}
 }}
 includeReference("EngineData/Misc/Components/SoundComponent.ilu")
-includeReference("world/maps/{map_name}/audio/amb/{intro_name}.ilu")'''
+includeReference("world/maps/{map_lower}/audio/amb/{intro_name}.ilu")'''
 
         (amb_dir / f"{intro_name}.ilu").write_text(ilu_content, encoding="utf-8")
         (amb_dir / f"{intro_name}.tpl").write_text(tpl_content, encoding="utf-8")

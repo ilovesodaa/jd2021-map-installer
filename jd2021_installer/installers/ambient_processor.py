@@ -600,6 +600,16 @@ def _inject_intro_amb_soundset_clip(target_dir: Path, codename: str, attempt_ena
 
     # Default legacy anchor (pre-fallback), then refine below.
     clip_start_ms = -clip_duration_ms
+    clip_start_offset_s: float | None = None
+    intro_wav_duration_ms: int | None = None
+    if intro_wav.exists():
+        try:
+            with wave.open(str(intro_wav), "rb") as wf:
+                n_frames = wf.getnframes()
+                sample_rate = wf.getframerate() or 48000
+                intro_wav_duration_ms = int(round((n_frames / float(sample_rate)) * 1000.0))
+        except Exception as exc:
+            logger.debug("Could not probe intro WAV duration for offset synthesis (%s): %s", intro_wav.name, exc)
 
     tape_candidates = [
         target_dir / "Cinematics" / f"{codename}_MainSequence.tape",
@@ -648,6 +658,17 @@ def _inject_intro_amb_soundset_clip(target_dir: Path, codename: str, attempt_ena
         # tapes often carry tuned intro windows that should not be compressed to
         # a tiny fallback window.
         clip_start_ms, clip_duration_ms = existing_window
+        if start_beat is not None and start_beat < 0 and clip_duration_ms > 0:
+            existing_end = clip_start_ms + clip_duration_ms
+            if existing_end < 0:
+                clip_start_ms = -clip_duration_ms
+                logger.debug(
+                    "Normalized intro clip to end at t=0 for %s: start=%d duration=%d (was end=%d)",
+                    codename,
+                    clip_start_ms,
+                    clip_duration_ms,
+                    existing_end,
+                )
         logger.debug(
             "Preserving existing intro clip timing for %s: start=%d duration=%d",
             codename,
@@ -669,6 +690,25 @@ def _inject_intro_amb_soundset_clip(target_dir: Path, codename: str, attempt_ena
             clip_duration_ms,
         )
 
+    # If source intro WAV is much longer than the clip window (common on some
+    # JDNext maps), play the tail of the intro so the clip is not all silence.
+    # JDNext clip timing can be beat-scaled (24 units per beat) rather than ms,
+    # so convert to seconds using marker-derived beat length when available.
+    if hide_window is None and intro_wav_duration_ms is not None and clip_duration_ms > 0:
+        clip_window_ms_equivalent = float(clip_duration_ms)
+        if beat_ms is not None and beat_ms > 0:
+            clip_window_ms_equivalent = float(clip_duration_ms) * (float(beat_ms) / 24.0)
+
+        if intro_wav_duration_ms > (clip_window_ms_equivalent + 500.0):
+            clip_start_offset_s = max(0.0, (intro_wav_duration_ms - clip_window_ms_equivalent) / 1000.0)
+            logger.debug(
+                "Using tail StartOffset for intro on %s: wav=%dms clipWindow=%.1fms offset=%.6fs",
+                codename,
+                intro_wav_duration_ms,
+                clip_window_ms_equivalent,
+                clip_start_offset_s,
+            )
+
     if soundset_path.lower() in content.lower():
         updated_existing = content
         block_pat = re.compile(
@@ -682,7 +722,23 @@ def _inject_intro_amb_soundset_clip(target_dir: Path, codename: str, attempt_ena
             block = match.group(1)
             block_new = re.sub(r"(StartTime\s*=\s*)[-+]?\d+", rf"\g<1>{clip_start_ms}", block, count=1)
             block_new = re.sub(r"(Duration\s*=\s*)[-+]?\d+", rf"\g<1>{clip_duration_ms}", block_new, count=1)
-            block_new = re.sub(r"\n\s*StartOffset\s*=\s*[-+]?\d*\.?\d+\s*,", "", block_new, count=1)
+            if clip_start_offset_s is not None:
+                if re.search(r"\bStartOffset\s*=\s*[-+]?\d*\.?\d+\s*,", block_new):
+                    block_new = re.sub(
+                        r"(StartOffset\s*=\s*)[-+]?\d*\.?\d+",
+                        f"\\g<1>{clip_start_offset_s:.6f}",
+                        block_new,
+                        count=1,
+                    )
+                else:
+                    block_new = re.sub(
+                        r"(Duration\s*=\s*[-+]?\d+\s*,)",
+                        rf"\g<1>\n                    StartOffset = {clip_start_offset_s:.6f},",
+                        block_new,
+                        count=1,
+                    )
+            else:
+                block_new = re.sub(r"\n\s*StartOffset\s*=\s*[-+]?\d*\.?\d+\s*,", "", block_new, count=1)
             updated_existing = updated_existing[: match.start(1)] + block_new + updated_existing[match.end(1):]
 
         # Keep generated tapes aligned with known-working maps: intro SoundSetClip
@@ -704,6 +760,11 @@ def _inject_intro_amb_soundset_clip(target_dir: Path, codename: str, attempt_ena
 
     track_id = zlib.crc32(intro_tpl_name.lower().encode("utf-8")) & 0xFFFFFFFF
     clip_id = zlib.crc32(f"{codename.lower()}:{intro_tpl_name.lower()}:intro".encode("utf-8")) & 0xFFFFFFFF
+    start_offset_line = (
+        f"                    StartOffset = {clip_start_offset_s:.6f},\n"
+        if clip_start_offset_s is not None
+        else ""
+    )
 
     clip_block = (
         "\n            {\n"
@@ -717,6 +778,7 @@ def _inject_intro_amb_soundset_clip(target_dir: Path, codename: str, attempt_ena
         f"                    Duration = {clip_duration_ms},\n"
         f"                    SoundSetPath = \"{soundset_path}\",\n"
         "                    SoundChannel = 0,\n"
+        f"{start_offset_line}"
         "                    StopsOnEnd = 0,\n"
         "                    AccountedForDuration = 0,\n"
         "                },\n"

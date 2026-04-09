@@ -325,11 +325,184 @@ def test_process_ambient_directory_disabled_removes_intro_clip_from_tape():
         assert "amb_balance_intro.tpl" not in updated_tape
         assert "AMB_Balance_Intro.tpl" not in updated_tape
         assert "amb_balance_outro.tpl" in updated_tape
-
         assert not (amb_dir / "amb_balance_intro.tpl").exists()
         assert not (amb_dir / "amb_balance_intro.ilu").exists()
         assert not (amb_dir / "amb_balance_intro.wav").exists()
         assert (amb_dir / "amb_balance_outro.tpl").exists()
+
+
+def test_intro_clip_uses_tail_startoffset_for_long_intro_wav_without_hideui():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        codename = "BIRDSOFAFEATHER"
+        map_lower = codename.lower()
+
+        amb_dir = tmp_path / "Audio" / "AMB"
+        amb_dir.mkdir(parents=True, exist_ok=True)
+        (amb_dir / "amb_birdsofafeather_intro.tpl").write_text("tpl", encoding="utf-8")
+        _write_test_wav(amb_dir / "amb_birdsofafeather_intro.wav", duration_ms=15000)
+
+        tape_path = tmp_path / "Cinematics" / f"{codename}_MainSequence.tape"
+        tape_path.parent.mkdir(parents=True, exist_ok=True)
+        tape_path.write_text(
+            f'''params =
+{{
+    NAME = "Tape",
+    Tape =
+    {{
+        Clips = {{
+            {{
+                NAME = "SoundSetClip",
+                SoundSetClip =
+                {{
+                    Id = 1,
+                    TrackId = 2,
+                    IsActive = 1,
+                    StartTime = -288,
+                    Duration = 240,
+                    SoundSetPath = "world/maps/{map_lower}/audio/amb/amb_birdsofafeather_intro.tpl",
+                    SoundChannel = 0,
+                    StopsOnEnd = 0,
+                    AccountedForDuration = 0,
+                }},
+            }},
+        }},
+        TapeClock = 0,
+    }},
+}}''',
+            encoding="utf-8",
+        )
+
+        changed = _inject_intro_amb_soundset_clip(tmp_path, codename, attempt_enabled=True)
+        assert changed is True
+
+        updated = tape_path.read_text(encoding="utf-8")
+        assert "StartTime = -288" in updated
+        assert "Duration = 240" in updated
+        # 15.000s wav with 0.240s clip should target the tail (~14.760s)
+        assert "StartOffset = 14.760000" in updated
+
+
+def test_intro_clip_tail_startoffset_uses_beat_scaled_duration_when_markers_exist():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        codename = "BIRDSOFAFEATHER"
+        map_lower = codename.lower()
+
+        amb_dir = tmp_path / "Audio" / "AMB"
+        amb_dir.mkdir(parents=True, exist_ok=True)
+        (amb_dir / "amb_birdsofafeather_intro.tpl").write_text("tpl", encoding="utf-8")
+        _write_test_wav(amb_dir / "amb_birdsofafeather_intro.wav", duration_ms=15000)
+
+        trk_path = tmp_path / "Audio" / f"{codename}.trk"
+        trk_path.parent.mkdir(parents=True, exist_ok=True)
+        trk_path.write_text(
+            """structure = { MusicTrackStructure = {
+markers = { { VAL = 0 }, { VAL = 27408 }, { VAL = 54816 }, { VAL = 82224 }, { VAL = 109632 }, { VAL = 137040 }, { VAL = 164448 }, { VAL = 191856 }, { VAL = 219264 }, { VAL = 246672 }, { VAL = 274080 }, { VAL = 301488 }, { VAL = 328896 }, { VAL = 356304 } },
+startBeat = -12,
+videoStartTime = -15.000000,
+} }""",
+            encoding="utf-8",
+        )
+
+        tape_path = tmp_path / "Cinematics" / f"{codename}_MainSequence.tape"
+        tape_path.parent.mkdir(parents=True, exist_ok=True)
+        tape_path.write_text(
+            f'''params =
+{{
+    NAME = "Tape",
+    Tape =
+    {{
+        Clips = {{
+            {{
+                NAME = "SoundSetClip",
+                SoundSetClip =
+                {{
+                    Id = 1,
+                    TrackId = 2,
+                    IsActive = 1,
+                    StartTime = -288,
+                    Duration = 240,
+                    SoundSetPath = "world/maps/{map_lower}/audio/amb/amb_birdsofafeather_intro.tpl",
+                    SoundChannel = 0,
+                    StopsOnEnd = 0,
+                    AccountedForDuration = 0,
+                }},
+            }},
+        }},
+        TapeClock = 0,
+    }},
+}}''',
+            encoding="utf-8",
+        )
+
+        changed = _inject_intro_amb_soundset_clip(tmp_path, codename, attempt_enabled=True)
+        assert changed is True
+
+        updated = tape_path.read_text(encoding="utf-8")
+        # With beat-scaled timing: 240 units at 571ms/beat = 5710ms window.
+        # 15.000s - 5.710s = 9.290s expected StartOffset.
+        assert "StartOffset = 9.290000" in updated
+
+
+def test_existing_intro_window_is_shifted_to_end_at_zero_when_it_ends_early():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        codename = "SweetbutPsycho"
+        map_lower = codename.lower()
+
+        amb_dir = tmp_path / "Audio" / "AMB"
+        amb_dir.mkdir(parents=True, exist_ok=True)
+        (amb_dir / "amb_sweetbutpsycho_intro.tpl").write_text("tpl", encoding="utf-8")
+
+        trk_path = tmp_path / "Audio" / f"{codename}.trk"
+        trk_path.parent.mkdir(parents=True, exist_ok=True)
+        trk_path.write_text(
+            """structure = { MusicTrackStructure = {
+markers = { { VAL = 0 }, { VAL = 21648 }, { VAL = 43296 }, { VAL = 64944 }, { VAL = 86592 }, { VAL = 108240 }, { VAL = 129888 } },
+startBeat = -13,
+videoStartTime = -13.985000,
+} }""",
+            encoding="utf-8",
+        )
+
+        tape_path = tmp_path / "Cinematics" / f"{codename}_MainSequence.tape"
+        tape_path.parent.mkdir(parents=True, exist_ok=True)
+        tape_path.write_text(
+            f'''params =
+{{
+    NAME = "Tape",
+    Tape =
+    {{
+        Clips = {{
+            {{
+                NAME = "SoundSetClip",
+                SoundSetClip =
+                {{
+                    Id = 1,
+                    TrackId = 2,
+                    IsActive = 1,
+                    StartTime = -312,
+                    Duration = 264,
+                    SoundSetPath = "world/maps/{map_lower}/audio/amb/amb_sweetbutpsycho_intro.tpl",
+                    SoundChannel = 0,
+                    StopsOnEnd = 0,
+                    AccountedForDuration = 0,
+                }},
+            }},
+        }},
+        TapeClock = 0,
+    }},
+}}''',
+            encoding="utf-8",
+        )
+
+        changed = _inject_intro_amb_soundset_clip(tmp_path, codename, attempt_enabled=True)
+        assert changed is True
+
+        updated = tape_path.read_text(encoding="utf-8")
+        assert "StartTime = -264" in updated
+        assert "Duration = 264" in updated
 
 if __name__ == "__main__":
     try:
