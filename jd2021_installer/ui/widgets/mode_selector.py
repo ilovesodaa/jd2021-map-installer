@@ -1152,6 +1152,11 @@ class ModeSelectorWidget(QWidget):
         if mode_key in self.inputs and "codenames" in self.inputs[mode_key]:
             self.inputs[mode_key]["codenames"].setText(raw_value)
 
+    def set_mode_index(self, index: int) -> None:
+        """Programmatically switch active mode if index is in range."""
+        if 0 <= index < self._mode_combo.count():
+            self._mode_combo.setCurrentIndex(index)
+
     def get_current_state(self) -> dict[str, object]:
         """Return a normalized snapshot of selected mode and user-provided values."""
         mode_index = self._mode_combo.currentIndex()

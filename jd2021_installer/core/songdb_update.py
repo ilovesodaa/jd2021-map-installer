@@ -389,3 +389,83 @@ def find_songdb_entry(
             return match
 
     return None
+
+
+def _dedupe_codenames(raw_values: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in raw_values:
+        codename = str(value or "").strip()
+        if not codename:
+            continue
+        if re.search(r"\s", codename):
+            continue
+        key = codename.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(codename)
+    return deduped
+
+
+def extract_jdu_songdb_codenames(source_json_path: Path) -> list[str]:
+    """Extract codename keys from a raw JDU song database JSON file."""
+    source_path = Path(source_json_path)
+    if not source_path.is_file():
+        raise FileNotFoundError(f"Song database file not found: {source_path}")
+
+    try:
+        payload = json.loads(source_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON file: {source_path}") from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError("JDU song database must be a top-level object keyed by codename.")
+
+    codenames: list[str] = []
+    for key, raw_entry in payload.items():
+        if not isinstance(raw_entry, dict):
+            continue
+        if str(key).startswith("_"):
+            continue
+
+        key_name = str(key or "").strip()
+        map_name = str(raw_entry.get("mapName", "") or "").strip()
+        candidate = map_name or key_name
+        if not candidate:
+            continue
+        codenames.append(candidate)
+
+    result = _dedupe_codenames(codenames)
+    if not result:
+        raise ValueError("Selected JSON does not look like a JDU song database (no usable codenames found).")
+    return result
+
+
+def extract_jdnext_songdb_codenames(source_json_path: Path) -> list[str]:
+    """Extract `mapName` codenames from a raw JDNext song database JSON file."""
+    source_path = Path(source_json_path)
+    if not source_path.is_file():
+        raise FileNotFoundError(f"Song database file not found: {source_path}")
+
+    try:
+        payload = json.loads(source_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON file: {source_path}") from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError("JDNext song database must be a top-level object keyed by map UUID.")
+
+    codenames: list[str] = []
+    for raw_entry in payload.values():
+        if not isinstance(raw_entry, dict):
+            continue
+        map_name = str(raw_entry.get("mapName", "") or "").strip()
+        if not map_name:
+            continue
+        codenames.append(map_name)
+
+    result = _dedupe_codenames(codenames)
+    if not result:
+        raise ValueError("Selected JSON does not look like a JDNext song database (no usable mapName entries found).")
+    return result

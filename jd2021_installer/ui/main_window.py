@@ -1519,7 +1519,11 @@ class MainWindow(QMainWindow):
         from jd2021_installer.ui.widgets.settings_dialog import SettingsDialog
 
         old_snapshot = self._config_snapshot(self._config)
-        dialog = SettingsDialog(self._config, self)
+        dialog = SettingsDialog(
+            self._config,
+            self,
+            bulk_install_request=self.launch_songdb_bulk_install,
+        )
         if dialog.exec():
             new_config = dialog.get_config()
             new_config.log_detail_level = apply_log_detail(new_config.log_detail_level)
@@ -1548,6 +1552,34 @@ class MainWindow(QMainWindow):
                 )
 
             self._set_status("Settings saved.")
+
+    def launch_songdb_bulk_install(self, source_game: str, codenames: list[str]) -> bool:
+        """Queue a bulk fetch install by injecting songdb codenames into fetch mode."""
+        if self._active_worker is not None:
+            self._set_status("Please wait for the current operation to finish.")
+            return False
+
+        clean_codenames = [c.strip() for c in codenames if isinstance(c, str) and c.strip()]
+        if not clean_codenames:
+            self._set_status("No valid codenames were provided for bulk install.")
+            return False
+
+        from jd2021_installer.ui.widgets.mode_selector import MODE_FETCH, MODE_JDNEXT
+
+        mode_source = (source_game or "jdu").strip().lower()
+        is_jdnext = mode_source == "jdnext"
+        mode_index = MODE_JDNEXT if is_jdnext else MODE_FETCH
+        mode_key = "jdnext" if is_jdnext else "fetch"
+
+        self._mode_selector.set_mode_index(mode_index)
+        self._mode_selector.set_mode_codenames(mode_key, ",".join(clean_codenames))
+
+        self.append_log(
+            f"Bulk songdb install requested: source={mode_source}, codenames={len(clean_codenames)}"
+        )
+        self._set_status(f"Starting bulk install for {len(clean_codenames)} map(s)...")
+        self._on_install_requested()
+        return True
 
     def _on_readjust(self) -> None:
         if self._active_worker is not None:
@@ -3244,15 +3276,36 @@ class MainWindow(QMainWindow):
         if self._file_logger_handler:
             self._stop_file_logging()
 
-        # Sanitize codename for filename
-        codename = Path(current_target).name if current_target else "unknown"
+        # Sanitize codename for filename and cap to avoid Windows path-length issues.
+        raw_target = str(current_target or "").strip()
+        codename = Path(raw_target).name if raw_target else "unknown"
         codename = "".join(c for c in codename if c.isalnum() or c in ("-", "_")).strip()
+
+        raw_fetch_tokens = [token.strip() for token in raw_target.split(",") if token.strip()]
+        is_fetch_batch = len(raw_fetch_tokens) > 1
+        max_codename_len = 96
+        if len(codename) > max_codename_len:
+            if is_fetch_batch:
+                codename = f"FetchBatch_{len(raw_fetch_tokens)}"
+            else:
+                codename = codename[:max_codename_len]
+
+        if not codename:
+            codename = "unknown"
 
         logs_dir = Path("logs")
         logs_dir.mkdir(exist_ok=True)
         import datetime
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        log_path = logs_dir / f"install_{codename}_{timestamp}.log"
+
+        file_prefix = "install_"
+        file_suffix = f"_{timestamp}.log"
+        max_filename_len = 180
+        max_segment_len = max(8, max_filename_len - len(file_prefix) - len(file_suffix))
+        if len(codename) > max_segment_len:
+            codename = codename[:max_segment_len]
+
+        log_path = logs_dir / f"{file_prefix}{codename}{file_suffix}"
         
         self._file_logger_handler = logging.FileHandler(str(log_path), encoding="utf-8")
         self._file_logger_handler.setLevel(get_file_log_level(self._config.log_detail_level))

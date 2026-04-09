@@ -36,6 +36,8 @@ from jd2021_installer.core.localization_update import (
     update_console_localization,
 )
 from jd2021_installer.core.songdb_update import (
+    extract_jdnext_songdb_codenames,
+    extract_jdu_songdb_codenames,
     resolve_songdb_synth_path,
     synthesize_jdnext_songdb,
 )
@@ -68,7 +70,13 @@ class _SettingsTaskWorker(QObject):
 class SettingsDialog(QDialog):
     """Modal dialog for configuring application settings."""
 
-    def __init__(self, config: AppConfig, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        parent: Optional[QWidget] = None,
+        *,
+        bulk_install_request: Optional[Callable[[str, list[str]], bool]] = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.setMinimumSize(780, 620)
@@ -90,6 +98,7 @@ class SettingsDialog(QDialog):
         self._task_status_timer: Optional[QTimer] = None
         self._task_status_base: str = ""
         self._task_status_dots: int = 0
+        self._bulk_install_request = bulk_install_request
 
         self._build_ui()
 
@@ -755,6 +764,28 @@ class SettingsDialog(QDialog):
         songdb_row.addStretch()
         integrations_layout.addLayout(songdb_row)
 
+        bulk_jdu_row = QHBoxLayout()
+        bulk_jdu_row.addWidget(QLabel("Bulk install all JDU maps from songdb JSON:"))
+        self.btn_bulk_install_jdu_songdb = QPushButton("Install All JDU Maps...")
+        self.btn_bulk_install_jdu_songdb.clicked.connect(self._on_bulk_install_jdu_songdb)
+        self.btn_bulk_install_jdu_songdb.setToolTip(
+            "Pick a JDU songdb JSON and queue every codename through Fetch (Codename) mode."
+        )
+        bulk_jdu_row.addWidget(self.btn_bulk_install_jdu_songdb)
+        bulk_jdu_row.addStretch()
+        integrations_layout.addLayout(bulk_jdu_row)
+
+        bulk_jdnext_row = QHBoxLayout()
+        bulk_jdnext_row.addWidget(QLabel("Bulk install all JDNext maps from songdb JSON:"))
+        self.btn_bulk_install_jdnext_songdb = QPushButton("Install All JDNext Maps...")
+        self.btn_bulk_install_jdnext_songdb.clicked.connect(self._on_bulk_install_jdnext_songdb)
+        self.btn_bulk_install_jdnext_songdb.setToolTip(
+            "Pick a JDNext songdb JSON and queue every mapName through Fetch JDNext mode."
+        )
+        bulk_jdnext_row.addWidget(self.btn_bulk_install_jdnext_songdb)
+        bulk_jdnext_row.addStretch()
+        integrations_layout.addLayout(bulk_jdnext_row)
+
         clean_data_row = QHBoxLayout()
         clean_data_row.addWidget(QLabel("Reset installed custom maps and caches:"))
         self.btn_clean_data = QPushButton("Clean Game Data...")
@@ -970,6 +1001,100 @@ class SettingsDialog(QDialog):
             task=_task,
             on_success=_on_success,
             error_title="Song Database Update Failed",
+        )
+
+    def _run_songdb_bulk_install(
+        self,
+        *,
+        source_game: str,
+        title: str,
+        extractor: Callable[[Path], list[str]],
+    ) -> None:
+        if self._bulk_install_request is None:
+            QMessageBox.warning(
+                self,
+                "Bulk Install Unavailable",
+                "Bulk install callback is not available in this context.",
+            )
+            return
+
+        default_dir = str(Path.cwd())
+        selected_file, _ = QFileDialog.getOpenFileName(
+            self,
+            title,
+            default_dir,
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not selected_file:
+            return
+
+        try:
+            codenames = extractor(Path(selected_file))
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Bulk Install Failed",
+                f"Could not parse song database JSON:\n{exc}",
+            )
+            return
+
+        sample = ", ".join(codenames[:5])
+        if len(codenames) > 5:
+            sample += ", ..."
+
+        confirm = QMessageBox.question(
+            self,
+            "Confirm Bulk Install",
+            "Queue all discovered codenames for install?\n\n"
+            f"Source: {selected_file}\n"
+            f"Detected maps: {len(codenames)}\n"
+            f"Sample: {sample}\n\n"
+            "This will run the existing Fetch batch workflow.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        started = False
+        try:
+            started = bool(self._bulk_install_request(source_game, codenames))
+        except Exception as exc:
+            logger.exception("Bulk songdb install launch failed: %s", exc)
+            QMessageBox.critical(
+                self,
+                "Bulk Install Failed",
+                f"Could not launch bulk install:\n{exc}",
+            )
+            return
+
+        if not started:
+            QMessageBox.warning(
+                self,
+                "Bulk Install Not Started",
+                "Bulk install could not be started. Check installer status and try again.",
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            "Bulk Install Started",
+            f"Queued {len(codenames)} map(s) for {'JDNext' if source_game == 'jdnext' else 'JDU'} fetch install.",
+        )
+        self.reject()
+
+    def _on_bulk_install_jdu_songdb(self) -> None:
+        self._run_songdb_bulk_install(
+            source_game="jdu",
+            title="Select JDU song database JSON",
+            extractor=extract_jdu_songdb_codenames,
+        )
+
+    def _on_bulk_install_jdnext_songdb(self) -> None:
+        self._run_songdb_bulk_install(
+            source_game="jdnext",
+            title="Select JDNext song database JSON",
+            extractor=extract_jdnext_songdb_codenames,
         )
 
     def _on_clean_game_data(self) -> None:

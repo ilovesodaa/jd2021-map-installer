@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 
 from jd2021_installer.core.songdb_update import (
+    extract_jdnext_songdb_codenames,
+    extract_jdu_songdb_codenames,
     find_songdb_entry,
     load_songdb_synth,
     synthesize_jdnext_songdb,
@@ -124,3 +126,32 @@ def test_synthesize_jdnext_songdb_title_collision_prefers_matching_map_name(tmp_
     assert alt_lookup is not None
     assert title_lookup.get("map_name") == "Telephone"
     assert alt_lookup.get("map_name") == "TelephoneALT"
+
+
+def test_extract_jdu_songdb_codenames_uses_top_level_keys_and_dedupes(tmp_path: Path):
+    source_path = tmp_path / "songdb_jdu.json"
+    source_payload = {
+        "Zenit": {"title": "Zenit"},
+        "WakaWaka": {"mapName": "WakaWaka"},
+        "wakawaka": {"title": "Duplicate different case"},
+        "_meta": {"version": 1},
+        "Bad Entry": {"title": "Has space codename"},
+    }
+    source_path.write_text(json.dumps(source_payload), encoding="utf-8")
+
+    codenames = extract_jdu_songdb_codenames(source_path)
+    assert codenames == ["Zenit", "WakaWaka"]
+
+
+def test_extract_jdnext_songdb_codenames_uses_map_name_field(tmp_path: Path):
+    source_path = tmp_path / "songdb_jdnext.json"
+    source_payload = {
+        "uuid-1": {"mapName": "SweetButPsycho"},
+        "uuid-2": {"mapName": "sweetbutpsycho"},
+        "uuid-3": {"mapName": "TelephoneALT"},
+        "uuid-4": {"title": "No map name"},
+    }
+    source_path.write_text(json.dumps(source_payload), encoding="utf-8")
+
+    codenames = extract_jdnext_songdb_codenames(source_path)
+    assert codenames == ["SweetButPsycho", "TelephoneALT"]
