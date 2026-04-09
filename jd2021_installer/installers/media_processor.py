@@ -516,7 +516,6 @@ def generate_intro_amb(
     if marker_preroll_ms is not None:
         audio_content_dur = marker_preroll_ms / 1000.0
         trim_front_s = max(0.0, source_preroll_dur - audio_content_dur)
-        fade_start = audio_delay + audio_content_dur - 0.2
         logger.debug(
             "Using marker-based AMB duration: %.3fs (front trim %.3fs)",
             audio_content_dur,
@@ -528,11 +527,9 @@ def generate_intro_amb(
         target_window = abs(v_override) if v_override is not None and v_override < 0 else abs(a_offset)
         audio_content_dur = target_window
         trim_front_s = max(0.0, source_preroll_dur - target_window)
-        fade_start = max(0.0, audio_delay + audio_content_dur - 0.2)
         logger.debug("Using video-aligned AMB duration: %.3fs (front trim %.3fs)", audio_content_dur, trim_front_s)
     else:
         audio_content_dur = abs(a_offset) + 1.355
-        fade_start = audio_delay + abs(a_offset) + 1.155
         logger.debug("Using legacy AMB duration heuristic: %.3fs", audio_content_dur)
     
     amb_duration = audio_delay + audio_content_dur
@@ -622,13 +619,10 @@ includeReference("world/maps/{map_lower}/audio/amb/{intro_name}.ilu")'''
 
     delay_ms = int(audio_delay * 1000)
     if delay_ms > 0:
-        af_filter = (
-            f"adelay={delay_ms}|{delay_ms},asetpts=PTS-STARTPTS,"
-            f"afade=t=out:st={fade_start:.3f}:d=0.2"
-        )
+        af_filter = f"adelay={delay_ms}|{delay_ms},asetpts=PTS-STARTPTS"
         logger.debug("Intro audio delayed by %.3fs", audio_delay)
     else:
-        af_filter = f"afade=t=out:st={fade_start:.3f}:d=0.2"
+        af_filter = ""
 
     ffmpeg_args = ["-y"]
     if trim_front_s > 0:
@@ -636,7 +630,10 @@ includeReference("world/maps/{map_lower}/audio/amb/{intro_name}.ilu")'''
     ffmpeg_args += [
         "-t", f"{audio_content_dur:.3f}",
         "-i", str(ogg_path),
-        "-af", af_filter,
+    ]
+    if af_filter:
+        ffmpeg_args += ["-af", af_filter]
+    ffmpeg_args += [
         "-ar", "48000", str(intro_wav)
     ]
     run_ffmpeg(ffmpeg_args, config=config)

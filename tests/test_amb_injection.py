@@ -118,6 +118,35 @@ def test_marker_preroll_controls_intro_duration_even_with_negative_offset():
         assert used_duration == 4.974, f"Unexpected intro duration: {used_duration}"
 
 
+def test_intro_generation_does_not_apply_forced_fadeout_filter():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+        (audio_dir / "Demo_audio.isc").write_text(
+            """<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?>
+<root><Scene><ACTORS NAME=\"Actor\"><Actor USERFRIENDLY=\"MusicTrack\" /></ACTORS><sceneConfigs><SceneConfigs /></sceneConfigs></Scene></root>""",
+            encoding="utf-8",
+        )
+
+        ogg_path = tmp_path / "demo.ogg"
+        ogg_path.write_text("dummy")
+
+        mp.run_ffmpeg.reset_mock()
+        generate_intro_amb(
+            ogg_path,
+            "Demo",
+            tmp_path,
+            a_offset=-4.974,
+            v_override=-4.873,
+            marker_preroll_ms=4974.0,
+        )
+
+        assert mp.run_ffmpeg.call_count == 1
+        ffmpeg_args = mp.run_ffmpeg.call_args[0][0]
+        assert "afade=t=out" not in " ".join(ffmpeg_args)
+
+
 def test_process_ambient_directory_preserves_generated_intro_wav(monkeypatch):
     """A decoded source intro must not overwrite a generated intro WAV."""
     with tempfile.TemporaryDirectory() as tmp_dir:
