@@ -564,8 +564,27 @@ def reprocess_audio(
         ):
             source_is_jdnext = True
 
-    # User-requested hard disable: do not generate or inject intro AMB.
-    intro_amb_attempt_enabled = False
+    # Enable intro AMB only for JDNext sources for now.
+    intro_amb_attempt_enabled = source_is_jdnext
+
+    if not intro_amb_attempt_enabled:
+        try:
+            from jd2021_installer.installers.ambient_processor import (
+                _remove_intro_amb_assets,
+                _remove_intro_amb_soundset_clips,
+            )
+
+            _remove_intro_amb_soundset_clips(target_dir, codename)
+            amb_candidates = [
+                target_dir / "Audio" / "AMB",
+                target_dir / "audio" / "AMB",
+                target_dir / "Audio" / "amb",
+                target_dir / "audio" / "amb",
+            ]
+            amb_dir = next((p for p in amb_candidates if p.exists()), amb_candidates[0])
+            _remove_intro_amb_assets(amb_dir)
+        except Exception as exc:
+            logger.debug("Intro AMB cleanup skipped for '%s': %s", codename, exc)
     
     media = map_data.media
 
@@ -681,11 +700,30 @@ def reprocess_audio_readjust(
         ):
             source_is_jdnext = True
 
-    # User-requested hard disable: do not generate or inject intro AMB.
-    intro_amb_attempt_enabled = False
+    # Enable intro AMB only for JDNext sources for now.
+    intro_amb_attempt_enabled = source_is_jdnext
 
     codename = map_data.codename
     media = map_data.media
+
+    if not intro_amb_attempt_enabled:
+        try:
+            from jd2021_installer.installers.ambient_processor import (
+                _remove_intro_amb_assets,
+                _remove_intro_amb_soundset_clips,
+            )
+
+            _remove_intro_amb_soundset_clips(target_dir, codename)
+            amb_candidates = [
+                target_dir / "Audio" / "AMB",
+                target_dir / "audio" / "AMB",
+                target_dir / "Audio" / "amb",
+                target_dir / "audio" / "amb",
+            ]
+            amb_dir = next((p for p in amb_candidates if p.exists()), amb_candidates[0])
+            _remove_intro_amb_assets(amb_dir)
+        except Exception as exc:
+            logger.debug("Intro AMB cleanup skipped for '%s' (readjust): %s", codename, exc)
 
     if (not media.audio_path or not media.audio_path.exists()) and map_data.source_dir:
         fallback_audio = _pick_ipk_audio([map_data.source_dir], codename)
@@ -1658,6 +1696,8 @@ def install_map_to_game(
                 return True
 
         return False
+
+    source_is_jdnext = _is_jdnext_source_map()
     
     # 0. Pre-install cleanup
     pre_install_cleanup(game_dir, codename, status_callback)
@@ -1833,7 +1873,7 @@ def install_map_to_game(
             map_data.source_dir,
             map_target,
             codename,
-            attempt_enabled=False,
+            attempt_enabled=source_is_jdnext,
         )
         
         if status_callback: status_callback("Decoding MenuArt textures...")

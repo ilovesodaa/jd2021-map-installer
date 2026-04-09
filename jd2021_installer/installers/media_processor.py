@@ -35,7 +35,7 @@ logger = logging.getLogger("jd2021.installers.media_processor")
 
 # Temporary emergency switch requested by user: disable intro AMB attempt for
 # both Fetch/HTML and IPK flows until root-cause is fully resolved.
-INTRO_AMB_ATTEMPT_ENABLED = False
+INTRO_AMB_ATTEMPT_ENABLED = True
 
 
 def _write_silent_stereo_wav(path: Path, duration_s: float = 0.25) -> None:
@@ -560,7 +560,7 @@ def generate_intro_amb(
 \t\t{{
 \t\t\tname = "{intro_name}",
 \t\t\tvolume = 0,
-\t\t\tcategory = "amb",
+			category = "AMB",
 \t\t\tlimitCategory = "",
 \t\t\tlimitMode = 0,
 \t\t\tmaxInstances = 4294967295,
@@ -618,34 +618,7 @@ includeReference("world/maps/{map_name}/audio/amb/{intro_name}.ilu")'''
         (amb_dir / f"{intro_name}.tpl").write_text(tpl_content, encoding="utf-8")
         logger.debug("Created intro AMB files: %s.tpl/.ilu", intro_name)
 
-    # Always inject AMB actor if not present
-    audio_isc_path = target_dir / "audio" / f"{map_name}_audio.isc"
-    if audio_isc_path.exists():
-        isc_data = audio_isc_path.read_text(encoding="utf-8")
-        legacy_amb_lua_path = f"world/maps/{map_name.lower()}/audio/amb/{intro_name}.tpl"
-        amb_lua_path = f"World/MAPS/{map_name}/audio/AMB/{intro_name}.tpl"
-        if (
-            amb_lua_path not in isc_data
-            and legacy_amb_lua_path not in isc_data
-            and f'USERFRIENDLY="{intro_name}"' not in isc_data
-        ):
-            amb_actor = (
-                f'\t\t<ACTORS NAME="Actor">\n'
-                f'\t\t\t<Actor RELATIVEZ="0.000002" SCALE="1.000000 1.000000" xFLIPPED="0"'
-                f' USERFRIENDLY="{intro_name}" POS2D="0.000000 0.000000" ANGLE="0.000000"'
-                f' INSTANCEDATAFILE="" LUA="{amb_lua_path}">\n'
-                f'\t\t\t\t<COMPONENTS NAME="SoundComponent">\n'
-                f'\t\t\t\t\t<SoundComponent />\n'
-                f'\t\t\t\t</COMPONENTS>\n'
-                f'\t\t\t</Actor>\n'
-                f'\t\t</ACTORS>\n'
-            )
-            # Inject before <sceneConfigs>
-            new_isc = isc_data.replace("\t\t<sceneConfigs>", amb_actor + "\t\t<sceneConfigs>")
-            audio_isc_path.write_text(new_isc, encoding="utf-8")
-            logger.debug("Injected intro AMB actor into audio ISC: %s", intro_name)
-        else:
-            logger.debug("Intro AMB actor already present in audio ISC: %s", intro_name)
+    # Intro AMB is started from MainSequence SoundSetClip timing only.
 
     delay_ms = int(audio_delay * 1000)
     if delay_ms > 0:

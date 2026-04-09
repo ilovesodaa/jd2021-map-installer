@@ -28,8 +28,8 @@ def _write_test_wav(path: Path, duration_ms: int = 250) -> None:
         wf.setframerate(48000)
         wf.writeframes(b"\x00\x00\x00\x00" * frames)
 
-def test_amb_injection_idempotency():
-    print("Testing AMB Injection Idempotency...")
+def test_intro_generation_does_not_inject_audio_isc_actor():
+    print("Testing intro generation does not inject audio ISC actor...")
     
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
@@ -55,27 +55,23 @@ def test_amb_injection_idempotency():
         ogg_path = tmp_path / "test.ogg"
         ogg_path.write_text("dummy")
         
-        # 2. First injection
+        # 2. First generation
         generate_intro_amb(ogg_path, "TestMap", tmp_path, a_offset=-2.145, v_override=-2.145)
         
         content = isc_path.read_text()
         count = content.count("amb_testmap_intro.tpl")
-        print(f"Injection count 1: {count}")
-        assert count == 1, "First injection failed"
-        assert (
-            'LUA="World/MAPS/TestMap/audio/AMB/amb_testmap_intro.tpl"' in content
-        ), "Intro AMB actor LUA path mismatch"
+        print(f"Intro actor refs after first generation: {count}")
+        assert count == 0, "Intro AMB actor should not be injected in audio ISC"
         
-        # 3. Second injection (should be skipped)
+        # 3. Second generation should remain actor-free
         generate_intro_amb(ogg_path, "TestMap", tmp_path, a_offset=-2.145, v_override=-2.145)
         
         content = isc_path.read_text()
         count = content.count("amb_testmap_intro.tpl")
-        print(f"Injection count 2: {count}")
-        assert count == 1, "Second injection was NOT skipped (redundant!)"
-        assert content.count('USERFRIENDLY="amb_testmap_intro"') == 1, "Actor duplicated"
+        print(f"Intro actor refs after second generation: {count}")
+        assert count == 0, "Intro AMB actor should not be injected in audio ISC"
         
-        print("✓ AMB Injection Idempotency OK")
+        print("✓ Intro generation stays tape-driven")
 
 
 def test_marker_preroll_controls_intro_duration_even_with_negative_offset():
@@ -232,10 +228,108 @@ videoStartTime = -2.834000,
         assert changed is True
 
         updated = tape_path.read_text(encoding="utf-8")
-        # Cutter-style timing: marker[abs(startBeat)] / 48 + 85 => 2919.646 ms -> 2920 ms rounded.
-        assert "StartTime = -2920" in updated
-        assert "Duration = 2920" in updated
+        # Preserve existing clip timing when HideUserInterfaceClip is absent.
+        assert "StartTime = -144" in updated
+        assert "Duration = 432" in updated
         assert "StartOffset" not in updated
+
+
+def test_process_ambient_directory_disabled_removes_intro_clip_from_tape():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        codename = "Balance"
+        map_lower = codename.lower()
+
+        source_dir = tmp_path / "source"
+        source_dir.mkdir(parents=True, exist_ok=True)
+
+        target_dir = tmp_path / "target"
+        amb_dir = target_dir / "Audio" / "AMB"
+        amb_dir.mkdir(parents=True, exist_ok=True)
+
+        (amb_dir / "amb_balance_intro.tpl").write_text("intro", encoding="utf-8")
+        (amb_dir / "amb_balance_intro.ilu").write_text("intro", encoding="utf-8")
+        _write_test_wav(amb_dir / "amb_balance_intro.wav", duration_ms=900)
+
+        (amb_dir / "amb_balance_outro.tpl").write_text("outro", encoding="utf-8")
+        (amb_dir / "amb_balance_outro.ilu").write_text("outro", encoding="utf-8")
+        _write_test_wav(amb_dir / "amb_balance_outro.wav", duration_ms=900)
+
+        tape_path = target_dir / "Cinematics" / f"{codename}_MainSequence.tape"
+        tape_path.parent.mkdir(parents=True, exist_ok=True)
+        tape_path.write_text(
+            f"""params =
+{{
+    NAME = \"Tape\",
+    Tape =
+    {{
+        Clips =
+        {{
+            {{
+                NAME = \"SoundSetClip\",
+                SoundSetClip =
+                {{
+                    Id = 1,
+                    TrackId = 2,
+                    IsActive = 1,
+                    StartTime = -354,
+                    Duration = 1135,
+                    SoundSetPath = \"world/maps/{map_lower}/audio/amb/amb_balance_intro.tpl\",
+                    SoundChannel = 0,
+                    StopsOnEnd = 0,
+                    AccountedForDuration = 0,
+                }},
+            }},
+            {{
+                NAME = \"SoundSetClip\",
+                SoundSetClip =
+                {{
+                    Id = 2,
+                    TrackId = 3,
+                    IsActive = 1,
+                    StartTime = 11712,
+                    Duration = 216,
+                    SoundSetPath = \"world/maps/{map_lower}/audio/amb/amb_balance_outro.tpl\",
+                    SoundChannel = 0,
+                    StopsOnEnd = 0,
+                    AccountedForDuration = 0,
+                }},
+            }},
+        }},
+        Tracks =
+        {{
+            {{
+                TapeTrack =
+                {{
+                    Id = 2,
+                    Name = \"AMB_Balance_Intro.tpl\",
+                }},
+            }},
+            {{
+                TapeTrack =
+                {{
+                    Id = 3,
+                    Name = \"AMB_Balance_Outro.tpl\",
+                }},
+            }},
+        }},
+        TapeClock = 2,
+    }},
+}}""",
+            encoding="utf-8",
+        )
+
+        process_ambient_directory(source_dir, target_dir, codename, attempt_enabled=False)
+
+        updated_tape = tape_path.read_text(encoding="utf-8")
+        assert "amb_balance_intro.tpl" not in updated_tape
+        assert "AMB_Balance_Intro.tpl" not in updated_tape
+        assert "amb_balance_outro.tpl" in updated_tape
+
+        assert not (amb_dir / "amb_balance_intro.tpl").exists()
+        assert not (amb_dir / "amb_balance_intro.ilu").exists()
+        assert not (amb_dir / "amb_balance_intro.wav").exists()
+        assert (amb_dir / "amb_balance_outro.tpl").exists()
 
 if __name__ == "__main__":
     try:

@@ -232,10 +232,10 @@ def test_reprocess_audio_recovers_missing_ipk_audio_from_source_tree(
 
     assert map_data.media.audio_path == recovered_audio
     assert called["audio"] == recovered_audio
-    assert not called_intro, "Intro generation should be hard-disabled"
+    assert not called_intro, "Intro generation should remain disabled for IPK"
 
 
-def test_reprocess_audio_ipk_does_not_generate_intro_when_audio_present(
+def test_reprocess_audio_jdnext_generates_intro_when_audio_present(
     tmp_path: Path,
     sample_normalized_data,
     monkeypatch: pytest.MonkeyPatch,
@@ -251,9 +251,11 @@ def test_reprocess_audio_ipk_does_not_generate_intro_when_audio_present(
     map_data.source_dir = source_root
     map_data.media.audio_path = audio_src
     map_data.is_html_source = False
-    map_data.is_jdnext_source = False
+    map_data.is_jdnext_source = True
 
     called_intro: list[tuple] = []
+    called_clip_cleanup: list[tuple] = []
+    called_asset_cleanup: list[Path] = []
 
     monkeypatch.setattr(
         "jd2021_installer.installers.media_processor.convert_audio",
@@ -267,7 +269,17 @@ def test_reprocess_audio_ipk_does_not_generate_intro_when_audio_present(
         "jd2021_installer.installers.media_processor.extract_amb_clips",
         lambda *_args, **_kwargs: 0,
     )
+    monkeypatch.setattr(
+        "jd2021_installer.installers.ambient_processor._remove_intro_amb_soundset_clips",
+        lambda *args, **_kwargs: called_clip_cleanup.append(args) or False,
+    )
+    monkeypatch.setattr(
+        "jd2021_installer.installers.ambient_processor._remove_intro_amb_assets",
+        lambda amb_dir, **_kwargs: called_asset_cleanup.append(Path(amb_dir)) or 0,
+    )
 
     reprocess_audio(map_data, tmp_path / "game_map", a_offset=0.0, config=None)
 
-    assert not called_intro, "Intro generation should be hard-disabled"
+    assert called_intro, "Expected intro generation to run for JDNext"
+    assert not called_clip_cleanup, "Disabled-mode clip cleanup should not run when intro is enabled"
+    assert not called_asset_cleanup, "Disabled-mode asset cleanup should not run when intro is enabled"
