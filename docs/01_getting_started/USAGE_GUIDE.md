@@ -50,6 +50,12 @@ Fetch mode also needs Playwright Chromium:
 python -m playwright install chromium
 ```
 
+JDNext mapPackage workflows also expect local tool staging under `tools/`:
+
+1. `tools/AssetStudio` (source clone)
+2. `tools/UnityPy` (source clone)
+3. `tools/Unity2UbiArt/bin/AssetStudioModCLI/` (runtime CLI bundle)
+
 ### 1.3 First launch checklist
 
 Before your first install:

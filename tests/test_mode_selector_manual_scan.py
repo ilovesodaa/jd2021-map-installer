@@ -1,6 +1,11 @@
 from pathlib import Path
 
-from jd2021_installer.ui.widgets.mode_selector import FileRowWidget, ModeSelectorWidget
+from jd2021_installer.ui.widgets.mode_selector import (
+    FileRowWidget,
+    ModeSelectorWidget,
+    MODE_HTML,
+    MODE_JDNEXT,
+)
 
 
 def test_pick_manual_tape_accepts_uncooked_dtape_and_ktape(qtbot, tmp_path: Path):
@@ -187,3 +192,87 @@ def test_file_row_clear_button_clears_value_and_emits_empty(qtbot):
 
     assert row.line_edit.text() == ""
     assert emitted and emitted[-1] == ""
+
+
+def test_jdnext_mode_reports_codenames_as_target(qtbot):
+    widget = ModeSelectorWidget()
+    qtbot.addWidget(widget)
+
+    widget._mode_combo.setCurrentIndex(MODE_JDNEXT)
+    widget.inputs["jdnext"]["codenames"].setText("TelephoneALT,MapB")
+
+    state = widget.get_current_state()
+    assert state["mode_key"] == "jdnext"
+    assert state["target"] == "TelephoneALT,MapB"
+
+
+def test_set_mode_codenames_updates_jdnext_input(qtbot):
+    widget = ModeSelectorWidget()
+    qtbot.addWidget(widget)
+
+    widget.set_mode_codenames("jdnext", "TelephoneALT")
+
+    assert widget.inputs["jdnext"]["codenames"].text() == "TelephoneALT"
+
+
+def test_html_autofill_updates_counterpart_on_second_selection(qtbot, tmp_path: Path, monkeypatch):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+
+    first_asset = first / "asset_mapx.html"
+    first_nohud = first / "nohud_mapx.html"
+    second_asset = second / "asset_mapy.html"
+    second_nohud = second / "nohud_mapy.html"
+    for path in (first_asset, first_nohud, second_asset, second_nohud):
+        path.write_text("<html></html>", encoding="utf-8")
+
+    widget = ModeSelectorWidget()
+    qtbot.addWidget(widget)
+    widget._mode_combo.setCurrentIndex(MODE_HTML)
+
+    html_page = widget._stack.widget(MODE_HTML)
+    rows = html_page.findChildren(FileRowWidget)
+    assert len(rows) >= 2
+    asset_row, nohud_row = rows[0], rows[1]
+
+    selected_paths = iter(
+        [
+            (str(first_asset), "HTML Files (*.html *.htm)"),
+            (str(second_asset), "HTML Files (*.html *.htm)"),
+        ]
+    )
+
+    monkeypatch.setattr(
+        "jd2021_installer.ui.widgets.mode_selector.QFileDialog.getOpenFileName",
+        lambda *args, **kwargs: next(selected_paths),
+    )
+
+    asset_row._browse()
+    assert widget.inputs["html"]["asset"].text() == str(first_asset)
+    assert widget.inputs["html"]["nohud"].text() == str(first_nohud)
+
+    asset_row._browse()
+    assert widget.inputs["html"]["asset"].text() == str(second_asset)
+    assert widget.inputs["html"]["nohud"].text() == str(second_nohud)
+
+    # NoHUD->Asset direction should also refresh after a new selection.
+    selected_nohud_paths = iter(
+        [
+            (str(first_nohud), "HTML Files (*.html *.htm)"),
+            (str(second_nohud), "HTML Files (*.html *.htm)"),
+        ]
+    )
+    monkeypatch.setattr(
+        "jd2021_installer.ui.widgets.mode_selector.QFileDialog.getOpenFileName",
+        lambda *args, **kwargs: next(selected_nohud_paths),
+    )
+
+    nohud_row._browse()
+    assert widget.inputs["html"]["asset"].text() == str(first_asset)
+    assert widget.inputs["html"]["nohud"].text() == str(first_nohud)
+
+    nohud_row._browse()
+    assert widget.inputs["html"]["asset"].text() == str(second_asset)
+    assert widget.inputs["html"]["nohud"].text() == str(second_nohud)

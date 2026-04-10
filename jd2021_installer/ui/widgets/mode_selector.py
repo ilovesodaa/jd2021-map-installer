@@ -44,6 +44,8 @@ MODE_HTML = 1
 MODE_IPK = 2
 MODE_BATCH = 3
 MODE_MANUAL = 4
+MODE_JDNEXT = 5
+MODE_HTML_JDNEXT = 6
 
 MODE_LABELS = [
     "Fetch (Codename)",
@@ -51,6 +53,8 @@ MODE_LABELS = [
     "IPK Archive",
     "Batch (Directory)",
     "Manual (Directory)",
+    "Fetch JDNext (Codename)",
+    "HTML Files JDNext",
 ]
 
 MODE_KEYS = [
@@ -59,6 +63,8 @@ MODE_KEYS = [
     "ipk",
     "batch",
     "manual",
+    "jdnext",
+    "html_jdnext",
 ]
 
 
@@ -92,7 +98,7 @@ class FileRowWidget(QWidget):
         self.line_edit.setToolTip(f"Selected path for {label_text.rstrip(':')}")
         lay.addWidget(self.line_edit)
 
-        btn = QPushButton("Browse…")
+        btn = QPushButton("Browse")
         btn.setToolTip(f"Browse and select {label_text.rstrip(':')}")
         btn.clicked.connect(self._browse)
         lay.addWidget(btn)
@@ -106,8 +112,15 @@ class FileRowWidget(QWidget):
         if self.is_dir:
             path = QFileDialog.getExistingDirectory(self, "Select Directory")
         else:
+            # For HTML files, default to mapDownloads folder
+            initial_dir = ""
+            if "html" in self.file_filter.lower():
+                map_downloads = Path(__file__).parent.parent.parent.parent / "mapDownloads"
+                if map_downloads.exists():
+                    initial_dir = str(map_downloads)
+            
             path, _ = QFileDialog.getOpenFileName(
-                self, "Select File", "", self.file_filter
+                self, "Select File", initial_dir, self.file_filter
             )
 
         if path:
@@ -135,6 +148,8 @@ class ModeSelectorWidget(QWidget):
             "ipk": {},
             "batch": {},
             "manual": {},
+            "jdnext": {},
+            "html_jdnext": {},
         }
         self._build_ui()
 
@@ -156,7 +171,7 @@ class ModeSelectorWidget(QWidget):
 
         self._mode_combo = QComboBox()
         self._mode_combo.addItems(MODE_LABELS)
-        self._mode_combo.setToolTip("Choose how map source files are provided to the installer")
+        self._mode_combo.setToolTip("Choose the input method for map files. Use IPK for bundles, Fetch for Discord URLs, or Local for folders.")
         self._mode_combo.currentIndexChanged.connect(self._on_mode_index_changed)
         mode_row.addWidget(self._mode_combo)
         mode_row.addStretch()
@@ -173,20 +188,26 @@ class ModeSelectorWidget(QWidget):
         self._stack.addWidget(self._build_ipk_page())  # 2
         self._stack.addWidget(self._build_batch_page())  # 3
         self._stack.addWidget(self._build_manual_page())  # 4
+        self._stack.addWidget(self._build_jdnext_page())  # 5
+        self._stack.addWidget(self._build_html_jdnext_page())  # 6
         self._wire_state_signals()
         self._fit_current_page_height()
 
     # -- Mode Pages ---------------------------------------------------------
 
-    def _build_fetch_page(self) -> QWidget:
+    def _build_codename_fetch_page(
+        self,
+        *,
+        input_key: str,
+        warning_text: str,
+        placeholder: str,
+    ) -> QWidget:
         page = QWidget()
         page.setObjectName("modePage")
         lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 4, 0, 0)
 
-        warn = QLabel(
-            "Fetch automates acquiring the asset and nohud HTML files and downloads. Make sure to set your Discord channel link that can access JDHelper."
-        )
+        warn = QLabel(warning_text)
         warn.setObjectName("modeFetchWarningLabel")
         warn.setWordWrap(True)
         lay.addWidget(warn)
@@ -198,15 +219,35 @@ class ModeSelectorWidget(QWidget):
         row.addWidget(lbl)
 
         inp = QLineEdit()
-        inp.setPlaceholderText("e.g. RainOnMe, DontStartNow")
-        inp.setToolTip("Enter one or more codenames, separated by commas")
+        inp.setPlaceholderText(placeholder)
+        inp.setToolTip("Enter one or more codenames, separated by commas, to target specific maps.")
         inp.textChanged.connect(lambda t: self.target_selected.emit(t))
         row.addWidget(inp)
 
         lay.addLayout(row)
 
-        self.inputs["fetch"]["codenames"] = inp
+        self.inputs[input_key]["codenames"] = inp
         return page
+
+    def _build_fetch_page(self) -> QWidget:
+        return self._build_codename_fetch_page(
+            input_key="fetch",
+            warning_text=(
+                "Fetch automates acquiring the asset and nohud HTML files and downloads. "
+                "Make sure to set your Discord channel link that can access JDHelper."
+            ),
+            placeholder="e.g. RainOnMe, DontStartNow",
+        )
+
+    def _build_jdnext_page(self) -> QWidget:
+        return self._build_codename_fetch_page(
+            input_key="jdnext",
+            warning_text=(
+                "Fetch automates acquiring the asset HTML file and downloads. "
+                "Make sure to set your Discord channel link that can access JDHelper."
+            ),
+            placeholder="e.g. TelephoneALT",
+        )
 
     def _build_html_page(self) -> QWidget:
         page = QWidget()
@@ -215,7 +256,7 @@ class ModeSelectorWidget(QWidget):
         lay.setContentsMargins(0, 4, 0, 0)
 
         warn = QLabel(
-            "⚠️ Asset/NoHUD links expire after ~30 minutes! Fetch fresh links if download fails."
+            "⚠️ Asset/NoHUD links expire after ~30 minutes! Fetch fresh links if download fails. If the assets and nohud are already downloaded, ignore this warning."
         )
         warn.setObjectName("modeHtmlWarningLabel")
         warn.setWordWrap(True)
@@ -247,12 +288,18 @@ class ModeSelectorWidget(QWidget):
             src = Path(source_path)
             asset_guess, nohud_guess = self._find_html_pair(src.parent)
 
-            if is_asset and not self.inputs["html"]["nohud"].text().strip() and nohud_guess:
-                self.inputs["html"]["nohud"].setText(str(nohud_guess))
-                logger.info("Auto-detected NOHUD HTML: %s", nohud_guess)
-            elif not is_asset and not self.inputs["html"]["asset"].text().strip() and asset_guess:
-                self.inputs["html"]["asset"].setText(str(asset_guess))
-                logger.info("Auto-detected Asset HTML: %s", asset_guess)
+            if is_asset and nohud_guess:
+                current_nohud = self.inputs["html"]["nohud"].text().strip()
+                detected_nohud = str(nohud_guess)
+                if current_nohud != detected_nohud:
+                    self.inputs["html"]["nohud"].setText(detected_nohud)
+                    logger.info("Auto-detected NOHUD HTML: %s", nohud_guess)
+            elif not is_asset and asset_guess:
+                current_asset = self.inputs["html"]["asset"].text().strip()
+                detected_asset = str(asset_guess)
+                if current_asset != detected_asset:
+                    self.inputs["html"]["asset"].setText(detected_asset)
+                    logger.info("Auto-detected Asset HTML: %s", asset_guess)
 
             # Keep a valid target selected no matter which HTML field was browsed.
             target = self.inputs["html"]["asset"].text().strip() or source_path
@@ -261,6 +308,31 @@ class ModeSelectorWidget(QWidget):
         asset_row.path_changed.connect(lambda p: auto_detect(p, True))
         nohud_row.path_changed.connect(lambda p: auto_detect(p, False))
 
+        return page
+
+    def _build_html_jdnext_page(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("modePage")
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(0, 4, 0, 0)
+
+        warn = QLabel(
+            "⚠️ Asset links expire after ~30 minutes! Fetch fresh links if download fails. If the assets are already downloaded, ignore this warning."
+        )
+        warn.setObjectName("modeHtmlWarningLabel")
+        warn.setWordWrap(True)
+        lay.addWidget(warn)
+
+        asset_row = FileRowWidget(
+            "Asset HTML:",
+            is_dir=False,
+            file_filter="HTML Files (*.html *.htm)",
+            placeholder="No file selected",
+        )
+        asset_row.path_changed.connect(lambda t: self.target_selected.emit(t))
+        lay.addWidget(asset_row)
+
+        self.inputs["html_jdnext"]["asset"] = asset_row.line_edit
         return page
 
     def _build_ipk_page(self) -> QWidget:
@@ -363,7 +435,7 @@ class ModeSelectorWidget(QWidget):
         top_lay.addWidget(root_row, 0, 0, 1, 2)
 
         self._manual_scan_btn = QPushButton("Scan")
-        self._manual_scan_btn.setToolTip("Run another scan on the current root folder to refresh detected paths")
+        self._manual_scan_btn.setToolTip("Rescan the selected folder to detect new or removed map files.")
         self._manual_scan_btn.clicked.connect(self._on_manual_scan_clicked)
         top_lay.addWidget(self._manual_scan_btn, 0, 2)
 
@@ -371,7 +443,7 @@ class ModeSelectorWidget(QWidget):
         lbl_code.setMinimumWidth(120)
         top_lay.addWidget(lbl_code, 1, 0)
         inp_code = QLineEdit()
-        inp_code.setToolTip("Codename used for naming outputs and matching map files")
+        inp_code.setToolTip("Enter the codename to use for named assets and directory structure generation (e.g. BangBang).")
         top_lay.addWidget(inp_code, 1, 1)
 
         scroll_lay.addLayout(top_lay)
@@ -778,8 +850,12 @@ class ModeSelectorWidget(QWidget):
     def _resolve_target_for_state(self, mode_key: str, fields: dict[str, str]) -> str:
         if mode_key == "fetch":
             return fields.get("codenames", "").strip()
+        if mode_key == "jdnext":
+            return fields.get("codenames", "").strip()
         if mode_key == "html":
             return fields.get("asset", "").strip() or fields.get("nohud", "").strip()
+        if mode_key == "html_jdnext":
+            return fields.get("asset", "").strip()
         if mode_key == "ipk":
             return fields.get("file", "").strip()
         if mode_key == "batch":
@@ -1069,7 +1145,17 @@ class ModeSelectorWidget(QWidget):
 
     def set_fetch_codenames(self, raw_value: str) -> None:
         """Public setter used by MainWindow (avoid direct child-input access)."""
-        self.inputs["fetch"]["codenames"].setText(raw_value)
+        self.set_mode_codenames("fetch", raw_value)
+
+    def set_mode_codenames(self, mode_key: str, raw_value: str) -> None:
+        """Set codename input for a codename-driven mode."""
+        if mode_key in self.inputs and "codenames" in self.inputs[mode_key]:
+            self.inputs[mode_key]["codenames"].setText(raw_value)
+
+    def set_mode_index(self, index: int) -> None:
+        """Programmatically switch active mode if index is in range."""
+        if 0 <= index < self._mode_combo.count():
+            self._mode_combo.setCurrentIndex(index)
 
     def get_current_state(self) -> dict[str, object]:
         """Return a normalized snapshot of selected mode and user-provided values."""

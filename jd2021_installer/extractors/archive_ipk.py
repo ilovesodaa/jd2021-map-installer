@@ -119,7 +119,7 @@ def extract_ipk(target_file: str | Path, output_dir: str | Path | None = None) -
                 raise IPKExtractionError("Not a valid IPK file (bad magic bytes)")
 
             num_files = _unpack(ipk_header["num_files"]["value"])
-            logger.info("IPK: Found %d files...", num_files)
+            logger.debug("IPK: Found %d files...", num_files)
 
             file_chunks = []
             for _ in range(num_files):
@@ -150,7 +150,7 @@ def extract_ipk(target_file: str | Path, output_dir: str | Path | None = None) -
                     status = f"file {k + 1}/{num_files}"
                     if codenames_found:
                         status += f" (maps: {', '.join(sorted(codenames_found))})"
-                    logger.info("IPK: Extracting %s...", status)
+                    logger.debug("IPK: Extracting %s...", status)
 
                 offset = _unpack(chunk["offset"]["value"])
                 data_size = _unpack(chunk["size"]["value"])
@@ -166,7 +166,7 @@ def extract_ipk(target_file: str | Path, output_dir: str | Path | None = None) -
                 # Path traversal protection
                 resolved = os.path.normpath(os.path.join(str(file_path), file_name))
                 if not resolved.startswith(str(output_path)):
-                    logger.warning("Skipping path-traversal entry: %s", resolved)
+                    logger.debug("Skipping path-traversal entry: %s", resolved)
                     continue
 
                 f.seek(offset + base_offset)
@@ -186,7 +186,7 @@ def extract_ipk(target_file: str | Path, output_dir: str | Path | None = None) -
                     ff.write(decompressed)
                 extracted_files += 1
 
-        logger.info("IPK: Extracted %d/%d files to %s", extracted_files, num_files, output_path)
+        logger.debug("IPK: Extracted %d/%d files to %s", extracted_files, num_files, output_path)
         if extracted_files == 0 and num_files > 0:
             logger.warning(
                 "IPK extraction produced no materialized files for %s; continuing for V1 parity.",
@@ -263,7 +263,7 @@ def inspect_ipk(target_file: str | Path) -> list[str]:
             return sorted({d for d in root_dirs if d and not d.startswith(".") and d.lower() not in ignore_list})
 
     except Exception as exc:
-        logger.warning("Fast inspect failed for IPK %s: %s", target_file, exc)
+        logger.debug("Fast inspect failed for IPK %s: %s", target_file, exc)
         return []
 
 
@@ -323,14 +323,14 @@ class ArchiveIPKExtractor(BaseExtractor):
         
         if len(discovered) == 1:
             self._codename = discovered[0]
-            logger.info("Inferred codename: %s", self._codename)
+            logger.debug("Inferred codename: %s", self._codename)
         elif len(discovered) > 1:
-            logger.info("Multiple maps discovered in IPK: %s", ", ".join(discovered))
+            logger.debug("Multiple maps discovered in IPK: %s", ", ".join(discovered))
             if self._desired_codename:
                 target_matches = [m for m in discovered if m.lower() == self._desired_codename.lower()]
                 if target_matches:
                     self._codename = target_matches[0]
-                    logger.info("Matched bundle codename from requested target: %s", self._codename)
+                    logger.debug("Matched bundle codename from requested target: %s", self._codename)
                     return result
 
             # Try to match the codename from the IPK filename
@@ -340,16 +340,16 @@ class ArchiveIPKExtractor(BaseExtractor):
             matches = [m for m in discovered if m.lower() == stem.lower()]
             if matches:
                 self._codename = matches[0]
-                logger.info("Matched bundle codename from filename: %s", self._codename)
+                logger.debug("Matched bundle codename from filename: %s", self._codename)
             else:
                 self._codename = discovered[0]
-                logger.info("Auto-selected first candidate for bundle: %s", self._codename)
+                logger.debug("Auto-selected first candidate for bundle: %s", self._codename)
         else:
             # Fallback to filename inference if no maps found in structure
             base = self._ipk_path.stem
             stem = re.sub(r"_(x360|durango|scarlett|nx|orbis|prospero|pc)$", "", base, flags=re.IGNORECASE)
             self._codename = stem
-            logger.info("No maps found in structure, using fallback from filename: %s", self._codename)
+            logger.debug("No maps found in structure, using fallback from filename: %s", self._codename)
             
         return result
 

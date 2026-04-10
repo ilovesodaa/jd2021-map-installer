@@ -35,11 +35,64 @@ from jd2021_installer.core.models import (
     SoundSetClip,
     TapeReferenceClip,
 )
+from jd2021_installer.core.songdb_update import (
+    find_songdb_entry,
+    resolve_songdb_synth_path,
+)
 from jd2021_installer.parsers.binary_ckd import parse_binary_ckd
 
 logger = logging.getLogger("jd2021.parsers.normalizer")
 
-JDU_AUDIO_CALIBRATION_MS = 85.0
+JDU_AUDIO_CALIBRATION_MS = 0.0
+_SONGDB_SYNTH_MISSING_WARNED = False
+
+_PLACEHOLDER_TEXT_VALUES = {
+    "unknown",
+    "unknown title",
+    "unknown artist",
+    "unknown dancer",
+    "empty credits",
+    "n/a",
+    "na",
+    "none",
+}
+
+
+def _is_effectively_missing_text(value: object) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return True
+    return text.lower() in _PLACEHOLDER_TEXT_VALUES
+
+
+def _is_jdnext_source(source_dir: Path, media: MapMedia) -> bool:
+    """Best-effort detection for JDNext-origin maps in normalized sources."""
+    if (source_dir / "jdnext_metadata.json").exists():
+        return True
+
+    # JDNext bundle flows often map mapPackage metadata to monobehaviour/map.json.
+    # Presence of this payload is a strong JDNext indicator for extracted sources.
+    if (source_dir / "monobehaviour" / "map.json").exists():
+        return True
+
+    assets_html = source_dir / "assets.html"
+    if assets_html.exists():
+        try:
+            content = assets_html.read_text(encoding="utf-8", errors="ignore").lower()
+            if "/jdnext/maps/" in content or "server:jdnext" in content:
+                return True
+        except OSError:
+            pass
+
+    video_path = media.video_path
+    if video_path and re.match(r"^video_(ultra|high|mid|low)\.(hd|vp8|vp9)\.webm$", video_path.name.lower()):
+        return True
+
+    audio_path = media.audio_path
+    if audio_path and audio_path.name.lower() == "audio.opus":
+        return True
+
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -259,27 +312,57 @@ def _extract_music_track(
         if 0 <= idx < len(res.markers):
             # V1 Parity: NO marker offset for videoStartTime synthesis
             vst = -(res.markers[idx] / 48.0 / 1000.0)
-            logger.info("Synthesized video_start_time from markers: %.3f s", vst)
+            logger.debug("Synthesized video_start_time from markers: %.3f s", vst)
             res.video_start_time = vst
     return res
 
 
 def _find_source_trk_path(source_dir: Path, codename: str) -> Optional[Path]:
-    """Locate the source .trk file for a map codename (case-insensitive)."""
+    """Locate the source .trk file for a map codename (case-insensitive).
+
+    Some JDNext sources use variant track names (for example extra suffixes
+    around the codename). Prefer exact matches first, then fallback to
+    codename-contained stems to mirror install-time behavior.
+    """
     direct = source_dir / "Audio" / f"{codename}.trk"
     if direct.exists():
         return direct
 
     codename_lower = codename.lower()
+
+    def _is_exact(candidate: Path) -> bool:
+        return candidate.stem.lower() == codename_lower
+
+    def _is_fuzzy(candidate: Path) -> bool:
+        stem_lower = candidate.stem.lower()
+        return codename_lower in stem_lower
+
     audio_dir = source_dir / "Audio"
     if audio_dir.exists():
+        exact_hits: List[Path] = []
+        fuzzy_hits: List[Path] = []
         for candidate in audio_dir.glob("*.trk"):
-            if candidate.stem.lower() == codename_lower:
-                return candidate
+            if _is_exact(candidate):
+                exact_hits.append(candidate)
+            elif _is_fuzzy(candidate):
+                fuzzy_hits.append(candidate)
+        if exact_hits:
+            return sorted(exact_hits)[0]
+        if fuzzy_hits:
+            return sorted(fuzzy_hits)[0]
 
+    exact_hits: List[Path] = []
+    fuzzy_hits: List[Path] = []
     for candidate in source_dir.rglob("*.trk"):
-        if candidate.stem.lower() == codename_lower:
-            return candidate
+        if _is_exact(candidate):
+            exact_hits.append(candidate)
+        elif _is_fuzzy(candidate):
+            fuzzy_hits.append(candidate)
+
+    if exact_hits:
+        return sorted(exact_hits)[0]
+    if fuzzy_hits:
+        return sorted(fuzzy_hits)[0]
 
     return None
 
@@ -340,16 +423,119 @@ def _extract_song_desc(
     directory: str, codename: Optional[str] = None
 ) -> SongDescription:
     """Find and parse a songdesc CKD → SongDescription."""
+    def _songdesc_from_map_json_fallback() -> Optional[SongDescription]:
+        """Best-effort SongDesc metadata from JDNext MonoBehaviour map.json."""
+
+        def _coerce_int(value: object, default: int) -> int:
+            try:
+                return int(value)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                return default
+
+        map_json_candidates = sorted(Path(directory).rglob("monobehaviour/map.json"))
+        if not map_json_candidates:
+            map_json_candidates = sorted(Path(directory).rglob("map.json"))
+
+        codename_low = (codename or "").strip().lower()
+
+        for map_json_path in map_json_candidates:
+            try:
+                payload = json.loads(map_json_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+
+            if not isinstance(payload, dict):
+                continue
+
+            sd = payload.get("SongDesc")
+            if not isinstance(sd, dict):
+                continue
+
+            map_name = str(sd.get("MapName") or payload.get("MapName") or codename or "Unknown")
+            if codename_low and map_name.lower() != codename_low:
+                continue
+
+            return SongDescription(
+                map_name=map_name,
+                title=str(sd.get("Title", codename or map_name or "Unknown") or ""),
+                artist=str(sd.get("Artist", "Unknown Artist") or ""),
+                dancer_name=str(sd.get("DancerName", "Unknown Dancer") or "Unknown Dancer"),
+                credits=str(sd.get("Credits", "") or ""),
+                num_coach=_coerce_int(sd.get("NumCoach", 1), 1),
+                main_coach=_coerce_int(sd.get("MainCoach", -1), -1),
+                difficulty=_coerce_int(sd.get("Difficulty", 2), 2),
+                sweat_difficulty=_coerce_int(sd.get("SweatDifficulty", 1), 1),
+                jd_version=_coerce_int(sd.get("JDVersion", 2021), 2021),
+                original_jd_version=_coerce_int(sd.get("OriginalJDVersion", 2021), 2021),
+            )
+
+        return None
+
+    def _songdesc_from_html_fallback() -> SongDescription:
+        """Best-effort SongDesc metadata from downloaded embed HTML."""
+        title = codename or "Unknown"
+        artist = "Unknown Artist"
+
+        html_candidates = sorted(Path(directory).rglob("*assets*.html"))
+        if not html_candidates:
+            html_candidates = sorted(Path(directory).glob("*.html"))
+
+        for html_path in html_candidates:
+            try:
+                content = html_path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+
+            title_match = re.search(
+                r"<div class=\"embedTitle[^\"]*\">\s*<span>([^<]+)</span>",
+                content,
+                re.IGNORECASE,
+            )
+            artist_match = re.search(
+                r"<div class=\"embedDescription[^\"]*\">\s*<span>\s*by\s+([^<]+)</span>",
+                content,
+                re.IGNORECASE,
+            )
+
+            if title_match:
+                candidate_title = title_match.group(1).strip()
+                if candidate_title:
+                    title = candidate_title
+            if artist_match:
+                candidate_artist = artist_match.group(1).strip()
+                if candidate_artist:
+                    artist = candidate_artist
+
+            if title_match or artist_match:
+                logger.info(
+                    "Recovered SongDesc metadata from HTML fallback: title='%s', artist='%s'",
+                    title,
+                    artist,
+                )
+                break
+
+        return SongDescription(
+            map_name=codename or "Unknown",
+            title=title,
+            artist=artist,
+        )
+
     ckd_paths = _find_ckd_files(directory, "*songdesc*.tpl.ckd", codename)
 
     if not ckd_paths:
-        # Return defaults if songdesc not found
-        logger.warning("songdesc.tpl.ckd not found; using defaults")
-        return SongDescription(
-            map_name=codename or "Unknown",
-            title=codename or "Unknown",
-            artist="Unknown Artist",
-        )
+        map_json_songdesc = _songdesc_from_map_json_fallback()
+        if map_json_songdesc is not None:
+            if not str(map_json_songdesc.title or "").strip() or not str(map_json_songdesc.artist or "").strip():
+                html_fallback = _songdesc_from_html_fallback()
+                if not str(map_json_songdesc.title or "").strip() and str(html_fallback.title or "").strip():
+                    map_json_songdesc.title = html_fallback.title
+                if not str(map_json_songdesc.artist or "").strip() and str(html_fallback.artist or "").strip():
+                    map_json_songdesc.artist = html_fallback.artist
+            logger.debug("songdesc.tpl.ckd not found; recovered SongDesc from map.json fallback")
+            return map_json_songdesc
+
+        logger.debug("songdesc.tpl.ckd not found; using fallback metadata")
+        return _songdesc_from_html_fallback()
 
     data = load_ckd(ckd_paths[0])
     if isinstance(data, SongDescription):
@@ -370,7 +556,7 @@ def _extract_song_desc(
                 if k.lower() not in ("theme", "lyrics"):
                     dc.extra[k] = v
 
-        return SongDescription(
+        song_desc = SongDescription(
             map_name=sd.get("MapName", codename or "Unknown"),
             title=sd.get("Title", codename or "Unknown"),
             artist=sd.get("Artist", "Unknown Artist"),
@@ -397,8 +583,260 @@ def _extract_song_desc(
             default_colors=dc,
             phone_images=sd.get("PhoneImages", {}),
         )
+
+        if not str(song_desc.title or "").strip() or not str(song_desc.artist or "").strip():
+            html_fallback = _songdesc_from_html_fallback()
+            if not str(song_desc.title or "").strip() and str(html_fallback.title or "").strip():
+                song_desc.title = html_fallback.title
+            if not str(song_desc.artist or "").strip() and str(html_fallback.artist or "").strip():
+                song_desc.artist = html_fallback.artist
+
+        return song_desc
     except (KeyError, IndexError, TypeError) as exc:
         raise NormalizationError(f"Invalid songdesc JSON: {exc}") from exc
+
+
+def _apply_jdnext_metadata_songdesc_overrides(
+    directory: str,
+    song_desc: SongDescription,
+) -> None:
+    """Overlay JDNext fetch metadata onto SongDescription when useful.
+
+    Uses only fields relevant to JD2021 output generation and keeps existing
+    SongDesc values when they appear authoritative.
+    """
+
+    def _to_int(value: object) -> Optional[int]:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            return None
+
+    def _to_difficulty(value: object) -> Optional[int]:
+        as_int = _to_int(value)
+        if as_int is not None:
+            return as_int
+
+        text = str(value or "").strip().lower()
+        if not text:
+            return None
+        mapping = {
+            "easy": 1,
+            "medium": 2,
+            "normal": 2,
+            "hard": 3,
+            "extreme": 4,
+        }
+        return mapping.get(text)
+
+    root = Path(directory)
+    candidates = sorted(root.rglob("jdnext_metadata.json"))
+    if not candidates:
+        return
+
+    metadata: Optional[dict] = None
+    for path in candidates:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            metadata = payload
+            break
+
+    if not metadata:
+        return
+
+    tags = metadata.get("tags")
+    if isinstance(tags, list):
+        cleaned_tags = [str(t).strip() for t in tags if str(t).strip()]
+        if cleaned_tags and (not song_desc.tags or song_desc.tags == ["Main"]):
+            song_desc.tags = cleaned_tags
+
+    credits = str(metadata.get("credits", "") or "").strip()
+    if credits and _is_effectively_missing_text(song_desc.credits):
+        song_desc.credits = credits
+
+    other_info = metadata.get("other_info")
+    if not isinstance(other_info, dict):
+        return
+
+    difficulty = _to_difficulty(other_info.get("difficulty"))
+    if difficulty is not None and song_desc.difficulty in (0, 2):
+        song_desc.difficulty = difficulty
+
+    sweat_difficulty = _to_difficulty(other_info.get("sweat_difficulty"))
+    if sweat_difficulty is not None and song_desc.sweat_difficulty in (0, 1):
+        song_desc.sweat_difficulty = sweat_difficulty
+
+    original_ver = _to_int(other_info.get("original_jd_version"))
+    if original_ver is not None and song_desc.original_jd_version in (0, -1, 2021):
+        song_desc.original_jd_version = original_ver
+
+    coach_count = _to_int(other_info.get("coach_count"))
+    if coach_count is not None and coach_count > 0 and coach_count > song_desc.num_coach:
+        song_desc.num_coach = coach_count
+
+
+def _apply_jdnext_songdb_cache_overrides(
+    codename: str,
+    song_desc: SongDescription,
+    music_track: Optional[MusicTrackStructure],
+) -> None:
+    """Overlay synthesized JDNext songdb cache values when available.
+
+    This cache is optional. If missing, normalizer keeps existing behavior.
+    """
+    global _SONGDB_SYNTH_MISSING_WARNED
+
+    synth_path = resolve_songdb_synth_path()
+    if not synth_path.exists():
+        if not _SONGDB_SYNTH_MISSING_WARNED:
+            logger.warning(
+                "JDNext songdb cache not found at %s. Continuing with default metadata fallback.",
+                synth_path,
+            )
+            _SONGDB_SYNTH_MISSING_WARNED = True
+        return
+
+    entry = find_songdb_entry(
+        codename=codename,
+        map_name=song_desc.map_name,
+        title=song_desc.title,
+        synth_path=synth_path,
+    )
+    if not entry:
+        logger.debug(
+            "JDNext songdb cache lookup miss for codename='%s' map_name='%s' title='%s'",
+            codename,
+            song_desc.map_name,
+            song_desc.title,
+        )
+        return
+
+    logger.debug(
+        "JDNext songdb cache lookup hit for codename='%s' (entry_id=%s)",
+        codename,
+        entry.get("entry_id"),
+    )
+
+    applied_fields: list[str] = []
+
+    def _as_int(value: object) -> Optional[int]:
+        if value is None or isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            return None
+
+    def _as_float(value: object) -> Optional[float]:
+        if value is None or isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
+    tags = entry.get("tags")
+    if isinstance(tags, list):
+        cleaned_tags = [str(t).strip() for t in tags if str(t).strip()]
+        if cleaned_tags and (not song_desc.tags or song_desc.tags == ["Main"]):
+            song_desc.tags = cleaned_tags
+            applied_fields.append("tags")
+
+    credits = str(entry.get("credits", "") or "").strip()
+    if credits and _is_effectively_missing_text(song_desc.credits):
+        song_desc.credits = credits
+        applied_fields.append("credits")
+
+    mapped_title = str(entry.get("title", "") or "").strip()
+    if mapped_title and (
+        _is_effectively_missing_text(song_desc.title)
+        or str(song_desc.title or "").strip().lower() == str(song_desc.map_name or "").strip().lower()
+    ):
+        song_desc.title = mapped_title
+        applied_fields.append("title")
+
+    mapped_artist = str(entry.get("artist", "") or "").strip()
+    if mapped_artist and _is_effectively_missing_text(song_desc.artist):
+        song_desc.artist = mapped_artist
+        applied_fields.append("artist")
+
+    difficulty = _as_int(entry.get("difficulty"))
+    if difficulty is not None and song_desc.difficulty in (0, 2):
+        song_desc.difficulty = difficulty
+        applied_fields.append("difficulty")
+
+    sweat_difficulty = _as_int(entry.get("sweat_difficulty"))
+    if sweat_difficulty is not None and song_desc.sweat_difficulty in (0, 1):
+        song_desc.sweat_difficulty = sweat_difficulty
+        applied_fields.append("sweat_difficulty")
+
+    coach_count = _as_int(entry.get("coach_count"))
+    if coach_count is not None and coach_count > 0 and coach_count > song_desc.num_coach:
+        song_desc.num_coach = coach_count
+        applied_fields.append("coach_count")
+
+    original_ver = _as_int(entry.get("original_jd_version"))
+    if original_ver is not None and song_desc.original_jd_version in (0, -1, 2021):
+        song_desc.original_jd_version = original_ver
+        applied_fields.append("original_jd_version")
+
+    if not music_track:
+        return
+
+    preview_entry = _as_float(entry.get("preview_entry"))
+    preview_loop_start = _as_float(entry.get("preview_loop_start"))
+    preview_loop_end = _as_float(entry.get("preview_loop_end"))
+    video_start_time = _as_float(entry.get("video_start_time"))
+
+    if preview_entry is not None and music_track.preview_entry <= 0:
+        music_track.preview_entry = preview_entry
+        applied_fields.append("preview_entry")
+    if preview_loop_start is not None and music_track.preview_loop_start <= 0:
+        music_track.preview_loop_start = preview_loop_start
+        applied_fields.append("preview_loop_start")
+    if preview_loop_end is not None and (
+        music_track.preview_loop_end <= 0
+        or music_track.preview_loop_end <= music_track.preview_loop_start
+    ):
+        music_track.preview_loop_end = preview_loop_end
+        applied_fields.append("preview_loop_end")
+    if video_start_time is not None and music_track.video_start_time == 0.0:
+        music_track.video_start_time = video_start_time
+        applied_fields.append("video_start_time")
+
+    if applied_fields:
+        logger.info(
+            "Applied JDNext songdb cache overrides for '%s': %s",
+            codename,
+            ", ".join(applied_fields),
+        )
+    else:
+        logger.debug(
+            "JDNext songdb cache entry found for '%s' but no overrides were needed",
+            codename,
+        )
 
 
 def _extract_dance_tape(
@@ -412,14 +850,44 @@ def _extract_dance_tape(
     if isinstance(data, DanceTape):
         return data
     if isinstance(data, dict):
-        # Best-effort clip count for JSON dtapes (Fetch/HTML mode maps)
+        # Best-effort clip count for JSON dtapes (supports legacy and synthesized layouts).
         clips = []
+        clip_sources = []
+
+        if isinstance(data.get("Clips"), list):
+            clip_sources.append(data.get("Clips", []))
+        if isinstance(data.get("clips"), list):
+            clip_sources.append(data.get("clips", []))
+
         for comp in data.get("COMPONENTS", []):
-            if "JD_TapeComponent_Template" in comp:
-                tape_data = comp["JD_TapeComponent_Template"].get("tape", {})
-                for clip in tape_data.get("clips", []):
-                    # Minimal stub to allow counting in logs/UI
-                    clips.append(MotionClip(id=0, track_id=0, is_active=1, start_time=0, duration=0, classifier_path=""))
+            if not isinstance(comp, dict):
+                continue
+            if "JD_TapeComponent_Template" not in comp:
+                continue
+            tape_data = comp["JD_TapeComponent_Template"].get("tape", {})
+            if isinstance(tape_data.get("clips"), list):
+                clip_sources.append(tape_data.get("clips", []))
+            if isinstance(tape_data.get("Clips"), list):
+                clip_sources.append(tape_data.get("Clips", []))
+
+        for source in clip_sources:
+            for clip in source:
+                if not isinstance(clip, dict):
+                    continue
+                # Minimal stub to allow counting in logs/UI
+                clips.append(
+                    MotionClip(
+                        id=0,
+                        track_id=0,
+                        is_active=1,
+                        start_time=0,
+                        duration=0,
+                        classifier_path="",
+                        gold_move=0,
+                        coach_id=0,
+                        move_type=0,
+                    )
+                )
         return DanceTape(clips=clips, map_name=codename or "Unknown")
     return None
 
@@ -435,13 +903,42 @@ def _extract_karaoke_tape(
     if isinstance(data, KaraokeTape):
         return data
     if isinstance(data, dict):
-        # Best-effort clip count for JSON ktapes
+        # Best-effort clip count for JSON ktapes (supports legacy and synthesized layouts).
         clips = []
+        clip_sources = []
+
+        if isinstance(data.get("Clips"), list):
+            clip_sources.append(data.get("Clips", []))
+        if isinstance(data.get("clips"), list):
+            clip_sources.append(data.get("clips", []))
+
         for comp in data.get("COMPONENTS", []):
-            if "JD_TapeComponent_Template" in comp:
-                tape_data = comp["JD_TapeComponent_Template"].get("tape", {})
-                for clip in tape_data.get("clips", []):
-                    clips.append(KaraokeClip(id=0, track_id=0, is_active=1, start_time=0, duration=0, lyrics="", pitch=0))
+            if not isinstance(comp, dict):
+                continue
+            if "JD_TapeComponent_Template" not in comp:
+                continue
+            tape_data = comp["JD_TapeComponent_Template"].get("tape", {})
+            if isinstance(tape_data.get("clips"), list):
+                clip_sources.append(tape_data.get("clips", []))
+            if isinstance(tape_data.get("Clips"), list):
+                clip_sources.append(tape_data.get("Clips", []))
+
+        for source in clip_sources:
+            for clip in source:
+                if not isinstance(clip, dict):
+                    continue
+                clips.append(
+                    KaraokeClip(
+                        id=0,
+                        track_id=0,
+                        is_active=1,
+                        start_time=0,
+                        duration=0,
+                        lyrics="",
+                        pitch=0.0,
+                        is_end_of_line=0,
+                    )
+                )
         return KaraokeTape(clips=clips, map_name=codename or "Unknown")
     return None
 
@@ -566,7 +1063,7 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
                 elif len(main_videos) > 1:
                     # If we have multiple videos but none match the codename, we are likely in a bundle
                     # and picking a random video is dangerous.
-                    logger.warning("No video match for codename %s in multi-map bundle; skipping video discovery", codename)
+                    logger.debug("No video match for codename %s in multi-map bundle; skipping video discovery", codename)
                     main_videos = []
             
             if main_videos:
@@ -584,18 +1081,18 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
                 
                 media.video_path = best_video
 
-    # 2. Audio files (.ogg, .wav, .wav.ckd)
-    # V1 Priority: .ogg > .wav > .wav.ckd
+    # 2. Audio files (.ogg, .opus, .wav, .wav.ckd)
+    # V1 Priority extended for JDNext: .ogg > .opus > .wav > .wav.ckd
     audio_found = False
 
     def _audio_base_name(path: Path) -> str:
         name = path.name.lower()
-        for suffix in (".wav.ckd", ".ogg.ckd", ".wav", ".ogg", ".ckd"):
+        for suffix in (".wav.ckd", ".ogg.ckd", ".opus.ckd", ".wav", ".ogg", ".opus", ".ckd"):
             if name.endswith(suffix):
                 return name[: -len(suffix)]
         return path.stem.lower()
 
-    for ext_pattern in ("*.ogg", "*.wav", "*.wav.ckd"):
+    for ext_pattern in ("*.ogg", "*.opus", "*.wav", "*.wav.ckd"):
         if audio_found: break
         
         candidates = list(dir_path.rglob(ext_pattern))
@@ -755,8 +1252,14 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
     media.cover_albumbkg_path = _get_best_asset("albumbkg", all_media_files, allow_optional_fallback=True)
     media.cover_albumcoach_path = _get_best_asset("albumcoach", all_media_files, allow_optional_fallback=True)
     
-    # Coaches are a list
-    all_coaches = [f for f in all_media_files if "coach_" in f.name.lower()]
+    # Coaches are a list. Accept coach_1 / coach1 / coach-1 variants.
+    # Avoid matching unrelated assets like albumcoach.
+    coach_name_pattern = re.compile(r"(?:^|[_-])coach(?:[_-]?\d+)?(?:[_-]|$)", re.IGNORECASE)
+    all_coaches = [
+        f
+        for f in all_media_files
+        if "albumcoach" not in f.stem.lower() and coach_name_pattern.search(f.stem.lower())
+    ]
     if codename_low:
         codename_coaches = [c for c in all_coaches if _filename_matches_codename(c)]
         if not codename_coaches:
@@ -817,10 +1320,38 @@ def _discover_media(directory: str, codename: Optional[str] = None, search_root:
     return media
 
 
+def _infer_coach_count_from_media(media: MapMedia) -> int:
+    """Infer coach count from discovered coach image filenames.
+
+    Supports both ``coach_2`` and ``coach2`` style suffixes. If no explicit
+    index is present, each image contributes one coach.
+    """
+    if not media.coach_images:
+        return 0
+
+    indexed: List[int] = []
+    non_indexed = 0
+    for path in media.coach_images:
+        name_low = path.name.lower()
+        match = re.search(r"coach[_-]?(\d+)", name_low)
+        if match:
+            try:
+                indexed.append(int(match.group(1)))
+            except ValueError:
+                non_indexed += 1
+        else:
+            non_indexed += 1
+
+    if indexed:
+        return max(indexed)
+    return non_indexed
+
+
 def normalize_sync(
     music_track: Optional[MusicTrackStructure], 
     is_html_source: bool = False,
     existing_trk_path: Optional[Path] = None,
+    is_jdnext_source: bool = False,
 ) -> MapSync:
     """Determine the optimal audio/video sync offsets.
     
@@ -845,17 +1376,17 @@ def normalize_sync(
                 if abs(vst) > 1000:
                     vst /= 48000.0
                 video_ms = vst * 1000.0
-                logger.info("Readjust mode: inherited videoStartTime %.6fs from existing .trk", vst)
+                logger.debug("Readjust mode: inherited videoStartTime %.6fs from existing .trk", vst)
                 return MapSync(audio_ms=audio_ms, video_ms=video_ms)
         except Exception as e:
-            logger.warning("Failed to read existing .trk for readjust: %s", e)
+            logger.debug("Failed to read existing .trk for readjust: %s", e)
 
     # If no existing .trk or failed to read, proceed with standard logic
     if music_track:
         if is_html_source:
             # Fetch/HTML mode (OGG)
             # V1 parity: marker-based sync for HTML mode.
-            # Audio keeps a constant +85ms calibration in all JDU branches.
+            # Audio keeps a constant +85ms calibration in all Fetch/HTML branches.
             prms_video = calculate_marker_preroll(
                 music_track.markers,
                 music_track.start_beat,
@@ -877,21 +1408,38 @@ def normalize_sync(
             # Only synthesize from markers when metadata is effectively zero.
             if abs(metadata_ms) > 0.0001:
                 video_ms = metadata_ms
-                logger.info(
-                    "Fetch/HTML sync (metadata-preserved): audio_offset=%.3f ms (marker+cal), video_offset=%.3f ms (metadata)",
-                    audio_ms,
-                    video_ms,
-                )
+                if is_jdnext_source:
+                    logger.info(
+                        "JDNext sync (metadata-preserved): audio_offset=%.3f ms, video_offset=%.3f ms (metadata)",
+                        audio_ms,
+                        video_ms,
+                    )
+                else:
+                    logger.info(
+                        "Fetch/HTML sync (metadata-preserved): audio_offset=%.3f ms (marker+cal), video_offset=%.3f ms (metadata)",
+                        audio_ms,
+                        video_ms,
+                    )
             elif prms_video is not None:
                 video_ms = -prms_video
-                logger.info(
-                    "Fetch/HTML sync (synthesized video): audio_offset=%.3f ms (marker+cal), video_offset=%.3f ms (marker)",
-                    audio_ms,
-                    video_ms,
-                )
+                if is_jdnext_source:
+                    logger.info(
+                        "JDNext sync (synthesized video): audio_offset=%.3f ms, video_offset=%.3f ms (marker)",
+                        audio_ms,
+                        video_ms,
+                    )
+                else:
+                    logger.info(
+                        "Fetch/HTML sync (synthesized video): audio_offset=%.3f ms (marker+cal), video_offset=%.3f ms (marker)",
+                        audio_ms,
+                        video_ms,
+                    )
             else:
                 video_ms = metadata_ms
-                logger.info("Fetch/HTML sync (fallback): using metadata offsets = %.3f ms", video_ms)
+                if is_jdnext_source:
+                    logger.debug("JDNext sync (fallback): using metadata offsets = %.3f ms", video_ms)
+                else:
+                    logger.debug("Fetch/HTML sync (fallback): using metadata offsets = %.3f ms", video_ms)
 
         else:
             # Binary Mode (IPK / WAV)
@@ -905,11 +1453,11 @@ def normalize_sync(
                 prms = calculate_marker_preroll(music_track.markers, music_track.start_beat, include_calibration=False)
                 if prms is not None:
                     video_ms = -prms
-                    logger.info("IPK sync (synthesized): audio_offset=0, video_offset=%.3f ms", video_ms)
+                    logger.debug("IPK sync (synthesized): audio_offset=0, video_offset=%.3f ms", video_ms)
                 else:
-                    logger.info("IPK sync (pre-synced): audio_offset=0, video_offset=%.3f ms", video_ms)
+                    logger.debug("IPK sync (pre-synced): audio_offset=0, video_offset=%.3f ms", video_ms)
     else:
-        logger.warning("No music_track provided to normalize_sync, returning default 0 offsets.")
+        logger.debug("No music_track provided to normalize_sync, returning default 0 offsets.")
 
     return MapSync(audio_ms=audio_ms, video_ms=video_ms)
 
@@ -957,6 +1505,8 @@ def normalize(
         music_track = None
 
     song_desc = _extract_song_desc(source_root_str, codename)
+    effective_codename = codename or song_desc.map_name
+    _apply_jdnext_metadata_songdesc_overrides(source_root_str, song_desc)
     dance_tape = _extract_dance_tape(source_root_str, codename)
     karaoke_tape = _extract_karaoke_tape(source_root_str, codename)
     cinematic_tape = _extract_cinematic_tape(source_root_str, codename)
@@ -971,6 +1521,24 @@ def normalize(
         search_root_str = None
     media = _discover_media(source_dir_str, codename, search_root=search_root_str)
 
+    # Keep SongDesc coach metadata aligned with discovered media assets.
+    inferred_coaches = _infer_coach_count_from_media(media)
+    if inferred_coaches > song_desc.num_coach:
+        logger.info(
+            "Adjusted NumCoach from media discovery: %d -> %d",
+            song_desc.num_coach,
+            inferred_coaches,
+        )
+        song_desc.num_coach = inferred_coaches
+
+    if song_desc.num_coach > 0 and (song_desc.main_coach < 0 or song_desc.main_coach >= song_desc.num_coach):
+        logger.info(
+            "Adjusted MainCoach from %d to 0 for NumCoach=%d",
+            song_desc.main_coach,
+            song_desc.num_coach,
+        )
+        song_desc.main_coach = 0
+
     # Infer codename from song_desc if not provided
     effective_codename = codename or song_desc.map_name
 
@@ -982,15 +1550,32 @@ def normalize(
     _merge_preview_fields_from_trk(music_track, source_trk_path)
 
     # 5. Calculate effective video start time (with V1-style fallbacks)
+    is_jdnext_source = _is_jdnext_source(source_dir, media)
+    if is_jdnext_source:
+        _apply_jdnext_songdb_cache_overrides(effective_codename, song_desc, music_track)
+
     sync_data = normalize_sync(
         music_track, 
         is_html_source=is_html_source,
-        existing_trk_path=source_trk_path
+        existing_trk_path=source_trk_path,
+        is_jdnext_source=is_jdnext_source,
     )
 
     # V1 Parity: Detect whether the source contains real autodance data.
     # Many sources ship minimal stub CKDs that should be ignored.
     has_autodance = False
+    cn_low = (effective_codename or "").lower()
+
+    def _is_scoped_autodance_path(path_str: str) -> bool:
+        if not cn_low:
+            return True
+        rel = path_str.replace("\\", "/").lower()
+        parts = [p for p in rel.split("/") if p]
+        if cn_low in parts:
+            return True
+        name = os.path.basename(path_str).lower()
+        return bool(re.match(rf"^{re.escape(cn_low)}(?:[^a-z0-9]|$)", name))
+
     ad_tpls = _find_ckd_files(source_root_str, "*autodance*.tpl.ckd", codename)
     if ad_tpls:
         try:
@@ -1005,6 +1590,11 @@ def normalize(
     if not has_autodance:
         for ext in ("adtape", "advideo", "adrecording"):
             candidates = _find_ckd_files(source_root_str, f"*.{ext}.ckd", codename)
+            loose_candidates = [
+                p
+                for p in glob.glob(os.path.join(source_root_str, "**", f"*.{ext}"), recursive=True)
+                if _is_scoped_autodance_path(p)
+            ]
             valid_candidates = []
             for candidate in candidates:
                 try:
@@ -1012,12 +1602,34 @@ def normalize(
                         valid_candidates.append(candidate)
                 except OSError:
                     continue
+            for candidate in loose_candidates:
+                try:
+                    if Path(candidate).stat().st_size > 64:
+                        valid_candidates.append(candidate)
+                except OSError:
+                    continue
             if valid_candidates:
                 has_autodance = True
                 break
 
+    if not has_autodance:
+        for maybe_dir in glob.glob(os.path.join(source_root_str, "**", "*"), recursive=True):
+            p = Path(maybe_dir)
+            if not p.is_dir() or p.name.lower() != "autodance":
+                continue
+            if not _is_scoped_autodance_path(str(p)):
+                continue
+            for item in p.iterdir():
+                if not item.is_file() or item.suffix.lower() == ".ckd":
+                    continue
+                if item.stat().st_size > 64:
+                    has_autodance = True
+                    break
+            if has_autodance:
+                break
+
     if has_autodance:
-        logger.info("Real autodance data detected for '%s'", effective_codename)
+        logger.debug("Real autodance data detected for '%s'", effective_codename)
 
     result = NormalizedMapData(
         codename=effective_codename,
@@ -1030,6 +1642,8 @@ def normalize(
         sync=sync_data,
         video_start_time_override=sync_data.video_ms / 1000.0,
         source_dir=source_root,
+        is_html_source=is_html_source,
+        is_jdnext_source=is_jdnext_source,
         has_autodance=has_autodance,
     )
 

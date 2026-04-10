@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 class QuickstartDialog(QDialog):
     """Simple dialog explaining the basic workflow."""
 
-    MODES_GUIDE_URL = "https://github.com/VenB304/jd2021-map-installer/blob/main/docs/01_getting_started/MODES_GUIDE.md"
+    MODES_GUIDE_URL = "https://github.com/VenB304/jd2021-map-installer/blob/master/docs/01_getting_started/MODES_GUIDE.md"
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

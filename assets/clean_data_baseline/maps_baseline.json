@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "source": "cleaned_install_snapshot_2026-04-08",
+  "notes": "Baseline captured after running legacy clean_data.py on a clean game install.",
+  "original_maps": [
+    "GetGetDown"
+  ]
+}

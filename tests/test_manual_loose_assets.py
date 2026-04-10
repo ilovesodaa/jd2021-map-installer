@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from jd2021_installer.installers.tape_converter import auto_convert_tapes
 from jd2021_installer.installers.texture_decoder import decode_pictograms
 
@@ -46,7 +48,57 @@ def test_decode_pictograms_copies_loose_png(tmp_path: Path):
     out_dir = tmp_path / "timeline" / "pictos"
     decoded = decode_pictograms(picto_dir, out_dir)
 
+    pil_image = pytest.importorskip("PIL.Image")
+
     out_file = out_dir / "mapx_picto_001.png"
     assert decoded == 1
     assert out_file.exists()
-    assert out_file.read_bytes() == png_bytes
+    with pil_image.open(src) as src_img, pil_image.open(out_file) as out_img:
+        assert out_img.size == src_img.size == (1, 1)
+        assert list(out_img.getdata()) == list(src_img.getdata())
+
+
+def test_decode_pictograms_can_place_on_bottom_center_canvas(tmp_path: Path):
+    pil_image = pytest.importorskip("PIL.Image")
+
+    picto_dir = tmp_path / "pictos"
+    picto_dir.mkdir(parents=True)
+
+    src = picto_dir / "mapx_picto_001.png"
+    img = pil_image.new("RGBA", (200, 400), (255, 255, 255, 255))
+    img.save(src)
+
+    out_dir = tmp_path / "timeline" / "pictos"
+    decoded = decode_pictograms(picto_dir, out_dir, canvas_size=512)
+
+    out_file = out_dir / "mapx_picto_001.png"
+    assert decoded == 1
+    assert out_file.exists()
+
+    with pil_image.open(out_file) as out_img:
+        assert out_img.size == (512, 512)
+        bbox = out_img.getbbox()
+        assert bbox == (156, 112, 356, 512)
+
+
+def test_decode_pictograms_temporarily_normalizes_judas_to_512_max(tmp_path: Path):
+    pil_image = pytest.importorskip("PIL.Image")
+
+    picto_dir = tmp_path / "pictos"
+    picto_dir.mkdir(parents=True)
+
+    src = picto_dir / "judas_picto_test.png"
+    img = pil_image.new("RGBA", (200, 400), (255, 255, 255, 255))
+    img.save(src)
+
+    # Output path shape mirrors real install layout expected by temporary Judas scope.
+    out_dir = tmp_path / "Judas" / "timeline" / "pictos"
+    decoded = decode_pictograms(picto_dir, out_dir, canvas_size=512)
+
+    out_file = out_dir / "judas_picto_test.png"
+    assert decoded == 1
+    assert out_file.exists()
+
+    with pil_image.open(out_file) as out_img:
+        assert out_img.size == (512, 512)
+        assert out_img.getbbox() == (156, 112, 356, 512)

@@ -9,6 +9,7 @@ from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor
 from jd2021_installer.extractors.manual_extractor import ManualExtractor
 from jd2021_installer.ui.workers.pipeline_workers import (
     ExtractAndNormalizeWorker,
+    _pick_ipk_audio,
     _validate_ipk_media_presence,
     reprocess_audio,
 )
@@ -95,14 +96,14 @@ def test_archive_worker_does_not_swallow_unexpected_extraction_errors(tmp_path: 
     extractor.extract = _explode  # type: ignore[method-assign]
 
     worker = ExtractAndNormalizeWorker(extractor=extractor, output_dir=tmp_path / "work")
-    errors: list[str] = []
+    errors: list[tuple[str, str]] = []
     finished_payloads: list[object] = []
 
-    worker.error.connect(errors.append)
+    worker.error.connect(lambda stage, message: errors.append((stage, message)))
     worker.finished.connect(finished_payloads.append)
     worker.run()
 
-    assert errors and "boom" in errors[0]
+    assert errors and "boom" in errors[0][1]
     assert finished_payloads and finished_payloads[0] is None
 
 
@@ -134,6 +135,21 @@ def test_ipk_media_validation_accepts_sidecar_audio_search_root(tmp_path: Path) 
     (source_root / "MapA.ogg").write_bytes(b"ogg")
 
     _validate_ipk_media_presence(extract_root, "MapA", source_root)
+
+
+def test_pick_ipk_audio_prefers_codename_wav_ckd_for_x360_tree(tmp_path: Path) -> None:
+    source_root = tmp_path / "temp_extraction"
+    x360_audio_dir = source_root / "cache" / "itf_cooked" / "x360" / "world" / "maps" / "MapA" / "audio"
+    x360_audio_dir.mkdir(parents=True, exist_ok=True)
+
+    ogg = x360_audio_dir / "MapA.ogg"
+    wav_ckd = x360_audio_dir / "MapA.wav.ckd"
+    ogg.write_bytes(b"ogg")
+    wav_ckd.write_bytes(b"ckd")
+
+    picked = _pick_ipk_audio([source_root], "MapA")
+
+    assert picked == wav_ckd
 
 
 def test_archive_worker_uses_extraction_root_for_normalize_search_root(
@@ -218,9 +234,10 @@ def test_reprocess_audio_recovers_missing_ipk_audio_from_source_tree(
         "jd2021_installer.installers.media_processor.convert_audio",
         lambda audio_path, *_args, **_kwargs: called.setdefault("audio", Path(audio_path)),
     )
+    called_intro: list[tuple] = []
     monkeypatch.setattr(
         "jd2021_installer.installers.media_processor.generate_intro_amb",
-        lambda *_args, **_kwargs: None,
+        lambda *args, **kwargs: called_intro.append((args, kwargs)),
     )
     monkeypatch.setattr(
         "jd2021_installer.installers.media_processor.extract_amb_clips",
@@ -231,3 +248,54 @@ def test_reprocess_audio_recovers_missing_ipk_audio_from_source_tree(
 
     assert map_data.media.audio_path == recovered_audio
     assert called["audio"] == recovered_audio
+    assert not called_intro, "Intro generation should be skipped for IPK to preserve native AMB intro assets"
+
+
+def test_reprocess_audio_jdnext_generates_intro_when_audio_present(
+    tmp_path: Path,
+    sample_normalized_data,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "temp_extraction"
+    source_root.mkdir(parents=True, exist_ok=True)
+
+    audio_src = source_root / "mapa.wav"
+    audio_src.write_bytes(b"audio")
+
+    map_data = sample_normalized_data
+    map_data.codename = "mapa"
+    map_data.source_dir = source_root
+    map_data.media.audio_path = audio_src
+    map_data.is_html_source = False
+    map_data.is_jdnext_source = True
+
+    called_intro: list[tuple] = []
+    called_clip_cleanup: list[tuple] = []
+    called_asset_cleanup: list[Path] = []
+
+    monkeypatch.setattr(
+        "jd2021_installer.installers.media_processor.convert_audio",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "jd2021_installer.installers.media_processor.generate_intro_amb",
+        lambda *args, **_kwargs: called_intro.append(args),
+    )
+    monkeypatch.setattr(
+        "jd2021_installer.installers.media_processor.extract_amb_clips",
+        lambda *_args, **_kwargs: 0,
+    )
+    monkeypatch.setattr(
+        "jd2021_installer.installers.ambient_processor._remove_intro_amb_soundset_clips",
+        lambda *args, **_kwargs: called_clip_cleanup.append(args) or False,
+    )
+    monkeypatch.setattr(
+        "jd2021_installer.installers.ambient_processor._remove_intro_amb_assets",
+        lambda amb_dir, **_kwargs: called_asset_cleanup.append(Path(amb_dir)) or 0,
+    )
+
+    reprocess_audio(map_data, tmp_path / "game_map", a_offset=0.0, config=None)
+
+    assert called_intro, "Expected intro generation to run for JDNext"
+    assert not called_clip_cleanup, "Disabled-mode clip cleanup should not run when intro is enabled"
+    assert not called_asset_cleanup, "Disabled-mode asset cleanup should not run when intro is enabled"

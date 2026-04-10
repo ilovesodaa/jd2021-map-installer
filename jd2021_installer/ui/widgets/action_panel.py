@@ -3,6 +3,7 @@
 Groups all the primary action buttons into a single reusable widget:
 - **Install Map** — kick off the full Extract → Normalize → Install pipeline.
 - **Pre-flight Check** — validate paths and configuration before install.
+- **Uninstall Map** — remove a previously installed map from the game.
 - **Re-adjust Offset** — launch the sync-refinement workflow.
 - **Settings** — open a configuration dialog (stub for now).
 - **Reset State** — clear all in-memory state back to defaults.
@@ -77,6 +78,7 @@ class ActionWidget(QWidget):
 
     install_requested = pyqtSignal()
     preflight_requested = pyqtSignal()
+    uninstall_requested = pyqtSignal()
     readjust_offset_requested = pyqtSignal()
     settings_requested = pyqtSignal()
     reset_state_requested = pyqtSignal()
@@ -97,7 +99,7 @@ class ActionWidget(QWidget):
         section_label.setObjectName("actionSectionLabel")
         root.addWidget(section_label)
 
-        # -- Primary actions (top row) ------------------------------------
+        # -- Primary actions ------------------------------------------------
         primary = QHBoxLayout()
         primary.setSpacing(6)
 
@@ -107,16 +109,29 @@ class ActionWidget(QWidget):
         self._btn_install.setToolTip("Run the full pipeline and install the selected map into your game")
         self._btn_install.clicked.connect(self.install_requested.emit)
         primary.addWidget(self._btn_install)
-
-        self._btn_preflight = WrapButton("Pre-flight Check")
-        self._btn_preflight.setObjectName("btn_preflight")
-        self._btn_preflight.setMinimumHeight(38)
-        self._btn_preflight.setToolTip("Validate selected inputs, paths, and required tools before install")
-        self._btn_preflight.clicked.connect(self.preflight_requested.emit)
-        primary.addWidget(self._btn_preflight)
-
-        self._primary_row_buttons = [self._btn_install, self._btn_preflight]
         root.addLayout(primary)
+
+        # -- Secondary actions ---------------------------------------------
+        secondary = QHBoxLayout()
+        secondary.setSpacing(6)
+
+        self._btn_uninstall = WrapButton("Uninstall a Map")
+        self._btn_uninstall.setObjectName("btn_uninstall")
+        self._btn_uninstall.setMinimumHeight(38)
+        self._btn_uninstall.setToolTip("Remove an installed map and its generated cache/index entries")
+        self._btn_uninstall.clicked.connect(self.uninstall_requested.emit)
+        secondary.addWidget(self._btn_uninstall)
+
+        self._btn_readjust = WrapButton("Re-adjust Offset")
+        self._btn_readjust.setObjectName("btn_readjust")
+        self._btn_readjust.setMinimumHeight(38)
+        self._btn_readjust.setToolTip("Open sync refinement to preview and fine-tune installed map timing")
+        self._btn_readjust.clicked.connect(self.readjust_offset_requested.emit)
+        secondary.addWidget(self._btn_readjust)
+
+        self._primary_row_buttons = [self._btn_install]
+        self._secondary_row_buttons = [self._btn_uninstall, self._btn_readjust]
+        root.addLayout(secondary)
 
         # -- Separator ----------------------------------------------------
         sep = QFrame()
@@ -130,12 +145,12 @@ class ActionWidget(QWidget):
         utils = QHBoxLayout()
         utils.setSpacing(6)
 
-        self._btn_readjust = WrapButton("Re-adjust Offset")
-        self._btn_readjust.setObjectName("btn_readjust")
-        self._btn_readjust.setMinimumHeight(38)
-        self._btn_readjust.setToolTip("Open sync refinement to preview and fine-tune installed map timing")
-        self._btn_readjust.clicked.connect(self.readjust_offset_requested.emit)
-        utils.addWidget(self._btn_readjust)
+        self._btn_reset = WrapButton("Reset State")
+        self._btn_reset.setObjectName("btn_reset")
+        self._btn_reset.setMinimumHeight(38)
+        self._btn_reset.setToolTip("Clear current mode inputs and reset temporary installer state")
+        self._btn_reset.clicked.connect(self.reset_state_requested.emit)
+        utils.addWidget(self._btn_reset)
 
         self._btn_settings = WrapButton("Settings")
         self._btn_settings.setObjectName("btn_settings")
@@ -144,17 +159,17 @@ class ActionWidget(QWidget):
         self._btn_settings.clicked.connect(self.settings_requested.emit)
         utils.addWidget(self._btn_settings)
 
-        self._btn_reset = WrapButton("Reset State")
-        self._btn_reset.setObjectName("btn_reset")
-        self._btn_reset.setMinimumHeight(38)
-        self._btn_reset.setToolTip("Clear current mode inputs and reset temporary installer state")
-        self._btn_reset.clicked.connect(self.reset_state_requested.emit)
-        utils.addWidget(self._btn_reset)
+        self._btn_preflight = WrapButton("Pre-flight Check")
+        self._btn_preflight.setObjectName("btn_preflight")
+        self._btn_preflight.setMinimumHeight(38)
+        self._btn_preflight.setToolTip("Validate selected inputs, paths, and required tools before install")
+        self._btn_preflight.clicked.connect(self.preflight_requested.emit)
+        utils.addWidget(self._btn_preflight)
 
         self._utility_row_buttons = [
-            self._btn_readjust,
-            self._btn_settings,
             self._btn_reset,
+            self._btn_preflight,
+            self._btn_settings,
         ]
         root.addLayout(utils)
         QTimer.singleShot(0, self._sync_button_row_heights)
@@ -165,6 +180,7 @@ class ActionWidget(QWidget):
 
     def _sync_button_row_heights(self) -> None:
         self._sync_row_heights(self._primary_row_buttons)
+        self._sync_row_heights(self._secondary_row_buttons)
         self._sync_row_heights(self._utility_row_buttons)
 
     @staticmethod
@@ -188,6 +204,7 @@ class ActionWidget(QWidget):
         for btn in (
             self._btn_install,
             self._btn_preflight,
+            self._btn_uninstall,
             self._btn_readjust,
             self._btn_settings,
             self._btn_reset,

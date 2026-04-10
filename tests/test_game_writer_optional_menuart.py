@@ -1,4 +1,5 @@
 from pathlib import Path
+import xml.etree.ElementTree as ET
 from PIL import Image
 
 from jd2021_installer.core.config import AppConfig
@@ -108,3 +109,21 @@ def test_v2_regression_optional_acts_without_codename_prefix(tmp_path: Path) -> 
         "cover_albumcoach.act should be created (was missing in V2)"
     assert (target / f"MenuArt/Actors/{codename}_map_bkg.act").exists(), \
         "map_bkg.act should be created (was missing in V2)"
+
+
+def test_menuart_isc_is_valid_xml_and_has_single_cover_generic_actor(tmp_path: Path) -> None:
+    codename = "XmlMap"
+    target = tmp_path / codename
+    map_data = _build_map_data(codename, MapMedia())
+
+    write_game_files(map_data, target, AppConfig())
+
+    isc_path = target / f"MenuArt/{codename}_menuart.isc"
+    content = isc_path.read_text(encoding="utf-8")
+
+    # Must be parseable and structurally valid (no nested duplicate Actor corruption).
+    root = ET.fromstring(content)
+    assert root.tag == "root"
+
+    generic_refs = content.count(f"{codename}_cover_generic.act")
+    assert generic_refs == 1

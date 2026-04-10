@@ -18,25 +18,9 @@ This guide explains every installer mode in detail, including when to use each o
    - [Quick steps](#quick-steps)
    - [Quick troubleshooting](#quick-troubleshooting)
 - [Mode 2: HTML File](#mode-2-html-file)
-   - [When to use it](#when-to-use-it-1)
-   - [What you need](#what-you-need-1)
-   - [Quick steps](#quick-steps-1)
-   - [Quick troubleshooting](#quick-troubleshooting-1)
 - [Mode 3: IPK Archive](#mode-3-ipk-archive)
-   - [When to use it](#when-to-use-it-2)
-   - [What you need](#what-you-need-2)
-   - [Quick steps](#quick-steps-2)
-   - [Quick troubleshooting](#quick-troubleshooting-2)
 - [Mode 4: Batch (Directory)](#mode-4-batch-directory)
-   - [When to use it](#when-to-use-it-3)
-   - [What you need](#what-you-need-3)
-   - [Quick steps](#quick-steps-3)
-   - [Quick troubleshooting](#quick-troubleshooting-3)
 - [Mode 5: Manual (Directory)](#mode-5-manual-directory)
-   - [When to use it](#when-to-use-it-4)
-   - [What you need](#what-you-need-4)
-   - [Quick steps](#quick-steps-4)
-   - [Quick troubleshooting](#quick-troubleshooting-4)
 - [Choosing the Right Mode](#choosing-the-right-mode)
 - [After Install: Sync Refinement](#after-install-sync-refinement)
 - [Mode-Specific Troubleshooting Checklist](#mode-specific-troubleshooting-checklist)
@@ -83,8 +67,12 @@ Do these once before first install:
    - `ffprobe`
    - `vgmstream-cli` (important for some decode paths)
 5. For Fetch mode only, confirm Playwright Chromium is installed.
-6. Set up Game Directory, select the directory that containes the `data` folder and `engine` folder of your JD2021 PC installation.
-   ![Screenshot Template - Configuration Game Directory](../../assets/images/game-directory.png)
+
+If you are testing JDNext mapPackage flows, also confirm:
+
+1. `tools/AssetStudio` exists.
+2. `tools/UnityPy` exists.
+3. `tools/Unity2UbiArt/bin/AssetStudioModCLI/AssetStudioModCLI.exe` exists.
 
 Recommended safety checks before every install:
 
@@ -106,7 +94,7 @@ Use HTML mode instead only if Fetch fails or if you already saved `assets.html` 
 
 1. One or more codenames (comma-separated).
 2. Internet connection.
-3. Playwright Chromium installed (`python -m playwright install chromium`). Should already be installed when you ran `setup.bat`.
+3. Playwright Chromium installed (`python -m playwright install chromium`).
 4. A valid `discord_channel_url` in Settings for your setup.
 
 ### Find codenames and compatible maps
@@ -118,29 +106,19 @@ Use HTML mode instead only if Fetch fails or if you already saved `assets.html` 
 ### Quick steps
 
 1. Open Mode Selector and choose **Fetch (Codename)**.
-   
    ![Screenshot Template - Fetch Step 1: Select Mode](../../assets/images/fetch/01-select-mode.png)
-2. Enter codename(s), example: `TemperatureAlt`, `TemperatureAlt` or `Koi`.
-   
+2. Enter codename(s), example: `TemperatureAlt` or `TemperatureAlt, Koi`.
    ![Screenshot Template - Fetch Step 2: Enter Codenames](../../assets/images/fetch/02-enter-codenames.png)
 3. Pick video quality.
-   
    ![Screenshot Template - Fetch Step 3: Choose Video Quality](../../assets/images/fetch/03-video-quality.png)
 4. Run **Pre-flight Check**.
-   
    ![Screenshot Template - Fetch Step 4: Run Pre-flight](../../assets/images/fetch/04-preflight.png)
 5. Click **Install Map**.
-   
    ![Screenshot Template - Fetch Step 5: Start Install](../../assets/images/fetch/05-start-install.png)
-6. For first time run, you must login to a discord account when the Playwright browser opens. Follow the on-screen instructions to complete login and the installer will continue with fetching.
-   
-   ![Screenshot Template - Fetch Step 6: Playwright Login](../../assets/images/fetch/06-playwright-login.png)
-7. after completion, verify the offset by checking the preview feature. And then click Apply to finalize the installation and verify in game.
-   
-   ![Screenshot Template - Fetch Step 7: Install Complete](../../assets/images/fetch/07-install-complete.png)
-8. If sync is off, use **Re-adjust Offset**.
-   
-   ![Screenshot Template - Fetch Step 8: Re-adjust Offset](../../assets/images/fetch/08-readjust-offset.png)
+6. Wait for completion, then test in game.
+   ![Screenshot Template - Fetch Step 6: Install Complete](../../assets/images/fetch/06-install-complete.png)
+7. If sync is off, use **Re-adjust Offset**.
+   ![Screenshot Template - Fetch Step 7: Re-adjust Offset](../../assets/images/fetch/07-readjust-offset.png)
 
 ### Quick troubleshooting
 
@@ -159,52 +137,38 @@ Use HTML mode instead only if Fetch fails or if you already saved `assets.html` 
 
 ### When to use it
 
-Use HTML mode when you already have saved HTML exports and want a stable, repeatable install.
+Use HTML mode when you already exported/saved JDU bot pages and want a reproducible offline install path.
 
-If the HTML files are fresh, it will download the necessary files. This is why it needs to be ran through the tool first to download files. After the first run, it can be used offline as long as the same HTML files are used again.
+### You need
 
-It is also a good fallback if Fetch mode cannot complete for a map.
+1. Asset HTML file (commonly `assets.html`).
+2. NOHUD HTML file (commonly `nohud.html`).
+3. Matching pair from the same song/version.
 
-### What you need
+### Steps
 
-1. One asset HTML file (usually `assets.html`).
-2. One NOHUD HTML file (usually `nohud.html`).
-3. Both files must come from the same song/version.
-
-### Quick steps
-
-1. Open Mode Selector and choose **HTML File**.
-
-   ![Screenshot Template - HTML Step 1: Select HTML Mode](../../assets/images/html/01-select-mode.png)
-2. Choose your asset HTML file.
-
-   ![Screenshot Template - HTML Step 2: Choose assets.html](../../assets/images/html/02-choose-assets-html.png)
-3. Choose your NOHUD HTML file.
-
-   ![Screenshot Template - HTML Step 3: Choose nohud.html](../../assets/images/html/03-choose-nohud-html.png)
+1. Select **HTML File** mode.
+2. Pick the asset HTML file.
+3. Pick the NOHUD HTML file.
 4. Run **Pre-flight Check**.
+5. Click **Install Map**.
+6. Review logs for pairing/parse warnings.
+7. Use Sync Refinement if needed after install.
 
-   ![Screenshot Template - HTML Step 4: Run Pre-flight](../../assets/images/html/04-preflight.png)
-5. Click **Install Map** and wait for completion.
+### Good practices
 
-   ![Screenshot Template - HTML Step 5: Start Install](../../assets/images/html/05-start-install.png)
-6. Check preview and adjust offset if needed.
+1. Store each map's HTML pair in its own folder.
+2. Keep original filenames when possible.
+3. Do not mix files from different export sessions.
 
-   ![Screenshot Template - HTML Step 6: Check Preview](../../assets/images/html/06-check-preview.png)
-7. Test in game, then use **Re-adjust Offset** only if timing is off.
+### Common issues
 
-   ![Screenshot Template - HTML Step 7: Verify Install and Adjust Sync](../../assets/images/html/07-verify-and-readjust.png)
-
-### Quick troubleshooting
-
-1. Install fails with pairing or parse warnings:
-   Re-select both HTML files and confirm they are a matching pair.
-2. HTML looks old or broken:
-   Re-export fresh files and try again.
-3. Missing media or incomplete install:
-   Re-fetch the map files or switch to Fetch mode.
-4. Map installs but timing is off:
-   Use **Re-adjust Offset** after install.
+1. Expired or malformed HTML export:
+   Re-export from source bot and retry.
+2. Pair mismatch (`assets` and `nohud` do not belong together):
+   Re-select correct matching files.
+3. Missing media references:
+   Re-fetch files or switch to Fetch mode.
 
 ---
 
@@ -212,55 +176,35 @@ It is also a good fallback if Fetch mode cannot complete for a map.
 
 ### When to use it
 
-Use IPK mode when your source is a local Xbox 360 `.ipk` file.
+Use IPK mode for local Xbox 360 `.ipk` map archives.
 
-IPK works for both:
-1. Single-map archives (one map in the file).
-   `codename.ipk`
-2. Bundle archives (multiple maps in one file).
-   `bundle_x.ipk`
-
-### What you need
+### You need
 
 1. A valid `.ipk` file.
 2. Enough temp disk space for extraction and conversion.
-3. Working media tools (`ffmpeg`, `ffprobe`, `vgmstream-cli`).
 
-### Where to get IPK files
-
-1. Both Single and Bundles can be found within Just Dance Xbox 360 Mods. They either contain individual maps (ie. `canttameher.ipk`, `sweetbutpsycho.ipk`) or bundles of maps (ie. `bundle_1._x360.ipk`).
-
-### Quick steps
+### Steps
 
 1. Select **IPK Archive** mode.
-
-   ![Screenshot Template - IPK Step 1: Select IPK Mode](../../assets/images/ipk/01-select-mode.png)
 2. Choose your `.ipk` file.
+3. Run **Pre-flight Check**.
+4. Click **Install Map**.
+5. Wait for archive extraction and conversion stages.
+6. Test map in game.
+7. Use Sync Refinement to tune timing if needed.
 
-   ![Screenshot Template - IPK Step 2: Choose IPK File](../../assets/images/ipk/02-choose-ipk-file.png)
-3. If it is a **single-map IPK**: run **Pre-flight Check**, then click **Install Map**.
+### Important timing note
 
-   ![Screenshot Template - IPK Step 3A: Single Map Install](../../assets/images/ipk/03a-single-map-install.png)
-4. If it is a **bundle IPK**: when the bundle selection dialog appears, check the map(s) you want, then continue install.
+IPK-derived timing can be approximate. Video lead-in often needs manual refinement after install. This is expected behavior for many IPK sources.
 
-   ![Screenshot Template - IPK Step 3B: Bundle Map Selection](../../assets/images/ipk/03b-bundle-map-selection.png)
-5. Wait for extraction and conversion to complete, then test in game.
-
-   ![Screenshot Template - IPK Step 4: Install Complete](../../assets/images/ipk/04-install-complete.png)
-6. If timing is off, open **Re-adjust Offset** and tune video sync.
-
-   ![Screenshot Template - IPK Step 5: Re-adjust Offset](../../assets/images/ipk/05-readjust-offset.png)
-
-### Quick troubleshooting
+### Common issues
 
 1. Invalid/corrupt IPK:
-   Re-obtain the file and try again.
+   Re-obtain file and verify size/hash if possible.
 2. Missing decode tools:
-   Run setup again and confirm `ffmpeg`, `ffprobe`, and `vgmstream-cli` are available.
-3. Bundle dialog appears but nothing installs:
-   Re-open install and make sure at least one map is checked in the bundle dialog.
-4. Video starts too early/late:
-   This is common for IPK sources; use **Re-adjust Offset** after install.
+   Confirm `ffmpeg`, `ffprobe`, and `vgmstream-cli` availability.
+3. Video starts too early/late:
+   Apply offset adjustments in Sync Refinement.
 
 ---
 
@@ -270,39 +214,35 @@ IPK works for both:
 
 Use Batch mode when you want to process many install candidates from a single root folder.
 
-### What you need
+### You need
 
-1. One root folder that contains install candidates.
-2. Candidate types must be either:
-   - IPK files (`.ipk`), or
-   - map folders that contain both `assets.html` and `nohud.html`.
-3. A stable internet connection if your HTML links are still being fetched during the run.
+1. A root directory that contains map candidates (files/folders supported by your selected workflow).
+2. Consistent naming/layout to reduce skipped entries.
 
-### Quick steps
+### Steps
 
 1. Select **Batch (Directory)** mode.
-
 2. Choose the root folder containing maps.
-
-3. Confirm the folder contains valid candidates before starting.
-
+3. Confirm batch source content is what you expect.
 4. Run **Pre-flight Check**.
-
 5. Start install.
-
 6. Monitor logs for per-item success/failure.
+7. Re-run failed entries individually (recommended) using the most suitable mode.
 
-7. Re-run failed entries one-by-one using the most suitable mode.
+### Good practices
 
+1. Dry-run with a small subset first.
+2. Keep one map per subfolder where possible.
+3. Review log output for skipped candidates before rerunning.
 
-### Quick troubleshooting
+### Common issues
 
-1. `No valid map folders found`:
-   Check that each candidate is either an `.ipk` file or a folder with both `assets.html` and `nohud.html`.
-2. Many maps fail with `403` or expired links:
-   Reduce batch size and retry with fresher HTML links.
-3. Some maps succeed and others fail:
-   Open logs, then retry failed maps individually to isolate bad inputs.
+1. Mixed or ambiguous folder structure:
+   Reorganize into clearer per-map subfolders.
+2. Wrong file type assumptions in source folder:
+   Separate IPK files from HTML exports and manual roots.
+3. Partial batch success:
+   Retry failures one-by-one to isolate mode/input problems.
 
 ---
 
@@ -312,27 +252,28 @@ Use Batch mode when you want to process many install candidates from a single ro
 
 Use Manual mode for advanced cases where you provide source files directly from your own prepared directory layout.
 
-### What you need
+### You need
 
 1. A manually prepared source folder.
 2. Understanding of expected map asset structure.
 3. Willingness to troubleshoot missing/inconsistent inputs.
 
-### Quick steps
+### Steps
 
 1. Select **Manual (Directory)** mode.
-
 2. Choose your prepared source folder.
-
 3. Run **Pre-flight Check**.
-
 4. Click **Install Map**.
-
 5. Inspect logs closely for missing components.
-
 6. Adjust source files and retry until normalization succeeds.
 
-### Quick troubleshooting
+### Good practices
+
+1. Start from a known-good map structure and modify gradually.
+2. Keep backup copies of your manual source sets.
+3. Validate one map fully before scaling to many maps.
+
+### Common issues
 
 1. Missing required assets:
    Check folder structure and expected media/config files.

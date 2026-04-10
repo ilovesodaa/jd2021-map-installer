@@ -19,6 +19,7 @@ class AppConfig(BaseModel):
     download_root: Path = Path("./mapDownloads")
     cache_directory: Path = Path("./cache")
     temp_directory: Path = Path("./temp")
+    app_icon_path: Path = Path("./assets/app_icon.jpg")
 
     # Video quality preference (descending fallback)
     video_quality: str = Field(
@@ -59,7 +60,9 @@ class AppConfig(BaseModel):
     ticks_per_ms: int = 48
     max_jd_version: int = 2021
     min_jd_version: int = 2014
-    preview_fps: int = 24
+    preview_fps: int = 25
+    preview_startup_compensation_ms: float = 100.0
+    preview_only_audio_offset_ms: float = -125.0
     audio_preview_fade_s: float = 2.0
 
     # Discord Fetch Mode (replaces Node.js JDH_Downloader)
@@ -71,6 +74,15 @@ class AppConfig(BaseModel):
     # FFmpeg configuration
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
+    vgmstream_path: Optional[str] = None
+    assetstudio_cli_path: Optional[str] = None
+    third_party_tools_root: Optional[Path] = Path("./tools")
+    ffmpeg_hwaccel: str = Field(default="auto", pattern=r"^(auto|none)$")
+    vp9_handling_mode: str = Field(
+        default="fallback_compatible_down",
+        pattern=r"^(reencode_to_vp8|fallback_compatible_down)$",
+    )
+    preview_video_mode: str = Field(default="original", pattern=r"^(proxy_low|original)$")
 
     class Config:
         env_prefix = "JD2021_"

@@ -436,6 +436,8 @@ class NormalizedMapData:
     media: MapMedia = field(default_factory=MapMedia)
     sync: MapSync = field(default_factory=MapSync)
     source_dir: Optional[Path] = None
+    is_html_source: bool = False
+    is_jdnext_source: bool = False
     video_start_time_override: Optional[float] = None
     has_autodance: bool = True
 

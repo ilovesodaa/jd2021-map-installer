@@ -74,6 +74,27 @@ def test_coach_mapping_logic():
         
     print("✓ Coach Index Extraction OK")
 
+
+def test_coach_discovery_without_underscore_suffixes():
+    """Ensure coach discovery supports coach1 / coach-2 naming variants."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        files = [
+            "MapX_coach1.tga",
+            "MapX_coach2.tga",
+            "MapX_coach3.tga",
+            "MapX_coach4.tga",
+            "MapX_albumcoach.tga",
+        ]
+        for f in files:
+            (tmp_path / f).write_text("dummy")
+
+        media = _discover_media(str(tmp_path), "MapX")
+        assert len(media.coach_images) == 4
+        assert all("albumcoach" not in p.name.lower() for p in media.coach_images)
+
 if __name__ == "__main__":
     try:
         test_coach_discovery_koi()

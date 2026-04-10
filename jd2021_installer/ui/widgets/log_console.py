@@ -8,16 +8,21 @@ can log directly to the GUI.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 from PyQt6.QtCore import pyqtSignal, QObject
-from PyQt6.QtGui import QTextCursor
-from PyQt6.QtWidgets import QPlainTextEdit, QVBoxLayout, QWidget
+from PyQt6.QtGui import QColor, QTextCharFormat, QTextCursor
+from PyQt6.QtWidgets import QTextEdit, QVBoxLayout, QWidget
+
+
+SUCCESS_LEVEL = 25
+logging.addLevelName(SUCCESS_LEVEL, "SUCCESS")
 
 
 class _Signaller(QObject):
     """Internal QObject used purely to emit signals from the logging handler."""
-    log_emitted = pyqtSignal(str)
+    log_emitted = pyqtSignal(str, int)
 
 
 class QtLogHandler(logging.Handler):
@@ -26,13 +31,13 @@ class QtLogHandler(logging.Handler):
     def __init__(self) -> None:
         super().__init__()
         self.signaller = _Signaller()
-        # Default format (you can optionally override this or use logging configuration)
-        self.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+        # Keep raw message text; display formatting/prefixing is handled in the widget.
+        self.setFormatter(logging.Formatter("%(message)s"))
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
             msg = self.format(record)
-            self.signaller.log_emitted.emit(msg)
+            self.signaller.log_emitted.emit(msg, int(record.levelno))
         except Exception:
             self.handleError(record)
 
@@ -42,11 +47,23 @@ class LogConsoleWidget(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self._theme_mode = "light"
         self._build_ui()
+        self.set_theme_mode(self._theme_mode)
         
         # Create and connect the logging handler automatically
         self.log_handler = QtLogHandler()
         self.log_handler.signaller.log_emitted.connect(self.append_log)
+
+    def set_theme_mode(self, theme: str) -> None:
+        """Set active theme so log colors remain readable regardless of palette state."""
+        self._theme_mode = "dark" if str(theme).lower() == "dark" else "light"
+
+        default_color = self._line_color(logging.INFO)
+        default_fmt = QTextCharFormat()
+        default_fmt.setForeground(QColor(default_color))
+        self._text_edit.setCurrentCharFormat(default_fmt)
+        self._text_edit.setTextColor(QColor(default_color))
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -54,17 +71,114 @@ class LogConsoleWidget(QWidget):
         root.setSpacing(0)
         self.setObjectName("logConsoleWidget")
 
-        self._text_edit = QPlainTextEdit()
+        self._text_edit = QTextEdit()
         self._text_edit.setObjectName("logConsoleTextEdit")
         self._text_edit.setReadOnly(True)
         self._text_edit.setPlaceholderText("Log output will appear here…")
 
         root.addWidget(self._text_edit)
 
-    def append_log(self, text: str) -> None:
+    @staticmethod
+    def _resolve_level_for_line(text: str, level: int) -> int:
+        lowered = text.strip().lower()
+        if level >= logging.WARNING:
+            return level
+        bracket_match = re.search(r"\[(debug|info|warning|error|critical|success)\s*\]", lowered)
+        if bracket_match:
+            bracket_level = bracket_match.group(1)
+            if bracket_level == "debug":
+                return logging.DEBUG
+            if bracket_level == "info":
+                return logging.INFO
+            if bracket_level == "warning":
+                return logging.WARNING
+            if bracket_level == "error":
+                return logging.ERROR
+            if bracket_level == "critical":
+                return logging.CRITICAL
+            if bracket_level == "success":
+                return SUCCESS_LEVEL
+        if lowered.startswith("warning:"):
+            return logging.WARNING
+        if lowered.startswith("critical:"):
+            return logging.CRITICAL
+        if lowered.startswith("error:"):
+            return logging.ERROR
+        if lowered.startswith("success:"):
+            return SUCCESS_LEVEL
+        if lowered.startswith("debug:"):
+            return logging.DEBUG
+        if lowered.startswith("info:"):
+            return logging.INFO
+        # Fallback pattern checks for success keywords
+        success_keywords = (
+            "successfully", "completed", "complete", "cleared", "cleaned up",
+            "persisted", "installed", "removed", "processed"
+        )
+        if any(keyword in lowered for keyword in success_keywords):
+            return SUCCESS_LEVEL
+        return level
+
+    @staticmethod
+    def _prefix_for_level(level: int) -> str:
+        if level >= logging.CRITICAL:
+            return "CRITICAL"
+        if level >= logging.ERROR:
+            return "ERROR"
+        if level >= logging.WARNING:
+            return "WARNING"
+        if level == SUCCESS_LEVEL:
+            return "SUCCESS"
+        if level <= logging.DEBUG:
+            return "DEBUG"
+        return "INFO"
+
+    @staticmethod
+    def _normalize_line_text(text: str, level: int) -> str:
+        normalized = text.replace("\r\n", "\n").rstrip("\n")
+        # Strip common logger prefixes generated by different detail profiles.
+        # Example: "12:34:56 [INFO ] jd2021.module: message"
+        normalized = re.sub(
+            r"^\s*(?:\d{2}:\d{2}:\d{2}\s+)?\[(DEBUG|INFO|WARNING|ERROR|CRITICAL|SUCCESS)\s*\]\s*(?:[\w.]+:\s*)?",
+            "",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+
+        if re.match(r"^\s*(DEBUG|INFO|WARNING|ERROR|CRITICAL|SUCCESS)\s*:\s*", normalized, flags=re.IGNORECASE):
+            return normalized
+
+        prefix = LogConsoleWidget._prefix_for_level(level)
+        return f"{prefix}: {normalized.lstrip()}"
+
+    def _line_color(self, level: int) -> str:
+        if level >= logging.CRITICAL:
+            return "#8E1B1B"
+        if level >= logging.ERROR:
+            return "#C62828"
+        if level >= logging.WARNING:
+            return "#E67E22"
+        if level == SUCCESS_LEVEL:
+            return "#1E8E3E"
+
+        # Use explicit theme mode instead of palette heuristics to avoid false detection.
+        if self._theme_mode == "dark":
+            return "#D9DCE5"
+        return "#202C3D"
+
+    def append_log(self, text: str, level: int = logging.INFO) -> None:
         """Slot for thread-safe appending to the console."""
-        self._text_edit.appendPlainText(text)
-        # Ensure scroll to bottom
+        line_level = self._resolve_level_for_line(text, level)
+        normalized = self._normalize_line_text(text, line_level)
+        color = self._line_color(line_level)
+
+        cursor = self._text_edit.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(color))
+        cursor.insertText(normalized + "\n", fmt)
+
+        # Ensure scroll to bottom.
         cursor = self._text_edit.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self._text_edit.setTextCursor(cursor)

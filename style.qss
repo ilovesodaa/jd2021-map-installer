@@ -31,6 +31,8 @@ QGroupBox::title {
 QLineEdit,
 QPlainTextEdit,
 QComboBox,
+QSpinBox,
+QDoubleSpinBox,
 QListWidget {
 	background-color: #20242d;
 	color: #e4e8f2;
@@ -44,8 +46,42 @@ QListWidget {
 QLineEdit:focus,
 QPlainTextEdit:focus,
 QComboBox:focus,
+QSpinBox:focus,
+QDoubleSpinBox:focus,
 QListWidget:focus {
 	border: 1px solid #4b82ff;
+}
+
+QSpinBox::up-button,
+QSpinBox::down-button,
+QDoubleSpinBox::up-button,
+QDoubleSpinBox::down-button {
+	border: none;
+	background: #2c3240;
+	width: 16px;
+	border-radius: 4px;
+	margin: 1px;
+}
+
+QSpinBox::up-button:hover,
+QSpinBox::down-button:hover,
+QDoubleSpinBox::up-button:hover,
+QDoubleSpinBox::down-button:hover {
+	background: #3a4253;
+}
+
+QSpinBox::up-arrow,
+QDoubleSpinBox::up-arrow {
+	image: url(assets/icons/chevron-up-light.svg);
+	width: 8px;
+	height: 8px;
+}
+
+QSpinBox::down-arrow,
+QDoubleSpinBox::down-arrow {
+	image: url(assets/icons/chevron-down-light.svg);
+	width: 8px;
+	height: 8px;
 }
 
 QComboBox::drop-down {
@@ -168,7 +204,7 @@ QLabel#modeManualWarningLabel {
 	font-weight: 700;
 }
 
-QPlainTextEdit#logConsoleTextEdit {
+QTextEdit#logConsoleTextEdit {
 	background-color: #14171d;
 	color: #d3d8e5;
 	border: 1px solid #2c3342;
