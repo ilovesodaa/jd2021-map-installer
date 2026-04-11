@@ -1040,7 +1040,7 @@ def copy_moves(
     *,
     skip_gestures: bool = False,
 ) -> int:
-    """Extract and merge move files with Kinect-safe gesture filtering.
+    """Extract and merge move files while preserving source platform layout.
 
     Args:
         moves_src_dir: The extracted root 'moves' folder containing 'nx', 'durango', etc.
@@ -1087,9 +1087,45 @@ def copy_moves(
 
         return True, "ok"
 
-    pc_moves_dir = Path(target_dir) / "timeline" / "moves" / "pc"
+    moves_target_root = Path(target_dir) / "timeline" / "moves"
+    pc_moves_dir = moves_target_root / "pc"
     total_copied = 0
     skipped_gesture_names: set[str] = set()
+
+    def _copy_with_mirror_and_pc(src_file: Path, platform_name: str) -> bool:
+        """Copy to original platform folder and duplicate into PC folder.
+
+        Original layout is preserved at timeline/moves/<platform>/, while PC
+        gets a flattened copy to satisfy engines/tools expecting that location.
+        """
+        copied_any = False
+
+        rel_from_platform = src_file.relative_to(src_root / platform_name)
+
+        original_dest = moves_target_root / platform_name.lower() / rel_from_platform
+        if not original_dest.exists():
+            original_dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_file, original_dest)
+            copied_any = True
+
+        pc_dest = pc_moves_dir / src_file.name
+        if not pc_dest.exists():
+            pc_dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_file, pc_dest)
+            copied_any = True
+
+        return copied_any
+
+    def _copy_to_original_platform(src_file: Path, platform_name: str) -> bool:
+        """Copy a file only to the preserved source platform folder."""
+        rel_from_platform = src_file.relative_to(src_root / platform_name)
+        original_dest = moves_target_root / platform_name.lower() / rel_from_platform
+        if original_dest.exists():
+            return False
+
+        original_dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_file, original_dest)
+        return True
 
     def _collect_expected_gestures_from_dtape() -> set[str]:
         """Extract expected gesture filenames from installed dance tape paths."""
@@ -1126,55 +1162,48 @@ def copy_moves(
     if skip_gestures:
         logger.debug("Gesture import disabled for this source; only .msm files will be copied.")
 
-    # Pass 1: Copy Kinect-compatible gestures and universally compatible MSMs
+    # Pass 1: Keep original platform paths and mirror files into PC.
     for plat_dir in src_root.iterdir():
-        if not plat_dir.is_dir() or plat_dir.name.upper() == "PC":
+        if not plat_dir.is_dir():
             continue
 
-        plat_name = plat_dir.name.upper()
+        plat_name = plat_dir.name
+        plat_upper = plat_name.upper()
 
         if skip_gestures:
-            skipped = list(plat_dir.glob("*.gesture"))
+            skipped = list(plat_dir.rglob("*.gesture"))
             if skipped:
                 skipped_gesture_names.update(g.name for g in skipped)
                 logger.info(
                     "Skipping %d gesture file(s) from platform '%s' (source flagged incompatible)",
                     len(skipped),
-                    plat_name,
+                    plat_upper,
                 )
-        elif plat_name in KINECT_GESTURE_PLATFORMS:
-            for gesture_file in plat_dir.glob("*.gesture"):
+                for gesture_file in skipped:
+                    if _copy_to_original_platform(gesture_file, plat_name):
+                        total_copied += 1
+        elif plat_upper in KINECT_GESTURE_PLATFORMS:
+            for gesture_file in plat_dir.rglob("*.gesture"):
                 is_valid, reason = _is_probably_valid_kinect_gesture(gesture_file)
                 if not is_valid:
-                    skipped_gesture_names.add(gesture_file.name)
                     logger.warning(
                         "Skipping incompatible gesture '%s' from %s: %s",
                         gesture_file.name,
-                        plat_name,
+                        plat_upper,
                         reason,
                     )
                     continue
-                dest = pc_moves_dir / gesture_file.name
-                if not dest.exists():
-                    pc_moves_dir.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(gesture_file, dest)
+                if _copy_with_mirror_and_pc(gesture_file, plat_name):
                     total_copied += 1
         else:
-            unsupported_gestures = list(plat_dir.glob("*.gesture"))
-            gesture_count = len(unsupported_gestures)
-            if gesture_count:
-                skipped_gesture_names.update(g.name for g in unsupported_gestures)
-                logger.info(
-                    "Skipping %d gesture file(s) from unsupported platform '%s'",
-                    gesture_count,
-                    plat_name,
-                )
+            # Non-Kinect gestures are still preserved and duplicated for users
+            # who need cross-platform originals alongside the PC mirror.
+            for gesture_file in plat_dir.rglob("*.gesture"):
+                if _copy_with_mirror_and_pc(gesture_file, plat_name):
+                    total_copied += 1
 
-        for msm_file in plat_dir.glob("*.msm"):
-            dest = pc_moves_dir / msm_file.name
-            if not dest.exists():
-                pc_moves_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(msm_file, dest)
+        for msm_file in plat_dir.rglob("*.msm"):
+            if _copy_with_mirror_and_pc(msm_file, plat_name):
                 total_copied += 1
 
     # Pass 2: Substitute non-Kinect naming variants with already accepted gestures
@@ -1186,7 +1215,6 @@ def copy_moves(
             if (
                 not plat_dir.is_dir()
                 or plat_dir.name.upper() in KINECT_GESTURE_PLATFORMS
-                or plat_dir.name.upper() == "PC"
             ):
                 continue
 
@@ -1205,75 +1233,82 @@ def copy_moves(
                     total_copied += 1
 
     # Recovery path: synthesize expected classifier names from a known-good
-    # Kinect template (prefer discorope). For skip_gestures mode this is the
-    # primary path, ensuring all mentioned gesture names are generated.
-    pc_gestures = {f.name for f in pc_moves_dir.glob("*.gesture")}
-    should_synthesize = skip_gestures or not pc_gestures
-    if should_synthesize:
-        expected_names: set[str] = set(skipped_gesture_names)
-        expected_names.update(_collect_expected_gestures_from_dtape())
+    # Kinect template (prefer discorope). Missing names are derived from
+    # skipped gestures and dance-tape classifier references.
+    expected_names: set[str] = set(skipped_gesture_names)
+    expected_names.update(_collect_expected_gestures_from_dtape())
 
-        expected_names = {
-            name
-            for name in expected_names
-            if name and not (pc_moves_dir / name).exists()
-        }
+    expected_names = {
+        name
+        for name in expected_names
+        if name and not (pc_moves_dir / name).exists()
+    }
 
-        if expected_names:
-            def _pick_template_gesture() -> Optional[Path]:
-                bundled_candidates = [
-                    Path(__file__).resolve().parents[2] / "assets" / "gesture_templates" / "discorope.gesture",
-                ]
-                for candidate in bundled_candidates:
-                    if candidate.exists():
-                        ok, _ = _is_probably_valid_kinect_gesture(candidate)
-                        if ok:
-                            return candidate
+    if expected_names:
+        def _pick_template_gesture() -> Optional[Path]:
+            bundled_candidates = [
+                Path(__file__).resolve().parents[2] / "assets" / "gesture_templates" / "discorope.gesture",
+            ]
+            for candidate in bundled_candidates:
+                if candidate.exists():
+                    ok, _ = _is_probably_valid_kinect_gesture(candidate)
+                    if ok:
+                        return candidate
 
-                explicit_candidates: list[Path] = []
-                for plat_dir in src_root.iterdir():
-                    if not plat_dir.is_dir():
-                        continue
-                    explicit_candidates.extend([
-                        plat_dir / "discorop.gesture",
-                        plat_dir / "Discorop.gesture",
-                        plat_dir / "discorope.gesture",
-                        plat_dir / "Discorope.gesture",
-                        plat_dir / "generic.gesture",
-                        plat_dir / "Generic.gesture",
-                    ])
+            explicit_candidates: list[Path] = []
+            for plat_dir in src_root.iterdir():
+                if not plat_dir.is_dir():
+                    continue
+                explicit_candidates.extend([
+                    plat_dir / "discorop.gesture",
+                    plat_dir / "Discorop.gesture",
+                    plat_dir / "discorope.gesture",
+                    plat_dir / "Discorope.gesture",
+                    plat_dir / "generic.gesture",
+                    plat_dir / "Generic.gesture",
+                ])
 
-                for candidate in explicit_candidates:
-                    if candidate.exists():
-                        ok, _ = _is_probably_valid_kinect_gesture(candidate)
-                        if ok:
-                            return candidate
+            for candidate in explicit_candidates:
+                if candidate.exists():
+                    ok, _ = _is_probably_valid_kinect_gesture(candidate)
+                    if ok:
+                        return candidate
 
-                return None
+            return None
 
-            template = _pick_template_gesture()
-            if template is None:
-                logger.warning(
-                    "No valid gesture template found; cannot synthesize %d missing gesture file(s).",
-                    len(expected_names),
+        template = _pick_template_gesture()
+        if template is None:
+            logger.warning(
+                "No valid gesture template found; cannot synthesize %d missing gesture file(s).",
+                len(expected_names),
+            )
+        else:
+            pc_moves_dir.mkdir(parents=True, exist_ok=True)
+            durango_moves_dir = moves_target_root / "durango"
+            created = 0
+            for name in sorted(expected_names):
+                dest = pc_moves_dir / name
+                if dest.exists():
+                    continue
+                shutil.copy2(template, dest)
+
+                # JDNext flow skips gesture import and relies on generated files.
+                # Mirror generated gestures into durango for platform parity.
+                if skip_gestures:
+                    durango_dest = durango_moves_dir / name
+                    durango_dest.parent.mkdir(parents=True, exist_ok=True)
+                    if not durango_dest.exists():
+                        shutil.copy2(template, durango_dest)
+
+                created += 1
+
+            if created:
+                total_copied += created
+                logger.info(
+                    "Synthesized %d fallback gesture file(s) from template '%s'.",
+                    created,
+                    template.name,
                 )
-            else:
-                pc_moves_dir.mkdir(parents=True, exist_ok=True)
-                created = 0
-                for name in sorted(expected_names):
-                    dest = pc_moves_dir / name
-                    if dest.exists():
-                        continue
-                    shutil.copy2(template, dest)
-                    created += 1
-
-                if created:
-                    total_copied += created
-                    logger.info(
-                        "Synthesized %d fallback gesture file(s) from template '%s'.",
-                        created,
-                        template.name,
-                    )
 
     if total_copied:
         logger.debug("Merged %d gesture/msm file(s) from %s into PC/", total_copied, src_root)

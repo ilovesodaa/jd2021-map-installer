@@ -117,8 +117,8 @@ def test_map_assetstudio_output_maps_expected_files(tmp_path: Path):
     assert (mapped / "testmap_musictrack.tpl.ckd").exists()
     assert (mapped / "testmap_tml_dance.dtape.ckd").exists()
     assert (mapped / "testmap_tml_karaoke.ktape.ckd").exists()
-    assert (mapped / "timeline" / "moves" / "x360" / "move_a.gesture").exists()
-    assert (mapped / "timeline" / "moves" / "x360" / "move_b.msm").exists()
+    assert (mapped / "timeline" / "moves" / "wiiu" / "move_a.gesture").exists()
+    assert (mapped / "timeline" / "moves" / "wiiu" / "move_b.msm").exists()
 
 
 def test_strategy_uses_assetstudio_first(tmp_path: Path, monkeypatch):
