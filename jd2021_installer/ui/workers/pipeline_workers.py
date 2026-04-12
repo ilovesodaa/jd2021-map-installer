@@ -1161,7 +1161,7 @@ class BatchInstallWorker(QObject):
             success_count = 0
             attempted_maps = 0
             installed_maps: list[NormalizedMapData] = []
-            html_prepared: list[tuple[str, Path]] = []
+            html_prepared: list[tuple[str, Path, str]] = []
             installed_codenames: set[str] = set()
             
             # Temporary cache for extracted IPKs
@@ -1202,7 +1202,7 @@ class BatchInstallWorker(QObject):
                             config=self._config,
                         )
                         prepared_dir = extractor.extract(batch_cache)
-                        html_prepared.append((map_name, prepared_dir))
+                        html_prepared.append((map_name, prepared_dir, source_game))
                     except Exception as e:
                         logger.debug("Failed HTML prepare for %s: %s", map_name, e)
                         self.status.emit(f"Warning: Failed HTML prepare for {map_name} ({str(e)[:40]})")
@@ -1334,6 +1334,12 @@ class BatchInstallWorker(QObject):
                             map_data.media.audio_path = persisted_audio
                         
                         self.status.emit(f"[{map_data.codename}] Installing map...")
+                        install_source_mode = ""
+                        if is_candidate_fetch:
+                            install_source_mode = "Fetch JDNext" if self._fetch_source == "jdnext" else "Fetch"
+                        elif bool(getattr(map_data, "is_html_source", False)):
+                            install_source_mode = "HTML JDNext" if bool(getattr(map_data, "is_jdnext_source", False)) else "HTML"
+                        setattr(map_data, "_install_source_mode", install_source_mode)
                         self._install_map_synchronously(map_data)
                         emit_map_stage(2)
                         completed_units += 3
@@ -1348,7 +1354,7 @@ class BatchInstallWorker(QObject):
                     self.status.emit(f"Warning: Failed {cpath.name} ({str(e)[:30]})")
 
             # Process maps prepared from HTML folders in phase 1.
-            for map_name, map_dir in html_prepared:
+            for map_name, map_dir, source_game in html_prepared:
                 try:
                     if selected_lookup and map_name.lower() not in selected_lookup:
                         continue
@@ -1406,6 +1412,8 @@ class BatchInstallWorker(QObject):
                         map_data.media.audio_path = persisted_audio
 
                     self.status.emit(f"[{map_data.codename}] Installing map...")
+                    install_source_mode = "HTML JDNext" if source_game == "jdnext" else "HTML"
+                    setattr(map_data, "_install_source_mode", install_source_mode)
                     self._install_map_synchronously(map_data)
                     emit_map_stage(2)
                     completed_units += 3
@@ -1436,8 +1444,15 @@ class BatchInstallWorker(QObject):
         def callback(msg: str):
             prefix = f"[{map_data.codename}] "
             self.status.emit(prefix + msg)
-            
-        install_map_to_game(map_data, self._target_dir, self._config, status_callback=callback)
+
+        source_mode = str(getattr(map_data, "_install_source_mode", "") or "")
+        install_map_to_game(
+            map_data,
+            self._target_dir,
+            self._config,
+            source_mode=source_mode,
+            status_callback=callback,
+        )
 
 
 

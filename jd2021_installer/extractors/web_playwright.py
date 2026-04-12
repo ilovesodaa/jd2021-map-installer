@@ -1138,12 +1138,17 @@ def _is_valid_embed_response(
     html: str,
     require_gameplay_video: bool = False,
     expected_codename: Optional[str] = None,
+    allow_textual_codename_fallback: bool = False,
 ) -> bool:
     """Validate an embed response before accepting it as usable."""
     if not _has_valid_cdn_links(html):
         return False
     if expected_codename and not _embed_contains_codename_links(html, expected_codename):
-        return False
+        if not (
+            allow_textual_codename_fallback
+            and _embed_mentions_expected_codename(html, expected_codename)
+        ):
+            return False
     if require_gameplay_video and not _has_gameplay_video_links(html):
         return False
     return True
@@ -1171,6 +1176,130 @@ def _extract_embed_fields_from_html(html: str) -> Dict[str, str]:
         else:
             fields[name] = value
     return fields
+
+
+def _extract_embed_title_from_accessory_html(html: str) -> str:
+    """Extract embed title text from a Discord accessory HTML block."""
+    match = re.search(
+        r'<div class="embedTitle[^\"]*">\s*<span>(.*?)</span>',
+        html,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return ""
+    return unescape(_strip_html_tags(match.group(1))).strip()
+
+
+def _extract_embed_error_message(html: str) -> str:
+    """Return an error message when the embed clearly reports a failure."""
+    fields = _extract_embed_fields_from_html(html)
+    for name, value in fields.items():
+        if re.search(r"\berror\b", name, re.IGNORECASE):
+            return value.strip()
+
+    text = unescape(_strip_html_tags(html))
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return ""
+
+    error_hint = re.search(
+        r"(could(?:n['’]t| not)\s+find\s+this\s+track|track\s+not\s+found|\berror\b)",
+        text,
+        re.IGNORECASE,
+    )
+    if not error_hint:
+        return ""
+
+    return text[:300]
+
+
+def _embed_mentions_expected_codename(html: str, expected_codename: Optional[str]) -> bool:
+    """Return True if embed content appears to reference the requested codename."""
+    needle = (expected_codename or "").strip().lower()
+    if not needle:
+        return True
+
+    title = _extract_embed_title_from_accessory_html(html).strip().lower()
+    if title == needle:
+        return True
+
+    text = unescape(_strip_html_tags(html)).lower()
+    return re.search(rf"\b{re.escape(needle)}\b", text) is not None
+
+
+def _extract_requester_mentions_from_embed(html: str) -> Set[str]:
+    """Extract @mention display names from embed markup/text."""
+    mentions: Set[str] = set()
+
+    for match in re.findall(r"@([A-Za-z0-9_.\-]{2,32})", html or ""):
+        name = (match or "").strip().lower()
+        if name:
+            mentions.add(name)
+
+    return mentions
+
+
+def _embed_matches_requester(html: str, requester_handles: Optional[List[str]]) -> bool:
+    """Return True when embed appears to target the logged-in requester.
+
+    If no requester handles are known, this check is neutral (True).
+    If embed has no @mentions, this check is also neutral to avoid false negatives.
+    """
+    if not requester_handles:
+        return True
+
+    expected = {
+        (h or "").strip().lstrip("@").lower()
+        for h in requester_handles
+        if (h or "").strip()
+    }
+    if not expected:
+        return True
+
+    mentions = _extract_requester_mentions_from_embed(html)
+    if not mentions:
+        return True
+
+    return bool(mentions.intersection(expected))
+
+
+async def _get_logged_in_requester_handles(page) -> List[str]:
+    """Best-effort extraction of logged-in Discord account handles from the UI."""
+    candidates = await page.evaluate(
+        """() => {
+            const out = new Set();
+
+            const accountBtn = document.querySelector('[aria-label*="Set Status"], [aria-label*="User Settings"]');
+            if (accountBtn) {
+                const t = (accountBtn.textContent || '').trim();
+                if (t) out.add(t);
+            }
+
+            const display = document.querySelector('[class*="nameTag"], [class*="username"], [class*="userTag"]');
+            if (display) {
+                const t = (display.textContent || '').trim();
+                if (t) out.add(t);
+            }
+
+            const bodyText = (document.body?.innerText || '').split('\\n').slice(-40).join('\\n');
+            const m = bodyText.match(/@([A-Za-z0-9_.-]{2,32})/g) || [];
+            for (const token of m) out.add(token);
+
+            return Array.from(out);
+        }"""
+    )
+
+    handles: Set[str] = set()
+    for raw in cast(List[str], candidates or []):
+        token = (raw or "").strip()
+        if not token:
+            continue
+        for part in re.split(r"\s+|#", token):
+            part = part.strip().lstrip("@").lower()
+            if re.fullmatch(r"[a-z0-9_.\-]{2,32}", part):
+                handles.add(part)
+
+    return sorted(handles)
 
 
 def _parse_bool_text(value: str) -> Optional[bool]:
@@ -1406,6 +1535,8 @@ async def _fetch_command_with_retry(
     max_retries: int = 2,
     bot_timeout_s: int = 60,
     require_gameplay_video: bool = False,
+    allow_textual_codename_fallback: bool = False,
+    requester_handles: Optional[List[str]] = None,
 ) -> str:
     """Send a slash command, wait for bot response, extract and validate HTML.
 
@@ -1433,10 +1564,33 @@ async def _fetch_command_with_retry(
                 html = await _extract_embed_html(page, embed_id)
                 cursor_id = embed_id
 
+                if not _embed_matches_requester(html, requester_handles):
+                    logger.debug(
+                        "Skipping %s response %s: embed mentions a different requester.",
+                        label,
+                        embed_id,
+                    )
+                    continue
+
+                error_message = _extract_embed_error_message(html)
+                if error_message:
+                    if _embed_mentions_expected_codename(html, codename):
+                        raise WebExtractionError(
+                            f"{label} bot error for '{codename}': {error_message}"
+                        )
+                    logger.debug(
+                        "Skipping %s response %s: bot error does not reference requested codename '%s'.",
+                        label,
+                        embed_id,
+                        codename,
+                    )
+                    continue
+
                 if _is_valid_embed_response(
                     html,
                     require_gameplay_video=require_gameplay_video,
                     expected_codename=codename,
+                    allow_textual_codename_fallback=allow_textual_codename_fallback,
                 ):
                     logger.debug("Extracted %s embed HTML.", label)
                     return html
@@ -1804,6 +1958,11 @@ class WebPlaywrightExtractor(BaseExtractor):
                     pass  # Channel might be empty
 
                 bot_timeout = self._config.fetch_bot_response_timeout_s
+                requester_handles = await _get_logged_in_requester_handles(page)
+                if requester_handles:
+                    logger.debug("Requester identity detected: %s", ", ".join(requester_handles))
+                else:
+                    logger.debug("Requester identity not detected; proceeding without requester filter.")
 
                 nohud_html: Optional[str] = None
                 jdnext_metadata_payloads: Dict[str, Dict[str, str]] = {}
@@ -1817,6 +1976,8 @@ class WebPlaywrightExtractor(BaseExtractor):
                         label="asset",
                         bot_timeout_s=bot_timeout,
                         require_gameplay_video=True,
+                        allow_textual_codename_fallback=True,
+                        requester_handles=requester_handles,
                     )
                     assets_accessory_id = await _get_last_accessory_id(page)
                     if assets_accessory_id:
@@ -1838,6 +1999,7 @@ class WebPlaywrightExtractor(BaseExtractor):
                         codename=codename,
                         label="assets",
                         bot_timeout_s=bot_timeout,
+                        requester_handles=requester_handles,
                     )
                     await page.wait_for_timeout(500)
 
@@ -1850,6 +2012,7 @@ class WebPlaywrightExtractor(BaseExtractor):
                         codename=codename,
                         label="nohud",
                         bot_timeout_s=bot_timeout,
+                        requester_handles=requester_handles,
                     )
 
                 # Save HTML to output dir for caching / debugging

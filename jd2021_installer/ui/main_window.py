@@ -236,7 +236,7 @@ class MainWindow(QMainWindow):
 
         self._active_threads: set[QThread] = set()
         self._active_worker: Optional[object] = None
-        self._file_logger_handler: Optional[logging.Handler] = None
+        self._file_logger_handlers: list[logging.Handler] = []
         self._preview_audio_warning_shown = False
         self._size_overlay: Optional[QLabel] = None
         self._preview_hint_label: Optional[QLabel] = None
@@ -3271,7 +3271,7 @@ class MainWindow(QMainWindow):
 
     def _start_file_logging(self, current_target: str) -> None:
         """Starts a dynamic FileHandler log for this installation."""
-        if self._file_logger_handler:
+        if self._file_logger_handlers:
             self._stop_file_logging()
 
         # Sanitize codename for filename and cap to avoid Windows path-length issues.
@@ -3303,20 +3303,42 @@ class MainWindow(QMainWindow):
         if len(codename) > max_segment_len:
             codename = codename[:max_segment_len]
 
-        log_path = logs_dir / f"{file_prefix}{codename}{file_suffix}"
-        
-        self._file_logger_handler = logging.FileHandler(str(log_path), encoding="utf-8")
-        self._file_logger_handler.setLevel(get_file_log_level(self._config.log_detail_level))
-        logging.getLogger("jd2021").addHandler(self._file_logger_handler)
+        log_paths: list[Path] = []
+        if is_fetch_batch:
+            log_paths.append(logs_dir / f"{file_prefix}FetchBatch_{len(raw_fetch_tokens)}{file_suffix}")
+            seen: set[str] = set()
+            for token in raw_fetch_tokens:
+                safe_token = "".join(c for c in token if c.isalnum() or c in ("-", "_")).strip()
+                if not safe_token:
+                    continue
+                if len(safe_token) > max_segment_len:
+                    safe_token = safe_token[:max_segment_len]
+                key = safe_token.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                log_paths.append(logs_dir / f"{file_prefix}{safe_token}{file_suffix}")
+        else:
+            log_paths.append(logs_dir / f"{file_prefix}{codename}{file_suffix}")
+
+        level = get_file_log_level(self._config.log_detail_level)
+        for log_path in log_paths:
+            handler = logging.FileHandler(str(log_path), encoding="utf-8")
+            handler.setLevel(level)
+            logging.getLogger("jd2021").addHandler(handler)
+            self._file_logger_handlers.append(handler)
+
         self._config.log_detail_level = apply_log_detail(self._config.log_detail_level)
-        logger.info("Install log file: %s", log_path)
+        for log_path in log_paths:
+            logger.info("Install log file: %s", log_path)
 
     def _stop_file_logging(self) -> None:
         """Removes the active FileHandler and cleanly closes handles."""
-        if self._file_logger_handler:
-            logging.getLogger("jd2021").removeHandler(self._file_logger_handler)
-            self._file_logger_handler.close()
-            self._file_logger_handler = None
+        if self._file_logger_handlers:
+            for handler in self._file_logger_handlers:
+                logging.getLogger("jd2021").removeHandler(handler)
+                handler.close()
+            self._file_logger_handlers = []
 
     def _set_status(self, text: str) -> None:
         self._status_bar.showMessage(text)

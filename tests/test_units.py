@@ -544,6 +544,46 @@ def test_batch_worker_fetch_codenames_use_multi_map_flow(tmp_path: Path, monkeyp
     assert installed == ["MapB"]
 
 
+def test_batch_worker_fetch_sets_source_mode_for_sync_install(tmp_path: Path, monkeypatch):
+    from jd2021_installer.extractors import web_playwright
+    from jd2021_installer.parsers import normalizer
+
+    prepared_root = tmp_path / "prepared"
+    prepared_root.mkdir(parents=True)
+
+    def _extract(self, output_dir):
+        codename = self._codenames[0]
+        target = prepared_root / codename
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+
+    monkeypatch.setattr(web_playwright.WebPlaywrightExtractor, "extract", _extract)
+    monkeypatch.setattr(
+        normalizer,
+        "normalize",
+        lambda root, codename=None, search_root=None: _build_map(codename or Path(root).name),
+    )
+
+    captured_modes: list[str] = []
+
+    def _capture_install(self, map_data):
+        captured_modes.append(str(getattr(map_data, "_install_source_mode", "")))
+
+    monkeypatch.setattr(BatchInstallWorker, "_install_map_synchronously", _capture_install)
+
+    worker = BatchInstallWorker(
+        batch_source_dir=tmp_path,
+        target_game_dir=tmp_path / "game",
+        config=AppConfig(cache_directory=tmp_path / "cache"),
+        fetch_codenames=["MapA"],
+        fetch_source="jdu",
+    )
+
+    worker.run()
+
+    assert captured_modes == ["Fetch"]
+
+
 def test_batch_worker_fetch_codenames_ignore_local_batch_scan(tmp_path: Path, monkeypatch):
     from jd2021_installer.extractors import archive_ipk, web_playwright
     from jd2021_installer.parsers import normalizer

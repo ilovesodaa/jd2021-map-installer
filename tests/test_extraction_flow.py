@@ -10,7 +10,10 @@ from jd2021_installer.core.exceptions import WebExtractionError
 from jd2021_installer.extractors.web_playwright import (
     WebPlaywrightExtractor,
     _classify_urls,
+    _embed_matches_requester,
+    _embed_mentions_expected_codename,
     _embed_contains_codename_links,
+    _extract_embed_error_message,
     _extract_embed_fields_from_html,
     _has_valid_cdn_links,
     _is_valid_embed_response,
@@ -365,6 +368,55 @@ def test_is_valid_embed_response_rejects_other_user_codename_response():
 
     assert _is_valid_embed_response(other_user_html) is True
     assert _is_valid_embed_response(other_user_html, expected_codename="MyMap") is False
+
+
+def test_is_valid_embed_response_allows_textual_codename_fallback():
+    # Simulates JDNext-style response where link path may not carry the requested codename.
+    html = (
+        '<div class="embedTitle__x"><span>Judas</span></div>'
+        '<a href="https://jdcn-switch.cdn.ubisoft.cn/private/jdnext/maps/abcd/video_ultra.webm">video</a>'
+    )
+
+    assert _is_valid_embed_response(
+        html,
+        require_gameplay_video=True,
+        expected_codename="Judas",
+        allow_textual_codename_fallback=True,
+    ) is True
+
+
+def test_extract_embed_error_message_from_error_field():
+    html = (
+        '<div class="embedFieldName__x"><span>Error</span></div>'
+        '<div class="embedFieldValue__x"><span>❌ Couldn\'t find this track ❌</span></div>'
+    )
+
+    msg = _extract_embed_error_message(html)
+
+    assert "Couldn" in msg
+    assert "find this track" in msg
+
+
+def test_embed_mentions_expected_codename_matches_embed_title():
+    html = '<div class="embedTitle__x"><span>Koi</span></div>'
+
+    assert _embed_mentions_expected_codename(html, "Koi") is True
+    assert _embed_mentions_expected_codename(html, "OtherMap") is False
+
+
+def test_embed_matches_requester_with_matching_mention():
+    html = '<div><span>@Monika</span><span>Couldn\'t find this track</span></div>'
+    assert _embed_matches_requester(html, ["monika"]) is True
+
+
+def test_embed_matches_requester_with_different_mention():
+    html = '<div><span>@SomeoneElse</span><span>Couldn\'t find this track</span></div>'
+    assert _embed_matches_requester(html, ["monika"]) is False
+
+
+def test_embed_matches_requester_neutral_when_no_mentions():
+    html = '<div><span>Error:</span><span>Couldn\'t find this track</span></div>'
+    assert _embed_matches_requester(html, ["monika"]) is True
 
 
 def test_parse_jdnext_button_payloads_uses_text_fallback_for_tags_and_coaches():
