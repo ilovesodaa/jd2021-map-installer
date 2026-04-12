@@ -2,11 +2,16 @@
 
 > **Last Updated:** April 2026 | **Applies to:** JD2021 Map Installer v2
 
-This document details how raw data from the Just Dance Unlimited (JDU) JSON payloads is mapped, transformed, or ignored when porting maps to the Just Dance 2021 PC (UbiArt) engine.
+This document details how raw data from multiple source formats (JDU JSON
+payloads, binary CKD files, IPK archives, and JDNext Unity bundles) is
+mapped, transformed, or ignored when porting maps to the Just Dance 2021 PC
+(UbiArt) engine.
 
 ---
 
 ## 1. Map Metadata (SongDesc)
+
+### JDU / CKD JSON Sources
 
 | JDU Property | JD2021 PC Property | Transformation / Note |
 |--------------|-------------------|-----------------------|
@@ -23,10 +28,64 @@ This document details how raw data from the Just Dance Unlimited (JDU) JSON payl
 | `Credits` | `Credits` | Full rights/credits string from CKD. |
 | `Tags` | `Tags` | Extracted from CKD (e.g. `["Extreme", "Main"]`). Falls back to `["Main"]`. |
 | `Energy` | `Energy` | Energy level indicator, defaults to 1. |
-| `Status` | `Status` | Song status flag, defaults to 3. |
+| `Status` | `Status` | Song status flag, defaults to 3. **Override: `12` (ObjectiveLocked) → `3` (Available).** |
 | `LocaleID` | `LocaleID` | Locale identifier, defaults to 4294967295 (all locales). |
 | `MojoValue` | `MojoValue` | Mojo reward value, defaults to 0. |
 | `CountInProgression` | `CountInProgression` | Hardcoded to 0. |
+
+### JDNext mapPackage Sources
+
+JDNext maps use Unity `MonoBehaviour` JSON (`map.json`) exported from the
+mapPackage bundle. The normalizer extracts SongDesc via
+`_songdesc_from_map_json_fallback()`:
+
+| map.json Path | JD2021 PC Property | Note |
+|---------------|-------------------|------|
+| `SongDesc.MapName` | `MapName` (codename) | Primary codename source for JDNext maps. |
+| `SongDesc.Title` | `Title` | Direct copy. |
+| `SongDesc.Artist` | `Artist` | Direct copy. |
+| `SongDesc.NumCoach` | `NumCoach` | Int coercion with fallback to 1. |
+| `SongDesc.MainCoach` | `MainCoach` | Int coercion with fallback to -1. |
+| `SongDesc.Difficulty` | `Difficulty` | Int coercion with fallback to 2. |
+| `SongDesc.SweatDifficulty` | `SweatDifficulty` | Int coercion with fallback to 1. |
+| `SongDesc.JDVersion` | `JDVersion` | Int coercion with fallback to 2021. |
+| `SongDesc.OriginalJDVersion` | `OriginalJDVersion` | Int coercion with fallback to 2021. |
+
+### JDNext Metadata Overlay
+
+When a `jdnext_metadata.json` file exists in the source directory, the
+normalizer overlays additional fields via `_apply_jdnext_metadata_songdesc_overrides()`:
+
+| Metadata Key | Target Field | Condition for Override |
+|-------------|-------------|----------------------|
+| `tags` | `Tags` | Applied when current tags are empty or `["Main"]`. |
+| `credits` | `Credits` | Applied when current credits are effectively missing. |
+| `other_info.difficulty` | `Difficulty` | Applied when current difficulty is 0 or 2 (default). Supports text labels (`"easy"`, `"hard"`, etc.). |
+| `other_info.sweat_difficulty` | `SweatDifficulty` | Applied when current value is 0 or 1 (default). |
+| `other_info.original_jd_version` | `OriginalJDVersion` | Applied when current value is 0, -1, or 2021 (default). |
+| `other_info.coach_count` | `NumCoach` | Applied when greater than current value. |
+
+### JDNext Songdb Cache Overlay
+
+An optional synthesized songdb cache (`songdb_synth.json`) provides a
+secondary metadata source. Lookup is by codename, map_name, or title.
+Applied fields include: `tags`, `credits`, `title`, `artist`, `difficulty`,
+`sweat_difficulty`, `coach_count`, `original_jd_version`, `preview_entry`,
+`preview_loop_start`, `preview_loop_end`, and `video_start_time`. All
+overrides are conditional — they only apply when the current value appears
+to be a placeholder or default.
+
+### SongDesc Fallback Chain
+
+The normalizer resolves SongDesc through this priority chain:
+
+1. `songdesc.tpl.ckd` (JSON or binary)
+2. JDNext `map.json` MonoBehaviour (via `_songdesc_from_map_json_fallback`)
+3. HTML embed title/artist extraction (via `_songdesc_from_html_fallback`)
+4. Codename-derived defaults
+
+**After primary resolution**, overlays are applied in order:
+JDNext metadata → JDNext songdb cache → HTML title/artist gap-fill.
 
 ---
 
@@ -48,6 +107,27 @@ The timing markers in the original `musictrack.tpl.ckd` are verbatim audio sampl
 
 **V2 IPK Limitation (Important):** In IPK-only workflows, source metadata is not always sufficient to reconstruct exact lead-in timing, so `videoStartTime` may remain approximate. Manual sync tuning in the installer is expected for many IPK maps.
 
+### videoStartTime Auto-Detection
+
+The normalizer detects whether `videoStartTime` is in ticks or seconds:
+
+```python
+if abs(vst) > 1000:
+    vst /= 48000.0  # Convert from ticks to seconds
+```
+
+### videoStartTime Synthesis (Last-Resort)
+
+When `videoStartTime` is `0.0` but `startBeat < 0`, the game engine will
+assert "adding a brick in the past." The pipeline auto-synthesizes:
+
+```python
+vst = -(markers[abs(start_beat)] / 48.0 / 1000.0)
+```
+
+This only activates when no authoritative source value exists (e.g., Xbox 360
+rips). JDNext and Fetch maps with valid offsets are preserved.
+
 ### The videoStartTime Coupling
 
 `videoStartTime` controls two inseparable engine behaviors simultaneously:
@@ -59,11 +139,35 @@ This means any map with `videoStartTime < 0` will have `abs(videoStartTime)` sec
 
 **Current V2 Runtime Status:** Intro AMB compensation is currently under temporary mitigation and should not be assumed to reliably fill this pre-roll silence in all cases.
 
+### Preview Loop Monotonic Enforcement
+
+The game writer enforces monotonic ordering on preview fields:
+
+- If `previewLoopStart < previewEntry`, it is clamped to `previewEntry`.
+- If `previewLoopEnd <= previewLoopStart`, it is set to `endBeat` or
+  `previewLoopStart + 1.0` as a last resort.
+- When all three preview fields are zero and `endBeat > 0`, a midpoint
+  preview is synthesized: `entry = endBeat/2`, `start = endBeat/2`,
+  `end = endBeat`.
+
+### MusicTrack from JDNext mapPackage
+
+JDNext `MusicTrack.json` (MonoBehaviour) stores the MusicTrackStructure
+under `m_structure.MusicTrackStructure` with markers in `{VAL: N}` wrapper
+format. The bundle strategy synthesizes a standard `_musictrack.tpl.ckd`
+JSON via `_synthesize_musictrack_tpl_ckd()`, unwrapping the VAL containers
+and preserving all timing fields.
+
 ### SFI (Sound Format Info)
 
 JD2021 PC requires an explicit XML declaration of the sound format:
 ```xml
-<SoundFormatInfo Format="PCM" IsStreamed="1" IsMusic="1" Platform="PC" />
+<root>
+  <SoundConfiguration TargetName="PC" Format="PCM" IsStreamed="1" IsMusic="1"/>
+  <SoundConfiguration TargetName="Durango" Format="PCM" IsStreamed="1" IsMusic="1"/>
+  <SoundConfiguration TargetName="NX" Format="OPUS" IsStreamed="1" IsMusic="1"/>
+  <SoundConfiguration TargetName="ORBIS" Format="ADPCM" IsStreamed="1" IsMusic="1"/>
+</root>
 ```
 
 **Dependency Note:** End-to-end audio processing in V2 depends on local FFmpeg/FFprobe availability, and some legacy decode paths depend on `vgmstream`.
@@ -82,13 +186,36 @@ The UbiArt engine (v280000) will crash if a tape contains raw primitive arrays. 
 - **Resolution**: 24 ticks per beat.
 - **Clip Timing**: `StartTime` and `Duration` values in JDU CKD data are already in engine tick units. The pipeline passes them through as-is with no conversion needed.
 
-### MotionClip Processing (handled by ``parsers/binary_ckd.py``)
+### MotionClip Processing (handled by `parsers/binary_ckd.py`)
 
 | JDU Data | JD2021 Lua Output | Note |
 |----------|-------------------|------|
 | `Color: [a, r, g, b]` (floats 0-1) | `Color = "0xRRGGBBAA"` | Hex string with channels reordered. Default `"0xffffffff"` if missing. |
 | `MotionPlatformSpecifics: {platform: data}` | `MotionPlatformSpecifics = { {KEY="X360", VAL={...}}, ... }` | Dict converted to KEY/VAL array. Inner data runs through `remove_class`. |
 | `TrackId: N` (per clip) | `Tracks = { {TapeTrack = {id=N}}, ... }` | Unique TrackIds collected across all clips. `Tracks` array built and inserted at tape level. |
+
+### JDNext Tape Synthesis
+
+**JDNext maps do not ship `.dtape.ckd` / `.ktape.ckd` files.** Instead,
+the bundle strategy synthesizes them from `map.json`:
+
+- `DanceData.MotionClips[]` → `dtape.ckd` MotionClip entries
+- `DanceData.PictoClips[]` → `dtape.ckd` PictogramClip entries
+- `DanceData.GoldEffectClips[]` → `dtape.ckd` GoldEffectClip entries
+- `KaraokeData.Clips[]` → `ktape.ckd` KaraokeClip entries
+
+**JDNext MotionClip mapping:**
+
+| JDNext map.json Field | Output CKD Field | Note |
+|----------------------|------------------|------|
+| `MoveName` | `ClassifierPath` | Normalized to `world/maps/<codename>/timeline/moves/<name>.<ext>`. Extension is `.gesture` for MoveType=1, `.msm` otherwise. |
+| `Color` | `Color` | **Assumption: JDNext hex colors (e.g. `0xRRGGBBAA`) are normalized to `[a, r, g, b]` float arrays by `_normalize_color()`.** |
+| `GoldMove` | `GoldMove` | Direct int copy. |
+| `CoachId` | `CoachId` | Direct int copy. |
+| `MoveType` | `MoveType` | Direct int copy. |
+
+**JDNext PictoClip mapping:** `PictoPath` field is prefixed with
+`world/maps/<codename>/timeline/pictos/` and suffixed with `.png`.
 
 ### Degenerate TrackId Normalization
 When every clip in a tape has a unique TrackId (a sign of bad source data), the pipeline groups clips by `__class` and assigns a deterministic shared ID per class (using `hash(class_name) & 0xFFFFFFFF`). This prevents the engine from creating hundreds of individual tracks.
@@ -111,8 +238,17 @@ Cinematic clips reference actors via `ActorIndices` (integer array). The tape's 
 2. Resolved paths are written as `ActorPaths = { {VAL = "path/to/actor"}, ... }` on the clip
 3. The top-level `ActorPaths` array is removed from the tape
 
+### Binary Cinematic Tape Clips
+
+The binary parser (`parse_cinematic_tape`) recognizes two entry classes:
+
+| Class ID | Clip Type | Key Fields |
+|----------|-----------|------------|
+| 136 | `SoundSetClip` | `sound_set_path` (SplitPath: path + filename, `jd2015` → `maps` rewrite) |
+| 160 | `TapeReferenceClip` | `path` (SplitPath), `loop` flag |
+
 ### Fallback
-If no cinematic `.tape.ckd` files exist in the extracted IPK, the pipeline keeps the empty fallback tape generated by ``installers/game_writer.py``.
+If no cinematic `.tape.ckd` files exist in the extracted IPK, the pipeline keeps the empty fallback tape generated by `installers/game_writer.py`.
 
 ---
 
@@ -159,6 +295,23 @@ The engine uses DASH for video quality fallback. To work locally, the manifest m
 | **Profile** | `urn:webm:dash:profile:webm-on-demand:2012` | Required for WebM support. |
 | **BaseURL** | `jmcs://jd-contents/[MapName]/[MapName].webm` | Forces engine to local file fallback. |
 
+### JDNext Video Quality Tiers
+
+JDNext maps expose video variants with a different naming convention:
+
+| URL Pattern | Quality Tier | Variant |
+|-------------|-------------|---------|
+| `video_ultra.hd.webm` | `ULTRA_HD` | `.hd` |
+| `video_ultra.vp9.webm` | `ULTRA` | `.vp9` |
+| `video_high.hd.webm` | `HIGH_HD` | `.hd` |
+| `video_high.vp9.webm` | `HIGH` | `.vp9` |
+| `video_mid.hd.webm` | `MID_HD` | `.hd` |
+| `video_low.vp9.webm` | `LOW` | `.vp9` |
+
+**VP9 handling:** The `vp9_handling_mode` config option controls behavior:
+- `reencode_to_vp8` (default): Accept VP9 tier, re-encode later.
+- `fallback_compatible_down`: Skip VP9 tiers entirely, pick next `_HD` tier.
+
 ---
 
 ## 5. Autodance & Recording
@@ -184,6 +337,14 @@ The following JDU properties are safely ignored:
 - **`platformSpecifics`**: Metadata for older consoles (WiiU/PS3) is discarded.
 - **`previewAudio`**: The separate preview audio file is not used. Instead, the engine plays the main audio file starting from the `previewEntry` beat marker, with `AudioPreviewFadeTime` controlling the fade-out (set to 2.0s when `previewEntry > 0`, otherwise 0.0).
 
+### JDNext-Specific Ignores
+
+- **UUID-like map IDs**: JDNext URLs use opaque UUID identifiers under
+  `/jdnext/maps/<uuid>/`. These are explicitly rejected as codename
+  candidates (matched against `_UUID_LIKE_RE`).
+- **`audiopreview` / `videopreview` / `mappreview`**: Preview assets from
+  JDNext CDN URLs are filtered out during URL classification.
+
 ---
 
 ## 7. Default Colors
@@ -194,12 +355,24 @@ JDU exposes a `DefaultColors` block in the `songdesc.tpl.ckd` payload containing
 
 CKD color keys may use different casing than the hardcoded fallbacks (e.g., CKD has `songcolor_1a` while fallback is `songColor_1A`). The pipeline performs **case-insensitive matching** to avoid duplicates. CKD values and key names take priority; fallback hex values are used only when a key is absent from the CKD entirely.
 
+**CRITICAL:** The merge explicitly excludes any key named `"DefaultColors"` (case-insensitive) to prevent a recursive `DefaultColors` block inside the map, which would crash the engine's `zserializerobjectcontainers.h` deserialization.
+
 ### Conversion rules
 
 - **Source format**: `[component, component, component, component]` where each component is a float in 0.0-1.0 range.
-  - For ``installers/game_writer.py`` (`color_array_to_hex`): Components are taken in array order and concatenated as hex.
-  - For ``parsers/binary_ckd.py`` (`argb_hex`, used in MotionClip Colors): Input is `[a, r, g, b]`, output is `0xRRGGBBAA` (channels reordered).
+  - For `installers/game_writer.py` (`color_array_to_hex`): Components are taken in array order `[R,G,B,A]` and concatenated as `0xRRGGBBAA` hex. Missing alpha is padded with `0xFF`.
+  - For `parsers/binary_ckd.py` (`argb_hex`, used in MotionClip Colors): Input is `[a, r, g, b]`, output is `0xRRGGBBAA` (channels reordered).
 - **Hex strings**: If the CKD already contains a hex string (e.g., `0xFFB8113B`), it is passed through unchanged.
+
+### Binary CKD Color Parsing
+
+Binary SongDesc CKDs store `DefaultColors` as CRC-keyed entries:
+
+| Color Name | CRC32 (uppercase ASCII) |
+|-----------|------------------------|
+| `theme` | `_string_id("theme")` |
+| `lyrics` | `_string_id("lyrics")` |
+| (others) | Stored as `0xNNNNNNNN` hex CRC keys in `extra` dict |
 
 ### Fallback values
 
@@ -218,4 +391,55 @@ CKD color keys may use different casing than the hardcoded fallbacks (e.g., CKD 
 
 ---
 
-*Reference: This mapping is derived from analysis of GetGetDown (reference map), BadRomance, and Albatraoz JDU payloads.*
+## 8. Texture Asset Mapping
+
+### CKD Texture Decode Pipeline
+
+The `texture_decoder.py` module decodes CKD textures from three platforms:
+
+| Platform | Pipeline |
+|----------|----------|
+| PC | CKD → strip 44-byte header → DDS → Pillow → TGA/PNG |
+| NX (Switch) | CKD → strip header → XTX → deswizzle → DDS → TGA/PNG |
+| X360 | CKD → strip header → GPU descriptor parse → byte-swap → untile → DDS build → TGA/PNG |
+
+### Batch Operations
+
+| Function | Input | Output |
+|----------|-------|--------|
+| `decode_pictograms()` | `*picto*.ckd` in picto_dir | PNG files in output_dir; optionally composited on a transparent canvas (bottom-center placement, no upscale). **JDNext 512px-wide pictos are preserved as-is.** |
+| `decode_menuart_textures()` | `*.ckd` in menuart_dir (excluding `.act.ckd`, `.tpl.ckd`, etc.) | TGA files in output_dir |
+
+### JDNext Texture Sources
+
+JDNext bundles provide textures as already-decoded PNG files from `Texture2D`
+and `Sprite` Unity object types. These bypass the CKD decode pipeline and
+are copied directly into `menuart/` or `pictos/` based on picto name matching
+from the synthesized dtape data.
+
+---
+
+## 9. Codename Resolution
+
+The normalizer resolves the authoritative `codename` through a multi-source
+priority chain:
+
+| Priority | Source | Method |
+|----------|--------|--------|
+| 1 | User-specified codename | Direct pass-through |
+| 2 | JDNext `map.json` → `SongDesc.MapName` | `_infer_codename_from_source_files()` |
+| 3 | JDU URL path segment | `extract_codename_from_urls()`: `/public/map/<codename>/...` |
+| 4 | `songdesc.tpl.ckd` → `MapName` | Via CKD JSON parsing |
+| 5 | `*_MAIN_SCENE.isc` filename stem | Stem before `_MAIN_SCENE` |
+| 6 | Music track / `.trk` filename stem | Stem before `_musictrack` |
+| 7 | IPK filename stem | Platform suffix stripped (e.g. `_x360`, `_nx`) |
+| 8 | Timeline move prefix heuristic | Most-frequent `.gesture`/`.msm` prefix |
+| 9 | HTML embed title | Extracted from Discord embed `<div class="embedTitle">` |
+
+**JDNext UUID rejection:** URL segments matching the UUID pattern
+(`^[0-9a-f]{8}-...$`) are explicitly excluded. The codename falls through
+to `map.json` or user-specified sources.
+
+---
+
+*Reference: This mapping is derived from analysis of GetGetDown (reference map), BadRomance, Albatraoz JDU payloads, and JDNext mapPackage bundles.*

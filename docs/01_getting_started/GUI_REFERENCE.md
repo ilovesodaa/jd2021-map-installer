@@ -2,7 +2,7 @@
 
 > **Last Updated:** April 2026 | **Applies to:** JD2021 Map Installer v2
 
-This document describes the graphical user interface defined in `jd2021_installer/ui/main_window.py`.
+This document describes every element of the graphical user interface, as implemented in the PyQt6 codebase under `jd2021_installer/ui/`.
 
 ---
 
@@ -10,236 +10,342 @@ This document describes the graphical user interface defined in `jd2021_installe
 
 - **Main class:** `MainWindow` (subclass of `QMainWindow`)
 - **Toolkit:** PyQt6
-- **Current minimum window size (default config):** 1000 × 920
-- **Window title:** "JD2021 Map Installer v2"
-- **Entry point:** `python -m jd2021_installer.main`
+- **Default minimum window size:** 1000 × 920 (configurable in Settings → Window)
+- **Window title:** "JD2021PC Map Installer"
+- **Entry point:** Double-click `RUN.bat`, or run `python -m jd2021_installer.main`
 
 ---
 
-## Reality Check: Legacy vs Current GUI
+## First-Time Setup
 
-The older two-button/two-pane GUI description is deprecated.
+Before using the GUI for the first time:
 
-Current V2 GUI is modular and mode-driven:
-1. Left column: mode selection, configuration, actions, progress checklist.
-2. Right column: embedded media preview, sync refinement controls, and live log console.
-3. Bottom status bar: concise current status text.
+1. **Run `setup.bat`** from the project root. This configures your Python environment and downloads dependencies like FFmpeg.
+2. **Launch with `RUN.bat`**. The installer window will appear.
+3. On first launch, a **Quick-Start Guide** dialog will walk you through the basics.
 
 ---
 
 ## Window Layout
 
-The main window uses a central `QHBoxLayout` with two responsive columns.
+The main window is split into two side-by-side columns inside a horizontal layout.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                        JD2021 Map Installer v2                             │
+│                        JD2021PC Map Installer                              │
 ├──────────────────────────┬──────────────────────────────────────────────────┤
-│ Left Column              │ Right Column                                     │
-│ (~40% width)             │ (~60% width)                                     │
+│ Left Column (~40%)       │ Right Column (~60%)                              │
 │                          │                                                  │
-│ [Mode Selector]          │ [Preview Widget]                                 │
-│ [Configuration Panel]    │   - embedded video canvas                        │
-│ [Action Panel]           │   - seek + preview controls                      │
-│ [Progress Panel]         │                                                  │
-│   - checklist            │ [Sync Refinement Widget]                         │
-│   - progress bar         │   - audio/video offsets                          │
-│                          │   - apply/pad/sync/nav controls                  │
-│                          │                                                  │
-│                          │ [Log Console]                                    │
+│ ┌──────────────────────┐ │ ┌──────────────────────────────────────────────┐ │
+│ │ Mode Selector        │ │ │ Preview Widget                               │ │
+│ │  - Mode dropdown     │ │ │  - Video canvas                              │ │
+│ │  - Mode-specific     │ │ │  - Seek slider + time display                │ │
+│ │    input fields      │ │ │  - Play/Stop, -5s, +5s controls              │ │
+│ └──────────────────────┘ │ └──────────────────────────────────────────────┘ │
+│ ┌──────────────────────┐ │ ┌──────────────────────────────────────────────┐ │
+│ │ Configuration Panel  │ │ │ Sync Refinement Widget                       │ │
+│ │  - Game Directory    │ │ │  - Audio/Video offset inputs                 │ │
+│ │  - Video Quality     │ │ │  - Fine-tune buttons (±1/10/100/1000 ms)     │ │
+│ └──────────────────────┘ │ │  - Pad Audio, Apply Offset                   │ │
+│ ┌──────────────────────┐ │ │  - Prev Map / Next Map navigation            │ │
+│ │ Action Panel         │ │ └──────────────────────────────────────────────┘ │
+│ │  - Install Map       │ │ ┌──────────────────────────────────────────────┐ │
+│ │  - Uninstall a Map   │ │ │ Log Console                                  │ │
+│ │  - Re-adjust Offset  │ │ │  - Color-coded, read-only log output         │ │
+│ │  - Reset / Settings  │ │ │  - Auto-scrolls to latest entry              │ │
+│ │  - Pre-flight Check  │ │ └──────────────────────────────────────────────┘ │
+│ └──────────────────────┘ │                                                  │
+│ ┌──────────────────────┐ │                                                  │
+│ │ Progress Panel       │ │                                                  │
+│ │  - Step checklist    │ │                                                  │
+│ │  - Progress bar      │ │                                                  │
+│ └──────────────────────┘ │                                                  │
 ├──────────────────────────┴──────────────────────────────────────────────────┤
-│ Status Bar ("Ready", mode/install/readjust status, warnings)               │
+│ Status Bar ("Ready", mode changes, install state, warnings)                │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Layout Details
 
-- Left panel minimum width: ~380px.
-- Right panel minimum width: ~500px.
-- Stretch ratio defaults to roughly 4:6 (left:right).
-- No user-facing splitter is used in current `MainWindow`; proportional sizing is layout-driven.
+- **Left panel** minimum width: ~380 px.
+- **Right panel** minimum width: ~500 px.
+- Stretch ratio defaults to roughly **4 : 6** (left : right).
+- The layout is proportional — no user-facing splitter handle.
 
 ---
 
-## Source Modes (Mode Selector)
+## Mode Selector
 
-The mode selector (`ModeSelectorWidget`) supports five ingestion modes:
+**Widget:** `ModeSelectorWidget` — top of the left column.
 
-1. **Fetch (Codename)**
-   Input: one or more codenames (comma-separated).
-   Requires Playwright Chromium availability.
-2. **HTML File**
-   Input: Asset HTML + NOHUD HTML.
-   Includes warnings about expiring links and auto-pair detection.
-3. **IPK Archive**
-   Input: `.ipk` archive path.
-4. **Batch (Directory)**
-   Input: directory containing install candidates.
-5. **Manual (Directory)**
-   Input: manual file set/root folder for advanced workflows.
+The **Mode** dropdown lets you choose how map data is provided to the installer. When you switch modes, the input area below the dropdown updates to show mode-specific fields.
 
-Mode changes reset stale targets and trigger mode-specific validation before install.
+### Supported Modes (7 total)
+
+| # | Mode Label | Input Type | Source |
+|---|-----------|-----------|--------|
+| 1 | **Fetch JDU** | Song codename(s) | JDU via Discord bot |
+| 2 | **HTML JDU** | `assets.html` + `nohud.html` | JDU saved exports |
+| 3 | **Fetch JDNext** | Song codename(s) | JDNext via Discord bot |
+| 4 | **HTML JDNext** | `assets.html` | JDNext saved export |
+| 5 | **IPK Archive** | `.ipk` file | Xbox 360 map archives |
+| 6 | **Batch (Directory)** | Folder of map candidates | Mixed sources |
+| 7 | **Manual (Directory)** | Pre-extracted folder | Advanced users |
+
+> **Tip:** Each mode shows a brief description banner above its inputs. Read the banner for important notes (e.g., link expiration warnings for HTML modes).
+
+For detailed step-by-step usage of each mode, see [MODES_GUIDE.md](MODES_GUIDE.md).
 
 ---
 
 ## Configuration Panel
 
-`ConfigWidget` exposes:
+**Widget:** `ConfigWidget` — below the Mode Selector in the left column.
 
-1. **Game Directory**
-   `Auto-Detect` via path discovery heuristics.
-   `Browse...` manual directory selection.
-2. **Video Quality**
-   Quality tier selector used by extraction/install flow.
+| Control | What It Does |
+|---------|-------------|
+| **Game Directory** (read-only field) | Shows the path to your JD2021 installation |
+| **Browse…** button | Open a folder picker to select the game root (must contain `data` and `engine`) |
+| **Video Quality** dropdown | Choose output video quality: `ULTRA_HD`, `ULTRA`, `HIGH_HD`, `HIGH`, `MID_HD`, `MID`, `LOW_HD`, `LOW` |
 
-Configuration is persisted in `installer_settings.json` and reloaded at startup.
+Configuration is persisted in `installer_settings.json` and reloaded automatically on next launch.
 
 ---
 
 ## Action Panel
 
-`ActionWidget` contains the primary operator actions:
+**Widget:** `ActionWidget` — below the Configuration Panel in the left column.
 
-1. **Install Map**
-2. **Pre-flight Check**
-3. **Re-adjust Offset**
-4. **Settings**
-5. **Reset State**
+This panel groups all primary buttons:
 
-### Pre-flight Check Coverage
+### Primary Row
 
-Pre-flight validates:
-1. Game directory existence and write access.
-2. Presence of required map scene config under the selected game path.
-3. Mode-specific source inputs.
-4. Runtime dependencies (Python packages, media binaries, Playwright browser when Fetch mode is active).
+| Button | What It Does |
+|--------|-------------|
+| **Install Map** | Runs the full pipeline: Extract → Normalize → Install into your game |
+
+### Secondary Row
+
+| Button | What It Does |
+|--------|-------------|
+| **Uninstall a Map** | Opens a dialog to select and remove a previously installed custom map |
+| **Re-adjust Offset** | Opens a map selection dialog to enter sync refinement for already-installed maps |
+
+### Utility Row
+
+| Button | What It Does |
+|--------|-------------|
+| **Reset State** | Clears current mode inputs and temporary installer state |
+| **Settings** | Opens the full Installer Settings dialog (see [Settings Guide](#settings-dialog)) |
+| **Pre-flight Check** | Validates paths, mode inputs, and tool dependencies before you install |
+
+> **Important:** Always run **Pre-flight Check** before your first install to catch missing tools or configuration problems.
 
 ---
 
-## Progress and Logging
+## Progress Panel
 
-### Progress Panel (`ProgressLogWidget`)
+**Widget:** `ProgressLogWidget` — bottom of the left column.
 
 Displays:
-1. A step checklist with status icons (`WAITING`, `IN_PROGRESS`, `DONE`, `ERROR`).
-2. A `QProgressBar` (0-100).
 
-Representative checklist stages include extraction, normalization, decode/convert steps, AMB handling, tape conversion, and SkuScene registration.
+1. **Step Checklist** — each pipeline stage is listed with a status icon:
+   - ⏳ `WAITING` — not yet started
+   - 🔄 `IN_PROGRESS` — currently running
+   - ✅ `DONE` — completed successfully
+   - ❌ `ERROR` — failed
 
-### Log Console (`LogConsoleWidget`)
+2. **Progress Bar** — fills from 0% to 100% as the pipeline executes.
 
-- Read-only `QPlainTextEdit` with placeholder text.
-- Connected to a Qt-safe logging handler; worker logs are marshaled to UI safely.
-- Includes both high-level progress and detailed diagnostics.
+Typical checklist stages include:
 
----
-
-## Preview and Sync Refinement
-
-### Preview Widget (`PreviewWidget`)
-
-- Embedded preview canvas with seek controls and `Preview` / `Stop` behavior.
-- Uses FFmpeg/FFplay-backed playback orchestration from background worker threads.
-- Supports offset-aware relaunch when values change.
-
-### Sync Refinement Widget (`SyncRefinementWidget`)
-
-Controls:
-1. Audio offset (ms)
-2. Optional video offset override (ms)
-3. Increment/decrement buttons for rapid tuning
-4. `Pad Audio` utility
-5. `Sync Beatgrid` helper
-6. `Apply Offset`
-7. Multi-map navigation (`Prev Map` / `Next Map`) in batch/readjust contexts
-
-Readjust profiles can lock or disable specific controls (for example, IPK-focused readjust behavior differs from fetch/html behavior).
+- Extracting map data
+- Parsing CKDs and metadata
+- Normalizing assets
+- Decoding XMA2 audio
+- Converting audio (pad/trim)
+- Generating intro AMB
+- Copying video files
+- Converting dance/karaoke/cinematic tapes
+- Processing ambient sounds
+- Decoding textures and pictograms
+- Integrating move data
+- Registering in SkuScene
+- Finalizing offsets
 
 ---
 
-## Readjust Workflow (GUI Surface)
+## Preview Widget
 
-`Re-adjust Offset` opens a selector dialog backed by `map_readjust_index.json` metadata.
+**Widget:** `PreviewWidget` — top of the right column.
 
-Users can:
-1. Select one or more indexed maps.
-2. Browse a source folder manually when available.
-3. Load maps into preview + sync refinement.
-4. Apply offsets in batch/per-map flow depending on context.
+| Control | What It Does |
+|---------|-------------|
+| **Video Canvas** | Embedded playback area for the installed map's video |
+| **Seek Slider** | Drag to jump to any point; shows current / total time |
+| **-5s / +5s** | Skip backward or forward by 5 seconds |
+| **Play / Stop** | Toggle video+audio playback on or off |
 
-If source media no longer exists, readjust can be unavailable for that entry.
+Use the Preview Widget to visually inspect audio/video synchronization after install.
 
 ---
 
-## Critical V2 Limitations and Quirks
+## Sync Refinement Widget
 
-### Intro AMB (Important)
+**Widget:** `SyncRefinementWidget` — below the Preview Widget in the right column.
 
-Intro AMB generation/trigger attempts are currently under an emergency mitigation path. In practice, intro AMB is intentionally treated as disabled and silent intro placeholders are expected until redesign/parity work is finalized.
+This is where you fine-tune audio and video timing after installing a map.
 
-### IPK Video Timing
+| Control | What It Does |
+|---------|-------------|
+| **Audio Offset (ms)** | Set the audio timing offset in milliseconds |
+| **Video Offset (ms)** checkbox + input | Enable and set a separate video offset (optional) |
+| **±1 / ±10 / ±100 / ±1000** buttons | Quickly nudge audio or video offset values |
+| **Preview** | Start/stop playback with current offset values |
+| **Pad Audio** | Add silence padding to the beginning of audio |
+| **Sync Beatgrid** | Recalculate beatgrid timing based on current offset |
+| **Apply Offset** | Write the current offsets to the installed map files |
+| **Prev Map / Next Map** | Navigate between maps when multiple maps are loaded (batch/readjust flows) |
 
-For many IPK maps, `videoStartTime` remains approximate by source design. Manual video offset refinement in the GUI is expected and normal.
+> **Tip:** The workflow is: adjust offsets → Preview → listen/watch → adjust more → Apply Offset when satisfied.
 
-### Dependency Sensitivity
+---
 
-Preview/install quality depends on local toolchain availability:
-1. FFmpeg/FFprobe are required for key media operations.
-2. vgmstream is required for specific decode paths (notably XMA2/X360 cases).
-3. Playwright Chromium is required for Fetch mode.
+## Log Console
 
-The app includes dependency guardrails and install prompts, but missing/partial toolchains still produce degraded workflows.
+**Widget:** `LogConsoleWidget` — bottom of the right column.
 
-### Path/Case Compatibility
+- **Read-only** scrolling text area showing live application logs.
+- Logs are **color-coded** by severity:
+  - 🟢 **Green** — `SUCCESS` messages
+  - 🔵 **Default** — `INFO` messages
+  - 🟠 **Orange** — `WARNING` messages
+  - 🔴 **Red** — `ERROR` / `CRITICAL` messages
+- Auto-scrolls to the latest log entry.
+- Connected to a **thread-safe Qt logging handler** so background worker output appears in real-time.
 
-Ambient/media path handling includes compatibility fallbacks for mixed path casing conventions (`Audio/AMB` vs `audio/amb` style layouts).
+Use the Log Console to:
+
+1. Monitor progress during install.
+2. Spot warnings about missing files or expired links.
+3. Diagnose errors when something goes wrong.
+
+---
+
+## Metadata Correction Dialog
+
+**Widget:** `MetadataCorrectionDialog` — pops up during install if needed.
+
+If a map's metadata (song title, artist, etc.) contains non-ASCII characters that could crash the game engine, this dialog appears and lets you:
+
+1. **See the original value** with problematic characters highlighted.
+2. **Edit or accept** a sanitized replacement.
+3. Choose **Keep Original** if you believe the characters are safe, or **Apply Replacement** to use the cleaned version.
+
+---
+
+## Settings Dialog
+
+**Widget:** `SettingsDialog` — opened via the **Settings** button in the Action Panel.
+
+The dialog is organized into **tabbed sections**:
+
+### General Tab
+
+| Setting | What It Controls |
+|---------|-----------------|
+| Skip startup pre-flight checks | Disable automatic checks on launch |
+| Hide post-install offset reminder | Suppress the sync refinement popup after install |
+| After install cleanup | `Ask` / `Always delete` / `Keep` temp files |
+| Song unlock status | `Ask` / `Force to 3 (unlocked)` / `Keep original` |
+| Show pre-flight success popup | Whether passing pre-flight shows a confirmation box |
+| Show installation summary popup | Show a detailed checklist at end of install |
+| Show quick-start help on launch | Show beginner guide on app start |
+| Log detail level | `Quiet` / `Normal` / `Detailed` / `Developer` |
+| Theme | `Light` / `Dark` |
+
+### Window Tab
+
+| Setting | What It Controls |
+|---------|-----------------|
+| Enforce minimum window size | Prevent resizing below configured minimum |
+| Minimum window size | Width × Height in pixels |
+| Show floating window size overlay | Display dimensions while resizing |
+| Enable Style Debug Mode | Add colored outlines to help with theme development |
+
+### Media Tab
+
+| Setting | What It Controls |
+|---------|-----------------|
+| Default download quality | `ULTRA_HD` through `LOW` |
+| FFmpeg acceleration | `auto` / `none` |
+| VP9 handling | Re-encode to VP8 or fallback to compatible quality |
+| Preview source | Low-res proxy (faster) or original file |
+
+### Advanced Tab
+
+| Setting | What It Controls |
+|---------|-----------------|
+| FFmpeg / FFprobe / vgmstream paths | Override auto-detected tool locations |
+| 3rd-party tools root | Root directory for JDNext tools |
+| AssetStudio CLI path | Override for Unity asset extraction |
+| Download timeout / retries / delays | Network behavior tuning |
+| Fetch login & bot timeouts | How long to wait for Discord bot interactions |
+| Preview FPS / startup compensation | Fine-tune preview playback behavior |
+| Audio preview fade | Fade duration for preview audio |
+
+### Integrations Tab
+
+| Setting | What It Controls |
+|---------|-----------------|
+| Discord channel URL | Required for Fetch modes — paste the Discord channel URL |
+| Update In-Game Localization | Import localization JSON into game data |
+| Update Song Database | Import JDNext songdb JSON |
+| Install All JDU Maps | Bulk-install every map from a JDU songdb |
+| Install All JDNext Maps | Bulk-install every map from a JDNext songdb |
+| Clean Game Data | Remove all custom maps and installer caches |
+| Clear mapDownloads | Delete the downloaded source files folder |
 
 ---
 
 ## Status Bar
 
-`QStatusBar` remains the concise operation summary surface.
+The bottom status bar shows a concise one-line summary of the current state.
 
-Default message: **"Ready"**.
-
-Typical runtime messages include:
-1. Mode changes
-2. Pre-flight results
-3. Install progress state
-4. Readjust context state
-5. Completion/failure summaries
+- **Default:** `Ready`
+- **During mode change:** `Mode: Fetch JDU`
+- **During install:** Progress and pipeline stage updates
+- **On completion:** Success or failure summary
 
 ---
 
 ## Thread Lifecycle
 
-All heavy operations are worker-driven on `QThread` instances.
-
-Typical lifecycle:
+All heavy operations run on background **QThread** instances to keep the UI responsive.
 
 ```
-User triggers action (Install / Apply / Batch / Readjust)
+User triggers action (Install / Apply / Readjust / Uninstall)
                   │
                   ▼
-1. Build worker for the specific task
-2. Create QThread
+1. Build a worker QObject for the task
+2. Create a QThread
 3. worker.moveToThread(thread)
 4. Connect signals:
-        - thread.started  -> worker.run
-        - worker.progress -> progress panel
-        - worker.status   -> status/log handlers
-        - worker.error    -> error/log handlers
-        - worker.finished -> completion handlers + thread.quit
+        - thread.started  → worker.run
+        - worker.progress → progress panel
+        - worker.status   → status/log handlers
+        - worker.error    → error/log handlers
+        - worker.finished → completion handlers + thread.quit
 5. Lock interactive UI areas while active
 6. thread.start()
                   │
                   ▼
-7. Worker performs task off UI thread
-8. Finished/error signals marshal back to main thread
+7. Worker runs task off the UI thread
+8. Finished/error signals marshal back to the main thread
 9. UI unlock + status refresh + thread cleanup
 ```
 
-**Key guarantee:** Workers do not update Qt widgets directly; UI updates flow through Qt signal-slot boundaries.
+**Key guarantee:** Workers never update Qt widgets directly. All UI updates flow through Qt signal-slot connections.
 
 ---
 
@@ -247,6 +353,15 @@ User triggers action (Install / Apply / Batch / Readjust)
 
 | Method | Purpose |
 |--------|---------|
-| `append_log(text: str)` | Append/log text to the GUI console through logger routing |
+| `append_log(text: str)` | Append text to the GUI console through logger routing |
 | `set_progress(value: int)` | Update progress bar value via progress panel |
 | `set_status(text: str)` | Update status bar message |
+
+---
+
+## Related Docs
+
+- [Usage Guide](USAGE_GUIDE.md) — Full beginner-to-advanced walkthrough
+- [Modes Guide](MODES_GUIDE.md) — Detailed guide per mode
+- [Troubleshooting](TROUBLESHOOTING.md)
+- [Pipeline Reference](../02_core/PIPELINE_REFERENCE.md)

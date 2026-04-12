@@ -1,20 +1,16 @@
-# Manual Map Porting Guide (Just Dance 2021 PC)
+# Manual Map Porting Guide — JDU (Just Dance 2021 PC)
 
 > **Last Updated:** April 2026 | **Applies to:** JD2021 Map Installer v2
 
-This guide provides a technical breakdown of manually porting a Just Dance Unlimited (JDU) map into the Just Dance 2021 PC engine (UbiArt). The automated V2 installer pipeline handles this end-to-end in GUI workflows (Fetch, HTML, IPK, Batch, Manual source), but this guide remains useful when you need to inspect generated output, reproduce one step manually, or debug parity-sensitive edge cases.
+This guide provides a technical breakdown of manually porting a Just Dance Unlimited (JDU) map into the Just Dance 2021 PC engine (UbiArt). The automated V2 installer pipeline handles this end-to-end in GUI workflows (Fetch JDU, HTML JDU, Batch, Manual source), but this guide remains useful when you need to inspect generated output, reproduce one step manually, or debug parity-sensitive edge cases.
 
 ## Current V2 Behavior Notice (Read First)
 
-1. **Intro AMB in automated V2 installs is currently under a temporary mitigation policy.**
-    - Intro AMB attempt logic is intentionally disabled in current V2 runtime behavior.
-    - Silent intro placeholders are expected in affected maps during automated install.
-2. **IPK `videoStartTime` remains approximate in many cases.**
-    - Manual post-install sync refinement is expected for video alignment.
-3. **Runtime dependencies are mandatory for full fidelity.**
+1. **Runtime dependencies are mandatory for full fidelity.**
     - FFmpeg/FFprobe is required for media conversion and probing.
     - vgmstream is required for some X360/XMA2 decode paths.
     - Missing tools cause fallback behavior, degraded previews, or partial installs.
+    - All three tools can be configured via `setup.bat` in the repository root.
 
 ---
 
@@ -27,7 +23,8 @@ This guide provides a technical breakdown of manually porting a Just Dance Unlim
 5. [Critical Timing & Sync](#5-critical-timing--sync)
 6. [Game Integration](#6-game-integration)
 7. [Troubleshooting Guide](#7-troubleshooting-guide)
-8. [Appendix: Batch Preparation](#appendix-batch-preparation)
+8. [Appendix A: Batch Preparation](#appendix-a-batch-preparation)
+9. [Appendix B: JDNext Porting Differences](#appendix-b-jdnext-porting-differences)
 
 ---
 
@@ -36,7 +33,7 @@ This guide provides a technical breakdown of manually porting a Just Dance Unlim
 Before starting, acquire the following original JDU files (via JDHelper or similar):
 
 | Category | Typical File types | Purpose |
-|----------|-------------------|---------|
+|----------|-------------------|---------| 
 | **Core Media** | `.ogg`, `.webm` | Gameplay audio and video. |
 | **Data IPK** | `*_main_scene_pc.ipk` | Contains timing, choreography, and templates. |
 | **Textures** | `.png.ckd`, `.tga.ckd` | Menu art, coach textures, and pictograms. |
@@ -191,7 +188,7 @@ JDU uses JSON natively, but JD2021 PC expects Lua. The conversion involves both 
 - Floats should use 6 decimal places for consistency
 - Strings must escape `"`, `\n`, and `\r`
 
-**UbiArt-specific processing (handled by ``parsers/binary_ckd.py``):**
+**UbiArt-specific processing (handled by `parsers/binary_ckd.py`):**
 - **MotionClip Color**: Convert `[a, r, g, b]` float arrays to hex strings (e.g., `"0x0e8cd3ff"`)
 - **MotionPlatformSpecifics**: Convert platform dict to KEY/VAL array format
 - **Tracks array**: Build `Tracks = { {TapeTrack = {id = X}}, ... }` from unique TrackIds across all clips
@@ -261,11 +258,11 @@ The first sample of the WAV corresponds to marker 0 = beat `startBeat`. If `star
 | **Autodance error after Apply** | Sync refinement regenerated empty stub over converted data | Reinstall the map; the pipeline now protects autodance files from overwrite |
 | **Kinect gesture load failure / coach-select freeze** | Non-Kinect or newer-schema `.gesture` files copied to PC/ (including camera-scoring style gesture payloads) | Only use `.gesture` files from X360/DURANGO (Kinect v1/v2 format). Treat unknown/new-schema gesture payloads as incompatible with JD2021 PC and skip them. |
 | **"Can't find gesture resource"** | Missing gesture file in PC/ Moves folder | Ensure PC/ contains the union of `.gesture` (from DURANGO) and `.msm` (from WIIU) files from all platforms |
-| **Preview/decode failures for some maps** | Missing FFmpeg/FFprobe or missing vgmstream runtime | Re-run dependency setup and confirm both toolchains are available before reinstall/readjust |
+| **Preview/decode failures for some maps** | Missing FFmpeg/FFprobe or missing vgmstream runtime | Re-run dependency setup (`setup.bat`) and confirm both toolchains are available before reinstall/readjust |
 
 ---
 
-## Appendix: Batch Preparation
+## Appendix A: Batch Preparation
 
 If you plan to convert many maps, prepare a single parent directory where each child folder contains the two HTML exports (`assets.html` and `nohud.html`) captured from JDHelper.
 
@@ -283,8 +280,81 @@ my_maps/
 
 Batch flow in V2:
 1. Launch the installer GUI.
-2. Select **Batch Directory** mode.
+2. Select **Batch** mode.
 3. Point to the parent folder (`my_maps/`).
 4. Run install, then use sync/readjust for final timing polish as needed.
 
 If the installer cannot detect your JD path, set it explicitly in installer settings and verify write access to the target `jd21` tree.
+
+---
+
+## Appendix B: JDNext Porting Differences
+
+JDNext maps use **Unity asset bundles** instead of UbiArt IPK archives. The V2 installer handles JDNext maps through dedicated **Fetch JDNext** and **HTML JDNext** modes, as well as the **Manual mode** for hand-assembled JDNext extractions. Key differences from JDU porting:
+
+### Source Bundle Format
+
+JDNext maps are distributed as Unity `.bundle` files. V2 uses a dual-strategy extraction pipeline (`jdnext_bundle_strategy.py`):
+
+| Strategy | Tool | Priority | Output |
+|----------|------|----------|--------|
+| `assetstudio_first` | AssetStudioModCLI.exe | Try first | Type-grouped folders: `TextAsset/`, `MonoBehaviour/`, `Texture2D/`, `Sprite/` |
+| `unitypy_first` | UnityPy (Python) | Try first | Type folders: `textures/`, `audio/`, `video/`, `text/`, `typetree/` |
+
+Both strategies fall back to the other if the primary tool fails. The `assetstudio_first` strategy is the default.
+
+### Asset Mapping
+
+After raw extraction, `map_assetstudio_output()` maps Unity-side assets to the JD2021 normalizer format:
+
+| Unity Source | Mapped Destination | Notes |
+|--------------|--------------------|-------|
+| `MonoBehaviour/<codename>.json` | `monobehaviour/map.json` | Main map data (DanceData, KaraokeData) |
+| `MonoBehaviour/MusicTrack.json` | `monobehaviour/musictrack.json` + `<codename>_musictrack.tpl.ckd` | Auto-synthesized CKD from Unity JSON structure |
+| `TextAsset/*.gesture` | `timeline/moves/wiiu/*.gesture` | Lowercased filenames |
+| `TextAsset/*.msm` | `timeline/moves/wiiu/*.msm` | Lowercased filenames |
+| `Texture2D/*.png` + `Sprite/*.png` | `pictos/` or `menuart/` | Split by picto name matching from map JSON |
+
+### Tape Synthesis from Map JSON
+
+JDNext maps embed dance and karaoke data as JSON inside the map MonoBehaviour, not as separate tape files. The `_synthesize_tapes_from_map_json()` function creates standard-format `.dtape.ckd` and `.ktape.ckd` files:
+
+**Dance tape clips extracted:**
+- `MotionClips` → `MotionClip` (with classifier paths, gold moves, coach IDs, color normalization)
+- `PictoClips` → `PictogramClip` (with picto path generation)
+- `GoldEffectClips` → `GoldEffectClip`
+
+**Karaoke tape clips extracted:**
+- `Clips` → `KaraokeClip` (with lyrics, pitch, tolerance values)
+
+**Color normalization** for MotionClips: hex string colors (e.g., `"0x0e8cd3ff"`) are converted to `[a, r, g, b]` float arrays, with a yellow default fallback `[1.0, 0.968, 0.164, 0.552]`.
+
+**Move name normalization**: classifier-like paths (`world/maps/.../foo.gesture`) are stripped to bare stems, and extensions (`.gesture`, `.msm`) are removed before being re-applied based on `MoveType`.
+
+### MusicTrack Synthesis
+
+The `_synthesize_musictrack_tpl_ckd()` function converts Unity-format musictrack JSON to the CKD format expected by the normalizer:
+
+```
+Unity MonoBehaviour (m_structure.MusicTrackStructure)
+  → Extract markers (VAL/val lists)
+  → Extract signatures (beats + marker pairs)
+  → Extract sections (sectionType + marker pairs)
+  → Write CKD JSON with COMPONENTS[0].trackData.structure
+```
+
+Fields preserved: `markers`, `signatures`, `sections`, `startBeat`, `endBeat`, `videoStartTime`, `previewEntry`, `previewLoopStart`, `previewLoopEnd`, `volume`, `fadeInDuration`, `fadeInType`, `fadeOutDuration`, `fadeOutType`.
+
+### Encrypted Bundles
+
+Some JDNext bundles are encrypted. The UnityPy extraction path detects this and reports `key_sig` and `data_sig` from the error. Currently there is no automated decrypt path — encrypted bundles must be decrypted externally before extraction.
+
+### Manual JDNext Porting Checklist
+
+1. Obtain the `.bundle` file for the target map.
+2. Extract using AssetStudioModCLI or UnityPy (or the V2 pipeline automatically).
+3. Verify `map.json` and `musictrack.json` are present in extracted output.
+4. Confirm tape synthesis produced valid `.dtape.ckd` and `.ktape.ckd`.
+5. Check gesture/msm files are placed under `timeline/moves/wiiu/`.
+6. Verify picto/menuart texture classification.
+7. Continue from Step 3 of the JDU guide (Parse MusicTrack) onwards — all downstream steps are identical.

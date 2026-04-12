@@ -2,7 +2,7 @@
 
 > **Last Updated:** April 2026 | **Applies to:** JD2021 Map Installer v2
 
-This document covers the NOHUD video quality system in JD2021 Map Installer v2: available tiers, selection/fallback behavior, and technical analysis of source video files.
+This document covers the NOHUD video quality system in JD2021 Map Installer v2: available tiers, selection/fallback behavior, VP9 compatibility handling, and how `media_processor.py` processes video files using FFmpeg.
 
 ---
 
@@ -12,12 +12,13 @@ These constraints affect video/audio behavior in current v2 builds:
 
 1. **IPK video timing remains approximate by design.**
   X360/IPK source metadata often does not provide a reliable lead-in, so generated defaults can still require manual Video Offset tuning.
-2. **Intro AMB playback is temporarily disabled globally.**
-  Intro AMB outputs are currently forced to silent placeholders as a temporary mitigation. This is expected behavior in active v2 builds.
-3. **Runtime dependencies are required for stable media workflows.**
-  FFmpeg/FFprobe and vgmstream are required for full decode/preview/convert coverage; missing tools can degrade sync and media validation workflows. Fetch mode also requires Playwright Chromium.
-4. **Dedicated preview assets are optional in current runtime wiring.**
+2. **Runtime dependencies are required for stable media workflows.**
+  FFmpeg/FFprobe and vgmstream must be available for full decode/preview/convert coverage. FFmpeg is expected on the system `PATH`; vgmstream is auto-installed by `setup.bat` into `tools/vgmstream/`. Fetch mode also requires Playwright Chromium.
+3. **Dedicated preview assets are optional in current runtime wiring.**
   Current installs remain playable and preview-capable without `AudioPreview` / `MapPreview` files; preview loop behavior is typically driven by `.trk` marker fields over main media. See [ASSETS.md](ASSETS.md) for exact with/without differences.
+
+> [!IMPORTANT]
+> **Text vs Binary distinction:** Video quality selection and tier mapping are **text-based** operations — the pipeline matches filename patterns against URL strings parsed from HTML. The actual binary video work (copy, transcode, re-encode) is handled by `media_processor.py` via FFmpeg subprocess calls. See [ASSETS.md](ASSETS.md) for the full media pipeline reference.
 
 ---
 
@@ -70,14 +71,17 @@ Search order: HIGH_HD -> HIGH -> MID_HD -> MID -> LOW_HD -> LOW -> ULTRA_HD -> U
 
 The first available tier is selected. If it differs from the requested tier, a status message is logged.
 
+> [!NOTE]
+> Quality selection operates entirely on **text-based filename pattern matching** against URL strings. No video files are opened or probed during selection — that only happens downstream in `media_processor.py`.
+
 ### JDNext VP9 Handling Modes
 
 For JDNext links, behavior is controlled by `vp9_handling_mode`:
 
-| Mode | Behavior |
-|---|---|
-| `reencode_to_vp8` | Keeps requested JDNext VP9 tier, then re-encodes VP9 -> VP8 during install for compatibility. |
-| `fallback_compatible_down` | Avoids VP9 tiers and picks the next compatible `*_HD` tier down (no VP9 re-encode path). |
+| Mode | Behavior | Binary media impact |
+|---|---|---|
+| `reencode_to_vp8` | Keeps requested JDNext VP9 tier, then re-encodes VP9 → VP8 during install for compatibility. | `copy_video()` invokes FFmpeg with `libvpx` encoder (see encoding params below). |
+| `fallback_compatible_down` | Avoids VP9 tiers and picks the next compatible `*_HD` tier down (no VP9 re-encode path). | `copy_video()` performs a byte-for-byte `shutil.copy2`. |
 
 Compatibility-down examples:
 
@@ -86,6 +90,25 @@ Requested: ULTRA   -> search ULTRA_HD -> HIGH_HD -> MID_HD -> LOW_HD
 Requested: HIGH    -> search MID_HD -> LOW_HD
 Requested: MID_HD  -> search MID_HD -> LOW_HD
 ```
+
+### VP9→VP8 Transcoding Details (media_processor.py)
+
+When `vp9_handling_mode` is `reencode_to_vp8`, the `copy_video()` function in `media_processor.py` transcodes using these FFmpeg parameters:
+
+```
+ffmpeg -y -hwaccel auto -i <source> -an -c:v libvpx -pix_fmt yuv420p \
+  -deadline good -cpu-used 2 -row-mt 1 -threads 0 \
+  -b:v 8500k -maxrate 11000k -bufsize 22000k \
+  -qmin 4 -qmax 32 -g 25 -keyint_min 25 -sc_threshold 0 \
+  <output.webm>
+```
+
+Key encoding choices:
+- **`-deadline good`** — balanced quality/speed (avoids `best` which is prohibitively slow).
+- **`-cpu-used 2`** — sweet spot for quality vs encoding time.
+- **`-row-mt 1`** — enables row-based multithreading for VP8.
+- **`-threads 0`** — uses all available CPU cores.
+- **`-hwaccel auto`** — auto-injected by `run_ffmpeg()` for decode acceleration.
 
 ### Existing Video Detection
 
@@ -160,6 +183,38 @@ In standard workflows, one quality tier is used per map install target. Switchin
 
 ---
 
+## How media_processor.py Handles Video Files
+
+The video processing functions in `media_processor.py` are the **only** place where binary video data is read, copied, or transcoded:
+
+| Function | Binary operation | When it runs |
+|---|---|---|
+| `copy_video()` | Copies or transcodes a WebM file to the install target directory. Decides at runtime whether to use `shutil.copy2` (same format, no VP9 issue) or FFmpeg (VP9→VP8 transcode, format conversion, or forced re-encode). | During install, after download/selection. |
+| `generate_map_preview()` | Extracts a lower-quality excerpt clip from the main video using FFmpeg (`-ss`, `-t`, VP9 output). | During preview generation (optional). |
+| `_get_video_codec()` | Probes the primary video codec via FFprobe (`-show_entries stream=codec_name`). Used to detect VP9 sources. | Inside `copy_video()` decision logic. |
+| `get_video_duration()` | Probes video duration via FFprobe (`-show_entries format=duration`). | Timing calculations. |
+
+### Copy-vs-transcode decision tree in copy_video()
+
+```
+Input: source WebM + config
+  │
+  ├─ force_reencode=True? → FFmpeg transcode (always)
+  │
+  ├─ Different output extension? → FFmpeg transcode
+  │
+  ├─ Source is VP9?
+  │   ├─ vp9_handling_mode = "reencode_to_vp8" → FFmpeg VP9→VP8 transcode
+  │   └─ vp9_handling_mode = "fallback_compatible_down" → shutil.copy2 (with warning)
+  │
+  └─ Same format, not VP9, no force → shutil.copy2 (byte-for-byte copy)
+```
+
+> [!TIP]
+> **Performance note:** VP9→VP8 re-encoding is CPU-intensive and can take several minutes per map at ULTRA/ULTRA_HD quality. The `fallback_compatible_down` mode avoids this entirely by selecting HD-variant tiers that are already VP8.
+
+---
+
 ## NOHUD Video File Analysis
 
 These are **NOHUD (No Heads-Up Display) coach videos**: dance footage without gameplay overlays (score, arrows, coach UI, etc.). The 8 logical tiers represent **4 quality levels x 2 slots** (`*_HD` and non-`HD`) plus one shared audio stream.
@@ -216,6 +271,18 @@ Audio/video are intentionally not 1:1 duration-matched at source level. Final pl
 
 ---
 
+## Dependency Summary for Video Operations
+
+| Tool | Required for | Provisioned by |
+|---|---|---|
+| **FFmpeg** | VP9→VP8 transcoding, preview generation, all video format conversion | Must be on system `PATH` (not auto-installed by `setup.bat`) |
+| **FFprobe** | Codec detection, duration probing | Must be on system `PATH` (bundled with FFmpeg) |
+
+> [!WARNING]
+> Without FFmpeg on the system `PATH`, `copy_video()` will fall back to byte-for-byte copy even for VP9 sources, and `generate_map_preview()` will fail entirely. Install FFmpeg from [ffmpeg.org](https://ffmpeg.org) or via a package manager before running the installer.
+
+---
+
 ## Quick-Reference Q&A
 
 | Question | Answer |
@@ -223,4 +290,5 @@ Audio/video are intentionally not 1:1 duration-matched at source level. Final pl
 | Which variants should I use? | Prefer **HD** for ULTRA/HIGH (standard aspect output, Profile 0). MID/LOW variants are mostly interchangeable. |
 | Why is ULTRA_HD much larger? | 1920x1080 contains about 2.3x the pixel count of 1216x720, reflected in output size and bitrate. |
 | Why is video sync still off on some IPK maps? | IPK `videoStartTime` metadata is often incomplete/approximate, so manual Video Offset tuning is expected for some maps. |
-| Why are intro ambient sections silent? | Current v2 policy temporarily disables intro AMB playback and writes silent intro placeholders. |
+| Can I skip VP9→VP8 re-encoding? | Yes — set `vp9_handling_mode` to `fallback_compatible_down` in settings. The pipeline will select HD-variant tiers (VP8) instead. |
+| Where does binary video processing happen? | Exclusively in `media_processor.py` functions: `copy_video()`, `generate_map_preview()`, `_get_video_codec()`, `get_video_duration()`. |

@@ -41,30 +41,30 @@ logger = logging.getLogger("jd2021.ui.widgets.mode_selector")
 # Mode identifiers (indices match the combo-box order)
 MODE_FETCH = 0
 MODE_HTML = 1
-MODE_IPK = 2
-MODE_BATCH = 3
-MODE_MANUAL = 4
-MODE_JDNEXT = 5
-MODE_HTML_JDNEXT = 6
+MODE_JDNEXT = 2
+MODE_HTML_JDNEXT = 3
+MODE_IPK = 4
+MODE_BATCH = 5
+MODE_MANUAL = 6
 
 MODE_LABELS = [
-    "Fetch (Codename)",
-    "HTML Files",
+    "Fetch JDU",
+    "HTML JDU",
+    "Fetch JDNext",
+    "HTML JDNext",
     "IPK Archive",
     "Batch (Directory)",
     "Manual (Directory)",
-    "Fetch JDNext (Codename)",
-    "HTML Files JDNext",
 ]
 
 MODE_KEYS = [
     "fetch",
     "html",
+    "jdnext",
+    "html_jdnext",
     "ipk",
     "batch",
     "manual",
-    "jdnext",
-    "html_jdnext",
 ]
 
 
@@ -145,11 +145,11 @@ class ModeSelectorWidget(QWidget):
         self.inputs: dict[str, dict[str, QLineEdit]] = {
             "fetch": {},
             "html": {},
+            "jdnext": {},
+            "html_jdnext": {},
             "ipk": {},
             "batch": {},
             "manual": {},
-            "jdnext": {},
-            "html_jdnext": {},
         }
         self._build_ui()
 
@@ -185,11 +185,11 @@ class ModeSelectorWidget(QWidget):
 
         self._stack.addWidget(self._build_fetch_page())  # 0
         self._stack.addWidget(self._build_html_page())  # 1
-        self._stack.addWidget(self._build_ipk_page())  # 2
-        self._stack.addWidget(self._build_batch_page())  # 3
-        self._stack.addWidget(self._build_manual_page())  # 4
-        self._stack.addWidget(self._build_jdnext_page())  # 5
-        self._stack.addWidget(self._build_html_jdnext_page())  # 6
+        self._stack.addWidget(self._build_jdnext_page())  # 2
+        self._stack.addWidget(self._build_html_jdnext_page())  # 3
+        self._stack.addWidget(self._build_ipk_page())  # 4
+        self._stack.addWidget(self._build_batch_page())  # 5
+        self._stack.addWidget(self._build_manual_page())  # 6
         self._wire_state_signals()
         self._fit_current_page_height()
 

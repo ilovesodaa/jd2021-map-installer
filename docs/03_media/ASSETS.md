@@ -1,23 +1,38 @@
-# Asset HTML Files
+# Asset HTML Files & Media Pipeline
 
 > **Last Updated:** April 2026 | **Applies to:** JD2021 Map Installer v2
 
-Each map install requires **two HTML files** exported from the JDHelper Discord bot. These are the only external inputs the installer needs before it can download and install a map.
+This page documents the **HTML input workflow** used by JD2021 Map Installer v2 and explains how discovered assets flow through the **media processing pipeline** (`media_processor.py`). V2 also supports Fetch by codename, IPK archive mode, batch directory mode, and manual source folder installs; those modes are documented separately.
 
-This page documents the **HTML input workflow** used by JD2021 Map Installer v2. V2 also supports Fetch by codename, IPK archive mode, batch directory mode, and manual source folder installs; those modes are documented separately.
+---
 
-> **Critical V2 Behavior and Limits (Read First)**
->
-> 1. **Intro AMB is temporarily disabled globally** as a stability mitigation in v2. Expect silent intro placeholders rather than reliable intro ambient playback.
-> 2. **Video timing may still require manual adjustment** after install in the Sync/Readjust flow. This is especially common in IPK-derived maps, and can still appear map-by-map in other sources.
-> 3. **FFmpeg/FFprobe and vgmstream must be available** for full media processing/decoding behavior. Missing tools can cause degraded behavior, fallback paths, or install-time warnings.
+## Two Domains of Asset Handling
 
-| File | Conventional name | Source bot command | Contains |
+The installer processes assets in two fundamentally different ways. Understanding this distinction is essential:
+
+| Domain | What it does | Key modules | Tools used |
 |---|---|---|---|
-| Asset HTML | `assets.html` | JDU assets query | Game data files (textures, main scene ZIP, preview media) |
-| NOHUD HTML | `nohud.html` | NOHUD video query | Private CDN links for the full-length coach videos and audio |
+| **Text-based asset parsing** | Reads HTML files as UTF-8 text, extracts `href` URLs via regex, categorizes links by filename pattern. No binary interpretation. | `extract_urls()`, `download_files()` | None (pure Python string/regex) |
+| **Binary media encoding** | Copies, transcodes, decodes, and converts downloaded A/V and image files into formats the UbiArt engine expects. | `media_processor.py`, `texture_decoder.py`, `tape_converter.py` | FFmpeg, FFprobe, vgmstream, Pillow |
 
-> **Link expiry:** NOHUD links are time-limited (signed with `exp=` and `hmac=` parameters). Asset links also expire, though typically after longer. Run the installer immediately after saving the files.
+> [!IMPORTANT]
+> **HTML parsing is text-only.** The parser never interprets binary content. It reads `href` attributes from Discord embed HTML, strips proxy URLs, and returns a flat list of CDN links. All binary media work happens downstream in `media_processor.py` and its companion modules.
+
+---
+
+## Dependency Setup
+
+External tools required for binary media operations are configured automatically by `setup.bat` before the first run:
+
+| Tool | Purpose | How it's provisioned |
+|---|---|---|
+| **FFmpeg / FFprobe** | Video transcoding (VP9→VP8), audio format conversion (OGG→WAV), probing durations, generating previews, applying gain/trim/pad | Expected on the system `PATH`. The installer defaults to `ffmpeg` / `ffprobe` commands. Install via [ffmpeg.org](https://ffmpeg.org) or a package manager. |
+| **vgmstream** | Decoding Xbox 360 XMA2 audio from IPK-derived `.wav.ckd` files | Auto-installed by `setup.bat` step 7/7 into `tools/vgmstream/`. Downloaded from GitHub nightly releases. |
+| **Pillow** | Image format conversion (DDS/TGA/PNG), cover art processing, pictogram canvas compositing | Installed via `pip install -r requirements.txt` (setup.bat step 1/7). |
+| **Playwright Chromium** | Fetch mode only — automated browser for Discord bot interaction | Installed by `setup.bat` step 2/7 (`python -m playwright install chromium`). |
+
+> [!NOTE]
+> FFmpeg and FFprobe are **not** bundled or auto-downloaded by `setup.bat`. They must be available on the system `PATH` before running the installer. All other media tools are provisioned automatically.
 
 ---
 
@@ -127,7 +142,7 @@ The preferred video quality is set by the `--quality` flag (CLI) or the Video Qu
 
 ---
 
-## How the parser works
+## How the parser works (text-based)
 
 Both files are processed identically by `extract_urls()`:
 
@@ -137,6 +152,68 @@ Both files are processed identically by `extract_urls()`:
 4. Returns a flat list of CDN URLs.
 
 The distinction between asset and NOHUD content is made downstream in `download_files()` by filename pattern matching: `.ogg` without `AudioPreview` = audio track, `_ULTRA.webm` / `_HIGH.hd.webm` etc. = video, `MAIN_SCENE_*.zip` = main scene, `.ckd` / `.jpg` / `.png` = textures.
+
+> [!NOTE]
+> This entire parsing stage operates on **text only**. No binary data is read, no media tools are invoked, and no format conversion occurs. The parser produces a list of URLs; all binary media work happens in the next stage.
+
+---
+
+## Media Processing Pipeline (binary)
+
+After assets are downloaded, `media_processor.py` handles all binary media conversion. This module is the central hub for A/V and image operations.
+
+### Video processing
+
+| Function | What it does | Tools used |
+|---|---|---|
+| `copy_video()` | Copies a WebM to the install target. If source is VP9 and `vp9_handling_mode` is `reencode_to_vp8`, transcodes VP9→VP8 via FFmpeg with optimized encoding params (`libvpx`, `deadline=good`, `cpu-used=2`, row-mt). Otherwise, performs a byte-for-byte `shutil.copy2`. | FFmpeg (transcode path only) |
+| `generate_map_preview()` | Extracts a lower-quality excerpt clip from the main video for the map selection screen. | FFmpeg |
+
+### Audio processing
+
+| Function | What it does | Tools used |
+|---|---|---|
+| `copy_audio()` | Copies or transcodes audio to the install target. OGG→WAV transcoding uses FFmpeg (`pcm_s16le`, 48 kHz). Same-format copies use `shutil.copy2`. | FFmpeg (transcode path only) |
+| `convert_audio()` | Full audio conversion pipeline: extracts CKD payloads, generates menu preview OGG, produces engine-compatible 48 kHz WAV with offset trimming/padding via `a_offset`. | FFmpeg, vgmstream (for CKD/XMA2) |
+| `generate_audio_preview()` | Creates a trimmed audio preview with configurable fade-out. | FFmpeg |
+| `apply_audio_gain()` | Applies dB gain adjustment to an audio file in-place using atomic temp-file replacement. | FFmpeg |
+| `generate_intro_amb()` | Generates intro ambient WAV for pre-roll silence coverage (currently writes silent placeholders under temporary mitigation). | FFmpeg |
+| `extract_amb_clips()` | Extracts SoundSetClip audio segments from cinematic tapes with timeline-based trimming and fade-out. | FFmpeg |
+| `extract_ckd_audio_v1()` | Strips 44-byte CKD header, detects RIFF/OggS magic, falls back to vgmstream for XMA2 payloads. | vgmstream, FFmpeg (fallback) |
+| `decode_xma2_audio()` | Decodes Xbox 360 XMA2 audio to WAV via `vgmstream-cli`. | vgmstream |
+
+### Image processing
+
+| Function | What it does | Tools used |
+|---|---|---|
+| `convert_image()` | Converts between image formats with optional resize (Pillow LANCZOS). | Pillow |
+| `generate_cover_tga()` | Converts cover art to uncompressed RGBA TGA for the game engine. | Pillow |
+| `process_menu_art()` | Validates, heals, and duplicates MenuArt textures — ensures `cover_generic`/`cover_online` parity, re-saves as 32-bit RGBA TGA. | Pillow |
+
+### CKD Audio Decode Pipeline (extract_ckd_audio_v1)
+
+The CKD audio extraction follows a multi-stage fallback chain:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Input: *.wav.ckd or *.ogg.ckd                                 │
+├─────────────────────────────────────────────────────────────────┤
+│  1. Try vgmstream on raw CKD (for .wav.ckd only)               │
+│     ├─ Success → validate 48kHz stereo → return                 │
+│     └─ Wrong format → FFmpeg transcode to 48kHz stereo          │
+├─────────────────────────────────────────────────────────────────┤
+│  2. Strip 44-byte CKD header                                    │
+│     ├─ OggS magic found → write .ogg → return                   │
+│     ├─ RIFF magic found → write .wav → return                   │
+│     └─ No magic → scan wider window for RIFF/OggS               │
+├─────────────────────────────────────────────────────────────────┤
+│  3. Proprietary payload (XMA etc.)                              │
+│     ├─ vgmstream decode → validate → return                     │
+│     └─ FFmpeg unknown-payload fallback → return                  │
+├─────────────────────────────────────────────────────────────────┤
+│  4. All decoders failed → return None (silent fallback upstream) │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ---
 

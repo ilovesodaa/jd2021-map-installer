@@ -4,7 +4,11 @@
 
 This document explains the UbiArt engine's audio/video synchronization model, the pre-roll silence problem that affects most ported maps, the AMB-based strategy, and IPK-specific audio handling.
 
-> **Critical current-state note (V2):** Intro AMB generation/playback attempts are temporarily disabled globally as a mitigation. The installer currently forces silent intro placeholders rather than generating active intro AMB audio. See Sections 3, 7, and 8.
+> [!IMPORTANT]
+> **Text vs Binary distinction:** This document describes **runtime timing semantics** — how the engine interprets numeric fields parsed from text-based `.trk` / `.tpl` files. The actual binary media encoding (WAV generation, OGG trimming, AMB audio extraction) is performed by `media_processor.py` using FFmpeg and vgmstream. See [ASSETS.md](ASSETS.md) for the full media pipeline reference.
+
+> [!NOTE]
+> **Intro AMB generation is now enabled by default.** The `INTRO_AMB_ATTEMPT_ENABLED` flag in `media_processor.py` is set to `True`. The installer generates active intro AMB audio for maps with negative `videoStartTime`, covering the pre-roll silence window.
 
 ---
 
@@ -27,6 +31,9 @@ The engine couples two behaviors to `videoStartTime`:
 These two behaviors are **inseparably coupled** through a single parameter. There is no mechanism to set them independently.
 
 This timing model applies across active V2 install/update flows (Fetch, HTML, IPK, Batch, Manual, and readjust) whenever MusicTrack timing is generated, preserved, or re-applied.
+
+> [!NOTE]
+> **Parsing context:** These timing fields are read from **text-based** CKD JSON or Lua config files. The parser (`tape_converter.py`, MusicTrack normalizer) reads them as structured text. No binary audio data is touched during timing field extraction — that happens later in `media_processor.py`.
 
 ---
 
@@ -65,13 +72,29 @@ The intended intro AMB strategy is:
 
 ### Current V2 runtime policy (April 2026)
 
-- Intro AMB attempts are temporarily disabled globally in the installer pipeline.
-- Intro AMB WAV outputs are forced to silent placeholders for both Fetch/HTML and IPK flows.
-- This is an intentional mitigation while AMB reliability/parity issues are being redesigned.
+- **Intro AMB generation is enabled by default** (`INTRO_AMB_ATTEMPT_ENABLED = True` in `media_processor.py`).
+- The `generate_intro_amb()` function produces active intro AMB audio using FFmpeg:
+  - Extracts a segment from the map's OGG source, trimmed and delayed to align with the video pre-roll window.
+  - Applies marker-based or video-aligned duration calculation.
+  - Falls back to silent placeholders only when `attempt_enabled=False` is explicitly passed or when no pre-roll silence exists (`a_offset >= 0` and `v_override >= 0`).
 
-### Why same-source overlap remains useful theory
+### Why same-source overlap works
 
-When AMB is eventually re-enabled, overlap theory still applies: two phase-coherent sources reading the same audio segment overlap as a louder single source rather than echo/doubling. The design formulas in Sections 5-6 are retained as technical reference for that intended behavior.
+When the AMB and main WAV overlap, two phase-coherent sources reading the same audio segment overlap as a louder single source rather than echo/doubling. The design ensures AMB content is extracted from the same OGG source used for the main track.
+
+### How media_processor.py generates AMB audio
+
+The `generate_intro_amb()` function in `media_processor.py` performs these **binary media operations** using FFmpeg:
+
+1. **Resolves the AMB directory** with case-insensitive fallback (`Audio/AMB`, `audio/amb`, etc.).
+2. **Computes timing** from `v_override`, `a_offset`, and `marker_preroll_ms` (text-parsed values).
+3. **Extracts audio** from the OGG source using FFmpeg with `-ss` (front trim) and `-t` (duration).
+4. **Applies delay padding** via FFmpeg `adelay` filter when `audio_delay > 0`.
+5. **Writes the intro WAV** at 48 kHz to the AMB directory.
+6. **Generates `.ilu` and `.tpl` files** (text-based UbiArt actor descriptors) when no existing wrappers are found.
+
+> [!TIP]
+> The AMB generation pipeline cleanly illustrates the text/binary boundary: timing values are parsed from text config files upstream, then passed as numeric parameters to `generate_intro_amb()`, which performs all binary audio work via FFmpeg subprocess calls.
 
 ---
 
@@ -97,6 +120,11 @@ a_offset          = -(marker_preroll_ms / 1000.0)
 
 `markers[idx]` is the sample position of beat 0 in the audio. Dividing by 48 converts 48 kHz samples to milliseconds.
 
+**How `a_offset` drives binary audio conversion:** The `convert_audio()` function in `media_processor.py` uses `a_offset` to control FFmpeg:
+- `a_offset == 0` → straight conversion to 48 kHz WAV (`-ar 48000`)
+- `a_offset < 0` → FFmpeg trims the first `abs(a_offset)` seconds (`-ss`)
+- `a_offset > 0` → FFmpeg pads silence via `adelay` filter
+
 ### IPK Maps (Xbox 360 Binary Mode)
 
 For IPK maps extracted from Xbox 360 archives, handling differs:
@@ -111,6 +139,8 @@ For IPK maps extracted from Xbox 360 archives, handling differs:
 
 3. **Video lead-in is not encoded in binary metadata** - synthesized `v_override` only accounts for marker-derived preroll timing. Additional per-map video lead-in must be tuned manually.
 
+4. **XMA2 audio decoding** is handled by `decode_xma2_audio()` in `media_processor.py`, which invokes `vgmstream-cli` as a subprocess. The resulting WAV is validated for 48 kHz stereo format; mismatches are transcoded via FFmpeg.
+
 ### Community Tool Validation
 
 The marker formula `markers[abs(startBeat)] / 48` (milliseconds) is validated by multiple community tools:
@@ -121,11 +151,9 @@ The marker formula `markers[abs(startBeat)] / 48` (milliseconds) is validated by
 
 ---
 
-## 5. Timing Formula (Reference for Intended AMB Mode)
+## 5. Timing Formula (AMB Mode)
 
-> **Status:** Reference/design section. This logic is currently not active in default V2 runtime because intro AMB attempts are globally disabled.
-
-If intro AMB generation is re-enabled, timing is computed in two steps:
+Timing is computed in two steps:
 
 **Step 1: Determine total intro window length and any audio delay.**
 ```
@@ -165,44 +193,70 @@ fade_start         = 0.085 + 2.060 - 0.200 = 1.945s
 
 A `200ms` linear fade-out is applied at `fade_start` to avoid hard-cut handoff artifacts.
 
+**Binary implementation:** These computed values are passed to FFmpeg in `generate_intro_amb()`:
+- `trim_front_s` → FFmpeg `-ss` (input seek)
+- `audio_content_dur` → FFmpeg `-t` (duration limit)
+- `audio_delay` → FFmpeg `adelay` filter (silence padding)
+- Output is always 48 kHz WAV written to `Audio/AMB/`.
+
 ---
 
-## 6. AMB File Requirements (Reference)
-
-> **Status:** File shapes below remain relevant for asset compatibility, but intro audio payloads are currently emitted as silent placeholders under the temporary mitigation.
+## 6. AMB File Requirements
 
 Each intro AMB uses three files under `Audio/AMB/`:
 
-| File | Contents |
-|---|---|
-| `amb_{mapname}_intro.wav` | PCM 48kHz stereo; currently written as a silent placeholder in default V2 runtime |
-| `amb_{mapname}_intro.ilu` | Sound descriptor (`category="amb"`, `playMode=1`, `loop=0`) |
-| `amb_{mapname}_intro.tpl` | Actor template that references SoundComponent + `.ilu` |
+| File | Contents | Domain |
+|---|---|---|
+| `amb_{mapname}_intro.wav` | PCM 48 kHz stereo; generated by FFmpeg from OGG source | **Binary** (media_processor.py) |
+| `amb_{mapname}_intro.ilu` | Sound descriptor (`category="amb"`, `playMode=1`, `loop=0`) | **Text** (generated Lua-like config) |
+| `amb_{mapname}_intro.tpl` | Actor template that references SoundComponent + `.ilu` | **Text** (generated Lua-like config) |
 
 The actor is referenced from `{MapName}_audio.isc` as a `SoundComponent` actor.
 
 The `.ilu` `volume = 0` field is a dB offset (`0 = unity`), not a mute flag.
 
+> [!NOTE]
+> The `.ilu` and `.tpl` files are **pure text** — generated directly by `generate_intro_amb()` using Python string formatting. Only the `.wav` file is a binary artifact produced by FFmpeg.
+
 ---
 
-## 7. Pipeline Integration (Current vs Intended)
+## 7. Pipeline Integration
 
-The AMB-related pipeline functions remain part of the architecture, but behavior is currently split between design intent and temporary runtime policy.
+### Audio conversion flow (convert_audio)
 
-### Current runtime behavior (April 2026)
+The `convert_audio()` function in `media_processor.py` orchestrates the full audio pipeline for a map:
 
-1. Intro AMB attempts are gated off globally.
-2. Generated/reconciled intro WAVs are forced to silent placeholders.
-3. This applies across Fetch/HTML/IPK and interactive re-sync loops.
+```
+Input: source audio (.ogg, .wav, or .ckd)
+  │
+  ├─ CKD? → extract_ckd_audio_v1()  [vgmstream / header strip]
+  │         └─ Failed? → write silent WAV + silent OGG fallback
+  │
+  ├─ Generate menu preview OGG
+  │   ├─ Source is .ogg → shutil.copy2
+  │   └─ Other format → FFmpeg transcode
+  │
+  └─ Generate engine WAV (48 kHz)
+      ├─ a_offset == 0  → FFmpeg straight convert (-ar 48000)
+      ├─ a_offset < 0   → FFmpeg trim front (-ss)
+      └─ a_offset > 0   → FFmpeg pad silence (adelay filter)
+```
 
-### Intended behavior after mitigation removal (reference)
+### Cinematic AMB clip extraction
 
-When re-enabled, the pipeline is expected to:
+The `extract_amb_clips()` function scans the cinematic tape for `SoundSetClip` entries and extracts audio segments:
+- Start time and duration are read from the **text-based** tape structure.
+- Audio extraction is performed by **FFmpeg** with `-ss`, `-t`, and a 200ms fade-out filter.
+- Existing clips >100KB are not overwritten.
 
-1. Reuse existing IPK intro AMB wrappers (`*_intro.tpl.ckd`) and replace placeholder WAV content.
-2. Generate missing intro AMB wrappers (`.tpl`/`.ilu`) and inject actor references when absent.
-3. Populate eligible pre-roll `SoundSetClip` AMBs from source preroll audio where valid.
-4. Continue orphan WAV CKD recovery (synthetic wrappers) before audio population.
+### Intro AMB generation
+
+When `INTRO_AMB_ATTEMPT_ENABLED` is `True` (default):
+
+1. Reuses existing IPK intro AMB wrappers (`*_intro.tpl.ckd`) and replaces placeholder WAV content.
+2. Generates missing intro AMB wrappers (`.tpl`/`.ilu`) and injects actor references when absent.
+3. Populates eligible pre-roll AMB audio from source preroll audio where valid.
+4. Continues orphan WAV CKD recovery (synthetic wrappers) before audio population.
 
 Implementation detail: AMB path resolution and folder-case differences (`Audio/AMB` vs `audio/amb`) are handled defensively to avoid broken actor references on mixed-source layouts.
 
@@ -210,10 +264,9 @@ Implementation detail: AMB path resolution and folder-case differences (`Audio/A
 
 ## 8. Limitations and Operator Expectations
 
-1. **Intro AMB currently disabled (temporary but active):** Expect silent intro placeholder behavior, not active AMB preroll fill.
-2. **IPK video offset remains approximate by design:** marker-derived `v_override` cannot encode per-map video lead-in; manual VIDEO_OFFSET tuning is expected.
-3. **Dependency-sensitive behavior:** Missing FFmpeg/FFprobe or vgmstream reduces decode/preview/install reliability, especially for IPK/XMA2 audio paths.
-4. **Source-layout variability:** Mixed casing/path layouts and cache-only assets require fallback resolution logic; map-specific edge cases remain possible.
+1. **IPK video offset remains approximate by design:** marker-derived `v_override` cannot encode per-map video lead-in; manual VIDEO_OFFSET tuning is expected.
+2. **Dependency-sensitive behavior:** Missing FFmpeg/FFprobe or vgmstream reduces decode/preview/install reliability, especially for IPK/XMA2 audio paths.
+3. **Source-layout variability:** Mixed casing/path layouts and cache-only assets require fallback resolution logic; map-specific edge cases remain possible.
 
 ---
 
@@ -221,8 +274,13 @@ Implementation detail: AMB path resolution and folder-case differences (`Audio/A
 
 Audio timing and preview/install quality depend on the local toolchain:
 
-1. **FFmpeg / FFprobe** - required for probing/transcoding and timing-sensitive media operations.
-2. **vgmstream** - required for robust Xbox 360 XMA2 decode paths used by many IPK maps.
-3. **Playwright Chromium** (Fetch mode only) - required for web-fetch workflows, not for pure local/IPK timing math.
+| Dependency | Role in timing pipeline | Provisioned by |
+|---|---|---|
+| **FFmpeg / FFprobe** | Probing durations, transcoding OGG→WAV with offset trim/pad, generating AMB audio, applying gain | Must be on system `PATH` |
+| **vgmstream** | Xbox 360 XMA2 decode for IPK maps (`decode_xma2_audio()` in `media_processor.py`) | `setup.bat` step 7/7 → `tools/vgmstream/` |
+| **Playwright Chromium** | Fetch mode only — web-fetch workflows, not for pure local/IPK timing math | `setup.bat` step 2/7 |
 
 If any dependency is missing or partially installed, expected behavior includes decode fallback paths, reduced preview confidence, and higher chance of manual offset correction.
+
+> [!WARNING]
+> FFmpeg is **not** auto-installed by `setup.bat`. It must be available on the system `PATH` before running the installer. Without FFmpeg, all audio conversion, AMB generation, and VP9→VP8 video transcoding will fail.

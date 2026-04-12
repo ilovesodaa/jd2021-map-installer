@@ -8,14 +8,17 @@ This guide shows the fastest way to run JD2021 Map Installer v2 on Windows, plus
 
 ## Current Limitations (Read First)
 
-1. **Intro AMB is temporarily disabled in v2.**
-   The installer currently forces silent intro placeholder behavior for stability. Reliable intro AMB playback is not expected right now.
+1. **Intro AMB generation is enabled but reliability varies.**
+   The pipeline now attempts intro AMB generation for all supported source modes. Results depend on source data quality; some maps may still produce effectively silent intro ambient playback.
 
 2. **IPK-derived `videoStartTime` is approximate by design.**
    For many IPK maps, binary metadata does not reliably encode lead-in timing. Manual video offset tuning is expected.
 
 3. **External media tools are required for full results.**
    FFmpeg/FFprobe and vgmstream are required for complete media processing paths.
+
+4. **JDNext extraction is in active integration.**
+   JDNext mapPackage extraction relies on third-party tooling (AssetStudioModCLI and/or UnityPy) under `tools/`. Both strategies are supported with automatic fallback.
 
 ---
 
@@ -38,7 +41,7 @@ RUN.bat
 
 What `setup.bat` handles:
 
-1. Python package install from `requirements.txt`
+1. Python virtual environment creation (`.venv`) and package install from `requirements.txt`
 2. Playwright Chromium install (Fetch mode runtime)
 3. Clone/update of JDNext third-party source trees under `tools/`:
    - `tools/AssetStudio`
@@ -50,6 +53,7 @@ Important JDNext note:
 
 - `AssetStudioModCLI` runtime binaries are not distributed in this repository.
 - For JDNext mapPackage workflows, stage the extracted CLI bundle under `tools/Unity2UbiArt/bin/AssetStudioModCLI/`.
+- **UnityPy is also listed in `requirements.txt` and can be used as a fallback extractor** when AssetStudioModCLI is unavailable. The installer supports a dual-strategy approach (`assetstudio_first` or `unitypy_first`).
 
 If `setup.bat` fails or you want full control, follow **Manual Setup**.
 
@@ -77,7 +81,14 @@ From the project root:
 pip install -r requirements.txt
 ```
 
-Core packages include PyQt6, Playwright, Pydantic, Pillow, and test tooling.
+Core packages include:
+- **PyQt6** (≥6.5) — GUI framework
+- **Playwright** (≥1.40) — Fetch mode browser automation
+- **Pydantic** (≥2.0) — Configuration validation
+- **Pillow** (≥10.0) — Image processing (cover art, pictograms, textures)
+- **requests** (≥2.31) — HTTP downloads
+- **UnityPy** (≥1.23) — JDNext bundle extraction fallback
+- **fsspec** (≥2024.0) — Filesystem abstraction
 
 ---
 
@@ -149,15 +160,30 @@ python -m jd2021_installer.main
 
 In the app:
 
-1. Pick your source mode: Fetch, HTML, IPK, Batch, or Manual.
+1. Pick your source mode: **Fetch**, **HTML**, **IPK**, **Batch**, or **Manual**.
 2. Provide required files/paths.
 3. Start install and monitor progress/log output.
 4. Use preview/readjust if timing changes are needed.
+5. **Review the install summary** — the installer shows a checklist of required and optional files after each install.
 
 Timing notes:
 
 1. **IPK maps:** manual video offset tuning is commonly required.
-2. **AMB intro:** silent intro placeholder behavior is currently expected.
+2. **AMB intro:** the pipeline attempts intro AMB generation but results depend on source data quality.
+
+---
+
+## Theming
+
+The installer ships with **Light** and **Dark** themes. The theme can be switched in the Settings dialog. Themes are loaded from `style_light.qss` and `style_dark.qss` in the project root.
+
+---
+
+## Auto-Updates
+
+The installer includes a built-in update checker. On launch, it can silently check for updates against the configured GitHub branch (default: `v2`). Updates can be applied via `git pull` (for git-cloned installs) or zip download (for standalone distributions). The update system preserves user data files (`installer_settings.json`, `mapDownloads/`, `cache/`, readjust index, etc.).
+
+Branch selection and manual update checking are available in the **Settings** dialog.
 
 ---
 
@@ -173,6 +199,10 @@ Timing notes:
    Confirm all three tools resolve: ffmpeg, ffprobe, vgmstream-cli.
 5. JDNext extract fails with `AssetStudioModCLI.exe not found under tools`:
    Ensure the CLI bundle is present at `tools/Unity2UbiArt/bin/AssetStudioModCLI/`.
+6. JDNext extract fails with `UnityPy is not available`:
+   Install UnityPy via `pip install UnityPy>=1.23` or clone it to `tools/UnityPy`.
+7. Game directory not found:
+   The installer performs heuristic discovery (looks for `jd21/` relative to project root, the `data/World/SkuScenes/SkuScene_Maps_PC_All.isc` file). Set the correct path in Settings if auto-detection fails.
 
 ---
 
