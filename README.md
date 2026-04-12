@@ -1,110 +1,159 @@
 # JD2021 Map Installer v2
 
+> **Extract, build, and install Just Dance maps into Just Dance 2021 PC — from any source.**
+
 ![Screenshot](./assets/images/tool-screenshot.png)
-A Windows-first, pure Python GUI application built on **PyQt6** for extracting, building, and installing Just Dance maps into Just Dance 2021 PC. Supports multi-mode ingestion: codename fetch, HTML exports, IPK archives, batch installs, and manual source folders.
 
-## Current Behavior Notes (Important)
+A Windows-first desktop application built on **PyQt6** that turns raw map assets — whether scraped from the web, unpacked from Xbox 360 IPK archives, or extracted from **Just Dance Next** Unity bundles — into fully playable JD2021 PC maps.  
+No manual file wrangling required.
 
-- **Intro AMB is temporarily disabled** — the current pipeline intentionally forces silent intro placeholder behavior as a mitigation while AMB reliability is being redesigned.
-- **IPK video offset remains approximate** — Xbox 360 binary CKDs do not reliably preserve lead-in timing. Manual sync tuning is expected for many IPK installs.
-- **External tools are required for full fidelity** — FFmpeg/FFprobe and vgmstream availability directly affects media decode, conversion, and preview behavior.
-- **JDNext support is still in active integration** — current JDNext extraction relies on third-party toolchain assets under `tools/`.
+---
 
-## Features
+## ✨ Headline Features
 
-- **PyQt6 Dark-Themed GUI** — Modern split-panel interface with live log output, progress bar, and status bar. All heavy work runs on background `QThread` workers so the UI never freezes.
-- **Headless Playwright Integration** — Replaces the legacy Node.js scraper. Uses `playwright-python` to fetch JDU asset pages via headless Chromium, or processes pre-saved HTML files.
-- **QThread Concurrent Processing** — Extraction, normalization, and installation run in dedicated `QObject` workers that communicate with the main window exclusively through Qt signals (`progress`, `status`, `error`, `finished`).
-- **Typed Data Pipeline** — The Extract → Normalize → Install pipeline produces a single canonical `NormalizedMapData` dataclass regardless of source format (web or IPK).
-- **Multi-Mode Input Workflows** — Fetch by codename, HTML mode, IPK mode, batch directory mode, and manual source mode are supported in the same UI.
-- **Pydantic Configuration** — All application settings (paths, quality tiers, timeouts, engine constants) are managed through a validated `AppConfig` model with environment variable support.
-- **Full Binary CKD Parser** — Stateless parser for legacy binary (cooked) CKD files: musictracks, songdescs, choreography / karaoke tapes, cinematic tapes, autodance templates, and sound components.
-- **IPK Archive Support** — Extracts maps from Xbox 360 `.ipk` archives with zlib / lzma decompression and path-traversal protection.
-- **Video Quality Selection** — Choose from 8 quality tiers (Ultra HD down to Low) with automatic fallback.
-- **Media Processing** — FFmpeg / FFprobe / Pillow wrappers for video transcoding, audio conversion, preview generation, and image format conversion.
-- **Readjust & Batch Offset Tools** — Post-install sync refinement supports per-map and multi-map offset adjustment workflows.
+| | |
+|---|---|
+| 🎨 **Modern PyQt6 Interface** | Dark-themed, split-panel GUI with live log output, a granular progress checklist, real-time preview, and sync-refinement tools — all on background threads so the UI never freezes. |
+| 🆕 **JDNext Support** | Full pipeline for Just Dance Next maps: fetch asset pages, extract Unity bundles via AssetStudioMod, parse `.btape` text files, and convert everything to UbiArt format. |
+| 🔄 **Unified Pipeline** | Every source flows through the same **Extract → Normalize → Install** pipeline, producing a canonical `NormalizedMapData` regardless of origin. |
+| 📦 **Multi-Mode Ingestion** | Seven distinct input modes cover every acquisition workflow — from one-click codename fetch to granular manual file selection. |
+| 🎬 **Media Processing** | Automatic video transcoding (8 quality tiers with fallback), audio conversion, XMA2 decode via vgmstream, preview generation, and image format conversion powered by FFmpeg, FFprobe, and Pillow. |
 
-## Module Overview
+---
 
-| Package | Purpose |
-|---------|---------|
-| `core/` | Data models (`NormalizedMapData`, tapes, clips), Pydantic `AppConfig`, and typed exception hierarchy |
-| `extractors/` | `BaseExtractor` ABC, `WebPlaywrightExtractor` (HTML + live scraping), `ArchiveIPKExtractor` (IPK archives) |
-| `parsers/` | `normalizer` (raw files → `NormalizedMapData`), `binary_ckd` (stateless binary CKD parser) |
-| `installers/` | `game_writer` (UbiArt `.trk/.tpl/.act/.isc` generation), `media_processor` (FFmpeg / FFprobe / Pillow / vgmstream-dependent paths) |
-| `ui/` | `MainWindow` (PyQt6), `workers/pipeline_workers.py` (QThread-based workers) |
+## 🎮 Supported Modes
 
-## Quick Start
+| Mode | Source | What It Does |
+|------|--------|-------------|
+| **Fetch (Codename)** | JDU via Playwright | Enter codenames → headless Chromium scrapes JDHelper for asset & NOHUD HTML, downloads everything, and installs automatically. |
+| **HTML Files** | Saved `.html` exports | Load pre-saved asset + NOHUD HTML files from JDHelper. Useful when files are already downloaded. |
+| **IPK Archive** | `.ipk` file | Extracts maps from Xbox 360 IPK archives with zlib/LZMA decompression and binary CKD parsing. |
+| **Batch (Directory)** | Folder of maps | Point to a directory containing any mix of IPK files, HTML exports, or pre-extracted map folders — processes them all in sequence. |
+| **Manual (Directory)** | Pre-extracted files | Full granular control: pick individual audio, video, tape, and asset files by hand. Supports JDU, IPK, and mixed source layouts. |
+| **Fetch JDNext** | JDNext via Playwright | Enter codenames → fetches JDNext asset pages, extracts Unity bundles,  and converts to UbiArt. |
+| **HTML Files JDNext** | Saved JDNext `.html` | Same as Fetch JDNext but from pre-saved HTML. |
 
-See **[Getting Started](docs/01_getting_started/GETTING_STARTED.md)** for the full setup walkthrough and how to start without these batch scripts.
+---
+
+## 📋 Prerequisites
+
+- **Windows 10/11** (64-bit)
+- **Python 3.10+** with `pip`
+- **Git** (for first-time setup dependency cloning)
+- **Internet connection** (for Fetch modes and first-time tool downloads)
+
+> FFmpeg, vgmstream, Playwright Chromium, and AssetStudioModCLI are all installed automatically by `setup.bat`. You can also install them manually — see [Third-Party Tools](docs/04_reference/THIRD_PARTY_TOOLS.md).
+
+---
+
+## 🚀 Quick Start
 
 ```bash
-# 1. First-time setup (installs Python deps and tool prerequisites)
+# 1. Clone the repository
+git clone https://github.com/VenB304/jd2021-map-installer.git
+cd jd2021-map-installer
+
+# 2. First-time setup — installs Python deps, Playwright, and third-party tools
 setup.bat
 
-# 2. Run the installer app
+# 3. Launch the installer
 RUN.bat
-
 ```
 
-## Documentation
+That's it. The GUI opens, pick a mode, and start installing maps.
 
-- **[Documentation Index](docs/README.md)** - Central navigation for all docs
+> For a detailed walkthrough (manual Python setup, configuration, and advanced usage), see **[Getting Started](docs/01_getting_started/GETTING_STARTED.md)**.
 
-### Setup and Usage
+---
 
-- **[Getting Started](docs/01_getting_started/GETTING_STARTED.md)** — Dependencies, setup, and running the installer
-- **[Usage Guide](docs/01_getting_started/USAGE_GUIDE.md)** — One-page beginner guide to setup, GUI options, settings, and modes
-- **[Modes Guide](docs/01_getting_started/MODES_GUIDE.md)** — Complete mode-by-mode instructions (Fetch, HTML, IPK, Batch, Manual)
-- **[GUI Reference](docs/01_getting_started/GUI_REFERENCE.md)** — PyQt6 main window layout, controls, and thread lifecycle
-- **[Asset HTML Files](docs/03_media/ASSETS.md)** — Format and contents of `assets.html` and `nohud.html`
-- **[Video Reference](docs/03_media/VIDEO.md)** — Quality tiers, fallback behavior, and persistence
+## 🏗️ Architecture at a Glance
+
+```
+                ┌──────────────┐
+  User Input ──►│  Extractor   │  WebPlaywright / ArchiveIPK / JDNext / Manual
+                └──────┬───────┘
+                       │  raw files + metadata
+                ┌──────▼───────┐
+                │  Normalizer  │  Parses CKDs (binary) → NormalizedMapData
+                └──────┬───────┘
+                       │  canonical dataclass
+                ┌──────▼───────┐
+                │  Installer   │  GameWriter (UbiArt scene gen) + MediaProcessor
+                └──────┬───────┘
+                       │
+                 JD2021 PC Maps/
+```
+
+| Package | Role |
+|---------|------|
+| `core/` | Data models (`NormalizedMapData`, tapes, clips), Pydantic `AppConfig`, theming, and typed exceptions |
+| `extractors/` | `BaseExtractor` ABC → `WebPlaywrightExtractor`, `ArchiveIPKExtractor`, `JDNextBundleStrategy`, `ManualExtractor` |
+| `parsers/` | `normalizer` (raw → `NormalizedMapData`), `binary_ckd` (stateless binary CKD parser) |
+| `installers/` | `game_writer` (UbiArt `.trk/.tpl/.act/.isc` generation), `media_processor` (FFmpeg/Pillow/vgmstream) |
+| `ui/` | `MainWindow`, modular widgets, `QThread`-based pipeline workers |
+
+> For the full architectural deep-dive, see **[Architecture](docs/02_core/ARCHITECTURE.md)** and **[Pipeline Reference](docs/02_core/PIPELINE_REFERENCE.md)**.
+
+---
+
+## 📖 Documentation
+
+All documentation lives in the [`docs/`](docs/README.md) folder:
+
+### Getting Started
+- **[Getting Started](docs/01_getting_started/GETTING_STARTED.md)** — Dependencies, setup, and first run
+- **[Usage Guide](docs/01_getting_started/USAGE_GUIDE.md)** — Beginner-friendly walkthrough of the GUI, settings, and all modes
+- **[Modes Guide](docs/01_getting_started/MODES_GUIDE.md)** — In-depth instructions for every mode
+- **[GUI Reference](docs/01_getting_started/GUI_REFERENCE.md)** — Window layout, controls, and thread lifecycle
 - **[Troubleshooting](docs/01_getting_started/TROUBLESHOOTING.md)** — Common errors and solutions
 
-### Architecture and Internals
-
+### Architecture & Internals
 - **[Architecture](docs/02_core/ARCHITECTURE.md)** — Component map, concurrency model, and data flow
-- **[Pipeline Reference](docs/02_core/PIPELINE_REFERENCE.md)** — Extract → Normalize → Install phases and QThread orchestration
-- **[Audio Timing & Pre-Roll Silence](docs/03_media/AUDIO_TIMING.md)** — The `videoStartTime` synchronization model
-- **[Data Formats](docs/02_core/DATA_FORMATS.md)** — Binary and text file format reference (CKD, IPK, ISC, TRK, TPL, etc.)
+- **[Pipeline Reference](docs/02_core/PIPELINE_REFERENCE.md)** — Extract → Normalize → Install phases
+- **[Data Formats](docs/02_core/DATA_FORMATS.md)** — Binary CKD, IPK, ISC, TRK, TPL file formats
+- **[Data Mapping](docs/02_core/DATA_MAPPING.md)** — JDU JSON ↔ JD2021 field mapping
 
-### Data References
+### Media & Timing
+- **[Audio Timing & Pre-Roll](docs/03_media/AUDIO_TIMING.md)** — `videoStartTime` synchronization model
+- **[Video Reference](docs/03_media/VIDEO.md)** — Quality tiers, fallback behavior, and download
+- **[Asset HTML Files](docs/03_media/ASSETS.md)** — Format of `assets.html` and `nohud.html`
 
-- **[Data Mapping](docs/02_core/DATA_MAPPING.md)** — Field-level mapping between JDU JSON payloads and JD2021 PC engine files
-- **[Map Config Format](docs/04_reference/MAP_CONFIG_FORMAT.md)** — Per-map sync configuration JSON schema
-- **[Game Config Reference](docs/04_reference/GAME_CONFIG_REFERENCE.md)** — JD2021 PC game configuration files
-- **[Third-Party Tools](docs/04_reference/THIRD_PARTY_TOOLS.md)** — External dependencies and referenced projects
+### Reference & Guides
+- **[Manual JDU Porting](docs/05_guides/MANUAL_JDU_PORTING_GUIDE.md)** — Step-by-step manual JDU map porting
+- **[Manual IPK Porting](docs/05_guides/MANUAL_IPK_PORTING_GUIDE.md)** — Step-by-step manual IPK map porting
+- **[Third-Party Tools](docs/04_reference/THIRD_PARTY_TOOLS.md)** — External dependencies and community tools
 
-### Guides and Research
+---
 
-- **[Manual JDU Porting Guide](docs/05_guides/MANUAL_JDU_PORTING_GUIDE.md)** — How to manually port JDU-sourced maps
-- **[Manual IPK Porting Guide](docs/05_guides/MANUAL_IPK_PORTING_GUIDE.md)** — How to manually port IPK-sourced maps
-- **[Unused Data Opportunities](docs/06_research/JDU_UNUSED_DATA_OPPORTUNITIES.md)** — Catalog of JDU data fields not currently used
-- **[Known Gaps](docs/06_research/KNOWN_GAPS.md)** — Remaining limitations and potential improvements
+## ⚠️ Known Limitations
 
-## Limitations
+- **JD2021 PC only** — installed maps target the PC development build and are not compatible with console versions.
+- **IPK video offset is approximate** — Xbox 360 binary CKDs store `videoStartTime = 0.0`; the pipeline synthesizes a default from musictrack markers, but manual sync tuning may be needed.
+- **JDNext extraction relies on third-party staging** — requires AssetStudioModCLI under `tools/`; `setup.bat` handles this automatically.
+- **JDHelper links expire quickly** — HTML mode files must be used within ~30 minutes of export from the JDHelper Discord bot. If files are already downloaded, ignore this warning.
+- **Toolchain completeness affects fidelity** — missing FFmpeg/FFprobe or vgmstream will degrade media conversion, previews, and fallback paths.
 
-- **JD2021 PC only** — maps installed by this pipeline target the PC development build and are not compatible with console versions.
-- **IPK video offset is approximate** — Xbox 360 binary CKDs store `videoStartTime = 0.0`. The pipeline synthesizes a reasonable default from musictrack markers, but manual adjustment may be required.
-- **Intro AMB generation is intentionally disabled right now** — the current build forces silent intro placeholder behavior while AMB processing is under active reliability rework.
-- **Some background AMB sounds remain silent** — mid-song AMB sounds hosted only on JDU servers cannot be downloaded in all cases.
-- **JDHelper required for HTML modes** — asset Fetch/HTML mode files must be exported from the JDHelper Discord bot. Links expire quickly after the bot responds.
-- **Toolchain completeness affects results** — missing FFmpeg/FFprobe or vgmstream can degrade decode/conversion paths, previews, and fallback behavior.
-- **JDNext mapPackage extraction depends on local third-party tool staging** — if `AssetStudioModCLI.exe` is missing under `tools`, JDNext extraction may fail or fall back to reduced coverage.
+---
 
-## Credits
+## 🙏 Credits
 
-This project utilizes several essential third-party tools from the Just Dance modding community:
+This project builds on the work of the Just Dance modding community:
 
-- **[JustDanceTools](https://github.com/WodsonKun/JustDanceTools)** — DeserializerSuite for binary CKD format reference, MediaTool for audio crop formula validation.
-- **[XTX-Extractor](https://github.com/aboood40091/XTX-Extractor)** — For extracting textures from Switch-specific XTX containers.
-- **[ubiart-archive-tools](https://github.com/PartyService/ubiart-archive-tools)** — IPK archive format reference.
-- **JDTools by BLDS** — Tape processing logic analysis, vgmstream for XMA2 audio decoding.
-- **[ferris_dancing](https://github.com/Kriskras99/ferris_dancing)** — Rust-based binary CKD parser used as a reference for field order validation.
-- **[UBIART-AMB-CUTTER](https://github.com/RN-JK/UBIART-AMB-CUTTER)** — AMB extraction algorithm reference.
-- **Just Dance Helper** — For providing JDU assets and NOHUD videos from Discord. Built by [rama0dev](https://github.com/rama0dev).
-- **[AssetStudioMod](https://github.com/aelurum/AssetStudio)** / **AssetStudioModCLI** - JDNext bundle extraction and asset export tooling used to unpack mapPackage content during setup.
-- **[Unity2UbiArt](https://github.com/Itaybl14/Unity2UbiArt)** - Source for the Unity-to-UbiArt conversion workflow used by the local JDNext toolchain staging area.
-- **[UnityPy](https://github.com/K0lb3/UnityPy)** - Python-based Unity asset parsing reference used for JDNext bundle inspection and fallback extraction.
+- **[JustDanceTools](https://github.com/WodsonKun/JustDanceTools)** — Binary CKD format reference and audio crop formula validation
+- **[XTX-Extractor](https://github.com/aboood40091/XTX-Extractor)** — Switch XTX texture extraction
+- **[ubiart-archive-tools](https://github.com/PartyService/ubiart-archive-tools)** — IPK archive format reference
+- **JDTools by BLDS** — Tape processing analysis, vgmstream for XMA2 audio decoding
+- **[ferris_dancing](https://github.com/Kriskras99/ferris_dancing)** — Rust CKD parser used as field-order validation reference
+- **[UBIART-AMB-CUTTER](https://github.com/RN-JK/UBIART-AMB-CUTTER)** — AMB extraction algorithm reference
+- **Just Dance Helper** — JDU asset and NOHUD video provider via Discord, built by [rama0dev](https://github.com/rama0dev)
+- **[AssetStudioMod](https://github.com/aelurum/AssetStudio)** / **AssetStudioModCLI** — Unity bundle extraction for JDNext maps
+- **[Unity2UbiArt](https://github.com/Itaybl14/Unity2UbiArt)** — Unity-to-UbiArt conversion workflow
+- **[UnityPy](https://github.com/K0lb3/UnityPy)** — Python Unity asset parsing for JDNext bundle inspection
 
 Special thanks to the authors and contributors of these tools for making Just Dance modding possible.
+
+---
+
+<p align="center">
+  <sub>Made with 💜 for the Just Dance modding community</sub>
+</p>
