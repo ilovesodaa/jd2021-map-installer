@@ -1,12 +1,11 @@
-"""Reset installer-managed game data to a deterministic baseline manifest.
+"""Reset installer-managed game data to a deterministic baseline.
 
-Primary baseline source is a bundled map codename manifest under assets.
-Fallbacks are kept for resilience if the manifest is missing.
+Cleanup keeps that map and removes all custom additions,
+without relying on cache files or bundled baseline snapshots.
 """
 
 from __future__ import annotations
 
-import json
 import re
 import shutil
 from dataclasses import dataclass
@@ -17,9 +16,7 @@ from jd2021_installer.core.path_discovery import is_valid_game_dir
 from jd2021_installer.installers.sku_scene import unregister_map
 
 
-# Guardrail: a baseline with only a handful of maps is almost certainly invalid
-# and can cause destructive cleanup (including boot-breaking SkuScene edits).
-_MIN_SAFE_BASELINE_MAP_COUNT = 10
+_BASELINE_MAPS = {"getgetdown"}
 
 
 @dataclass
@@ -31,18 +28,6 @@ class CleanDataResult:
     removed_custom_maps: int
     removed_skuscene_entries: int
     removed_cooked_cache_maps: int
-
-
-def _project_root() -> Path:
-    return Path(__file__).resolve().parents[2]
-
-
-def _baseline_manifest_path() -> Path:
-    return _project_root() / "assets" / "clean_data_baseline" / "maps_baseline.json"
-
-
-def _legacy_seed_metadata_path() -> Path:
-    return _project_root() / "cache" / "clean_data_seed" / "seed_meta.json"
 
 
 def _resolve_game_dir(configured_path: Optional[Path]) -> Path:
@@ -80,58 +65,9 @@ def _list_map_dirs(maps_dir: Path) -> set[str]:
     return {child.name.lower() for child in maps_dir.iterdir() if child.is_dir()}
 
 
-def _load_manifest_maps() -> Optional[set[str]]:
-    path = _baseline_manifest_path()
-    if not path.is_file():
-        return None
-
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-
-    maps = payload.get("original_maps") if isinstance(payload, dict) else None
-    if not isinstance(maps, list):
-        return None
-
-    normalized = {m.lower() for m in maps if isinstance(m, str) and m.strip()}
-    return normalized or None
-
-
-def _load_legacy_seed_maps() -> Optional[set[str]]:
-    path = _legacy_seed_metadata_path()
-    if not path.is_file():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-
-    maps = payload.get("original_maps") if isinstance(payload, dict) else None
-    if not isinstance(maps, list):
-        return None
-
-    normalized = {m.lower() for m in maps if isinstance(m, str) and m.strip()}
-    return normalized or None
-
-
 def _resolve_baseline_maps(game_dir: Path) -> tuple[set[str], str]:
-    manifest_maps = _load_manifest_maps()
-    if manifest_maps and len(manifest_maps) >= _MIN_SAFE_BASELINE_MAP_COUNT:
-        return manifest_maps, "bundled_manifest"
-
-    legacy_maps = _load_legacy_seed_maps()
-    if legacy_maps and len(legacy_maps) >= _MIN_SAFE_BASELINE_MAP_COUNT:
-        return legacy_maps, "legacy_seed_cache"
-
-    live_maps = _list_map_dirs(_maps_dir(game_dir))
-    if len(live_maps) >= _MIN_SAFE_BASELINE_MAP_COUNT:
-        return live_maps, "live_game_fallback"
-
-    raise RuntimeError(
-        "Could not determine a safe baseline map set. "
-        "Baseline manifest/cache appears incomplete and current MAPS content is too small to use as fallback."
-    )
+    _ = game_dir
+    return set(_BASELINE_MAPS), "builtin_pc"
 
 
 def _remove_non_baseline_dirs(root_dir: Path, keep_names: set[str]) -> int:
