@@ -316,6 +316,104 @@ def _ensure_jdnext_albumcoach_texture_from_coach(map_target: Path, codename: str
         return False
 
 
+def _apply_jdnext_bottom_alpha_fade_if_needed(map_target: Path, codename: str) -> int:
+    """Apply JDNext-style bottom alpha fade to coach textures when missing.
+
+    Returns number of textures updated. Files that already have a bottom fade are
+    left untouched.
+    """
+    try:
+        from PIL import Image
+    except Exception:
+        return 0
+
+    texture_dirs = [
+        map_target / "menuart" / "textures",
+        map_target / "MenuArt" / "textures",
+    ]
+
+    def _candidate_texture(path: Path) -> bool:
+        name_low = path.name.lower()
+        if not name_low.startswith(f"{codename.lower()}_"):
+            return False
+        if "coach_" not in name_low and "cover_albumcoach" not in name_low:
+            return False
+        return path.suffix.lower() in {".png", ".tga"}
+
+    def _row_alpha_means(alpha_img: "Image.Image") -> list[float]:
+        width, height = alpha_img.size
+        means: list[float] = []
+        for y in range(height):
+            row_sum = 0
+            for x in range(width):
+                row_sum += int(alpha_img.getpixel((x, y)))
+            means.append(row_sum / max(1, width))
+        return means
+
+    def _already_has_bottom_fade(row_means: list[float]) -> bool:
+        h = len(row_means)
+        if h < 8:
+            return False
+        top_end = max(1, int(h * 0.35))
+        fade_start = max(0, int(h * 0.72))
+        top_mean = sum(row_means[:top_end]) / max(1, top_end)
+        bottom_min = min(row_means[fade_start:])
+        tail = row_means[-1]
+        # Consider it already faded when the bottom approaches full transparency
+        # and differs strongly from the opaque upper region.
+        return tail <= 8 and bottom_min <= (top_mean * 0.35)
+
+    updated = 0
+    seen: set[str] = set()
+    for tex_dir in texture_dirs:
+        if not tex_dir.is_dir():
+            continue
+        for path in tex_dir.iterdir():
+            key = str(path).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+
+            if not path.is_file() or not _candidate_texture(path):
+                continue
+
+            try:
+                with Image.open(path) as img:
+                    rgba = img.convert("RGBA")
+                width, height = rgba.size
+                if width < 4 or height < 8:
+                    continue
+
+                alpha = rgba.getchannel("A")
+                row_means = _row_alpha_means(alpha)
+                if _already_has_bottom_fade(row_means):
+                    continue
+
+                fade_start = max(0, int(height * 0.72))
+                if fade_start >= height - 1:
+                    continue
+
+                fade_den = max(1, (height - 1) - fade_start)
+                px = rgba.load()
+                for y in range(fade_start, height):
+                    fade = ((height - 1) - y) / fade_den
+                    if fade < 0.0:
+                        fade = 0.0
+                    fade = fade ** 1.35
+                    for x in range(width):
+                        r, g, b, a = px[x, y]
+                        new_a = int(round(a * fade))
+                        if new_a < a:
+                            px[x, y] = (r, g, b, new_a)
+
+                rgba.save(path)
+                updated += 1
+            except OSError:
+                continue
+
+    return updated
+
+
 def _install_menuart_companion_assets(menuart_sources: list[Path], map_target: Path) -> int:
     """Install non-texture MenuArt companion files shipped as *.ckd payloads.
 
@@ -1974,6 +2072,13 @@ def install_map_to_game(
             if synthesized_albumcoach:
                 logger.debug(
                     "Synthesized missing albumcoach texture from coach_1 for JDNext map '%s'.",
+                    codename,
+                )
+            faded_coaches = _apply_jdnext_bottom_alpha_fade_if_needed(map_target, codename)
+            if faded_coaches:
+                logger.debug(
+                    "Applied JDNext bottom alpha fade to %d coach texture(s) for '%s'.",
+                    faded_coaches,
                     codename,
                 )
 
