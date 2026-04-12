@@ -135,6 +135,8 @@ _SETTINGS_CHANGE_LABELS: dict[str, str] = {
     "vgmstream_path": "vgmstream executable",
     "third_party_tools_root": "3rd-party tools root",
     "assetstudio_cli_path": "AssetStudio CLI",
+    "check_updates_on_launch": "Check updates on launch",
+    "update_branch": "Update branch",
 }
 
 _SETTINGS_CHANGE_ORDER: tuple[str, ...] = (
@@ -173,6 +175,8 @@ _SETTINGS_CHANGE_ORDER: tuple[str, ...] = (
     "vgmstream_path",
     "third_party_tools_root",
     "assetstudio_cli_path",
+    "check_updates_on_launch",
+    "update_branch",
 )
 
 _READY_STATUS_VALUE = 3
@@ -277,6 +281,7 @@ class MainWindow(QMainWindow):
         # Show Quickstart Guide after first paint.
         QTimer.singleShot(500, self._show_quickstart_if_needed)
         QTimer.singleShot(900, self._run_startup_dependency_guardrail)
+        QTimer.singleShot(1500, self._run_startup_update_check)
 
     def closeEvent(self, event) -> None:
         """Ensure all background processes (especially ffplay) are stopped."""
@@ -787,6 +792,93 @@ class MainWindow(QMainWindow):
         """Run a lightweight startup dependency health check with remediation."""
         # Do not force Playwright browser launch at startup; that check is mode-specific.
         self._ensure_runtime_dependencies(include_fetch_checks=False)
+
+    def _run_startup_update_check(self) -> None:
+        """Silently check for updates on launch if enabled in settings.
+
+        Only shows a dialog if an update is available.  Network errors
+        are swallowed silently so users are never nagged on startup.
+        """
+        if not getattr(self._config, "check_updates_on_launch", True):
+            return
+
+        import sys
+        project_root = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(project_root))
+        try:
+            from updater import Updater
+        except ImportError:
+            logger.debug("Updater module not found, skipping startup update check.")
+            return
+        finally:
+            try:
+                sys.path.remove(str(project_root))
+            except ValueError:
+                pass
+
+        updater = Updater(project_root)
+        updater.initialize_state()
+
+        branch = getattr(self._config, "update_branch", "") or None
+
+        def _check():
+            return updater.check_for_updates(branch)
+
+        thread = QThread(self)
+        from jd2021_installer.ui.widgets.update_dialog import UpdateResultDialog
+        from PyQt6.QtCore import QObject, pyqtSignal
+
+        class _Worker(QObject):
+            finished = pyqtSignal(object)
+            error = pyqtSignal(str)
+
+            def run(self):
+                try:
+                    result = _check()
+                    self.finished.emit(result)
+                except Exception as exc:
+                    self.error.emit(str(exc))
+
+        worker = _Worker()
+        worker.moveToThread(thread)
+
+        def _on_finished(result):
+            if result.error:
+                logger.debug("Startup update check failed: %s", result.error)
+            elif not result.is_up_to_date:
+                logger.info(
+                    "Update available: %s -> %s on branch %s",
+                    result.local_commit,
+                    result.remote_commit,
+                    result.branch,
+                )
+                dialog = UpdateResultDialog(result, updater, self)
+                dialog.exec()
+            else:
+                logger.debug(
+                    "Up to date on branch %s (commit %s)",
+                    result.branch,
+                    result.local_commit,
+                )
+            thread.quit()
+
+        def _on_error(msg):
+            logger.debug("Startup update check error: %s", msg)
+            thread.quit()
+
+        def _cleanup():
+            self._active_threads.discard(thread)
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(_on_finished)
+        worker.error.connect(_on_error)
+        worker.finished.connect(worker.deleteLater)
+        worker.error.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(_cleanup)
+
+        self._active_threads.add(thread)
+        thread.start()
 
     # ==================================================================
     # UI COMPOSITION  (Phase 3)

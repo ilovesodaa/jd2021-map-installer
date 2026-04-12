@@ -814,6 +814,85 @@ class SettingsDialog(QDialog):
 
         tabs.addTab(tab_integrations, "Integrations")
 
+        # ----- Updates tab -----
+        tab_updates = QWidget()
+        updates_layout = QVBoxLayout(tab_updates)
+        updates_layout.setContentsMargins(10, 10, 10, 10)
+        updates_layout.setSpacing(10)
+
+        updates_note = QLabel(
+            "Check for new versions from the GitHub repository. "
+            "Updates are applied via git pull (if available) or zip download."
+        )
+        updates_note.setWordWrap(True)
+        updates_layout.addWidget(updates_note)
+
+        # Version info (read-only)
+        self._lbl_update_branch = QLabel("Branch: detecting...")
+        self._lbl_update_commit = QLabel("Commit: detecting...")
+        self._lbl_update_source = QLabel("Source: detecting...")
+        for lbl in (self._lbl_update_branch, self._lbl_update_commit, self._lbl_update_source):
+            lbl.setStyleSheet("color: #888; font-size: 11px;")
+            updates_layout.addWidget(lbl)
+        self._populate_version_info()
+
+        # Check on launch toggle
+        self.cb_check_updates_on_launch = QCheckBox("Check for updates on launch")
+        self.cb_check_updates_on_launch.setChecked(
+            getattr(self._config, "check_updates_on_launch", True)
+        )
+        self.cb_check_updates_on_launch.setToolTip(
+            "When enabled, the installer will silently check for updates\n"
+            "every time it starts. You will only be notified if a new\n"
+            "version is available."
+        )
+        updates_layout.addWidget(self.cb_check_updates_on_launch)
+
+        # Branch selector
+        branch_form = QFormLayout()
+        branch_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        branch_form.setHorizontalSpacing(12)
+        branch_form.setVerticalSpacing(10)
+
+        branch_row = QHBoxLayout()
+        self.combo_update_branch = QComboBox()
+        self.combo_update_branch.setMinimumWidth(200)
+        self.combo_update_branch.setToolTip(
+            "Select which branch to track for updates.\n"
+            "Switching branches will check for updates on the new branch."
+        )
+        branch_row.addWidget(self.combo_update_branch, 1)
+
+        self.btn_refresh_branches = QPushButton("Refresh")
+        self.btn_refresh_branches.setMinimumWidth(80)
+        self.btn_refresh_branches.setToolTip("Fetch the list of available branches from GitHub.")
+        self.btn_refresh_branches.clicked.connect(self._on_refresh_branches)
+        branch_row.addWidget(self.btn_refresh_branches)
+
+        branch_widget = QWidget()
+        branch_widget.setLayout(branch_row)
+        branch_form.addRow("Update branch:", branch_widget)
+        updates_layout.addLayout(branch_form)
+
+        # Pre-populate branch combo with current branch
+        self._populate_branch_combo_initial()
+
+        # Connect branch change to trigger a check
+        self.combo_update_branch.currentTextChanged.connect(self._on_branch_selection_changed)
+
+        # Manual check button
+        check_row = QHBoxLayout()
+        self.btn_check_updates = QPushButton("Check for Updates")
+        self.btn_check_updates.setMinimumWidth(160)
+        self.btn_check_updates.clicked.connect(self._on_check_updates)
+        check_row.addWidget(self.btn_check_updates)
+        check_row.addStretch()
+        updates_layout.addLayout(check_row)
+
+        updates_layout.addStretch()
+
+        tabs.addTab(tab_updates, "Updates")
+
         tabs.setCurrentIndex(0)
 
         # Buttons
@@ -873,8 +952,176 @@ class SettingsDialog(QDialog):
         self._config.preview_startup_compensation_ms = self.spin_preview_startup_comp.value()
         self._config.preview_only_audio_offset_ms = self.spin_preview_audio_only_offset.value()
         self._config.audio_preview_fade_s = self.spin_audio_preview_fade.value()
+        self._config.check_updates_on_launch = self.cb_check_updates_on_launch.isChecked()
+        selected_branch = self.combo_update_branch.currentText().strip()
+        if selected_branch:
+            self._config.update_branch = selected_branch
         
         self.accept()
+
+    # ==================================================================
+    # UPDATES TAB HELPERS
+    # ==================================================================
+
+    def _get_updater(self):
+        """Lazily import and create an Updater instance."""
+        import sys
+        sys.path.insert(0, str(self._project_root()))
+        try:
+            from updater import Updater
+        finally:
+            sys.path.pop(0)
+        return Updater(self._project_root())
+
+    def _populate_version_info(self) -> None:
+        """Fill in the version info labels from the current environment."""
+        try:
+            updater = self._get_updater()
+            branch = updater.get_current_branch()
+            commit = updater.get_current_commit()
+            is_git = updater.is_git_repo()
+            self._lbl_update_branch.setText(f"Branch: {branch}")
+            self._lbl_update_commit.setText(f"Commit: {commit}")
+            source = "git repo" if is_git else "zip (no .git found)"
+            self._lbl_update_source.setText(f"Source: {source}")
+        except Exception as exc:
+            logger.debug("Could not populate version info: %s", exc)
+            self._lbl_update_branch.setText("Branch: unknown")
+            self._lbl_update_commit.setText("Commit: unknown")
+            self._lbl_update_source.setText("Source: unknown")
+
+    def _populate_branch_combo_initial(self) -> None:
+        """Set the branch combo to the current branch without a network call."""
+        try:
+            updater = self._get_updater()
+            current = updater.get_current_branch()
+        except Exception:
+            current = "v2"
+
+        self.combo_update_branch.blockSignals(True)
+        self.combo_update_branch.clear()
+        self.combo_update_branch.addItem(current)
+        self.combo_update_branch.setCurrentText(current)
+        self.combo_update_branch.blockSignals(False)
+
+    def _on_refresh_branches(self) -> None:
+        """Fetch branch list from GitHub in a background thread."""
+        self.btn_refresh_branches.setEnabled(False)
+        self.btn_refresh_branches.setText("Fetching...")
+
+        def _task() -> object:
+            updater = self._get_updater()
+            return updater.fetch_remote_branches()
+
+        def _on_success(branches: object) -> None:
+            self.btn_refresh_branches.setEnabled(True)
+            self.btn_refresh_branches.setText("Refresh")
+            if not branches:
+                QMessageBox.warning(
+                    self,
+                    "Branch Fetch Failed",
+                    "Could not fetch branches from GitHub.\n"
+                    "Check your internet connection and try again.",
+                )
+                return
+
+            current_text = self.combo_update_branch.currentText()
+            self.combo_update_branch.blockSignals(True)
+            self.combo_update_branch.clear()
+            for b in branches:
+                self.combo_update_branch.addItem(b)
+            # Restore selection
+            idx = self.combo_update_branch.findText(current_text)
+            if idx >= 0:
+                self.combo_update_branch.setCurrentIndex(idx)
+            self.combo_update_branch.blockSignals(False)
+
+        self._run_background_task(
+            window_title="Fetching Branches",
+            initial_status="Fetching branches from GitHub",
+            task=_task,
+            on_success=_on_success,
+            error_title="Branch Fetch Failed",
+        )
+
+    def _on_branch_selection_changed(self, branch: str) -> None:
+        """Handle branch combo selection change — switch branch and check."""
+        if not branch or not branch.strip():
+            return
+
+        try:
+            updater = self._get_updater()
+            current = updater.get_current_branch()
+        except Exception:
+            current = ""
+
+        if branch == current:
+            return
+
+        # Confirm branch switch
+        reply = QMessageBox.question(
+            self,
+            "Switch Branch",
+            f"Switch from '{current}' to '{branch}'?\n\n"
+            "This will check for updates on the new branch.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            # Revert combo selection
+            self.combo_update_branch.blockSignals(True)
+            idx = self.combo_update_branch.findText(current)
+            if idx >= 0:
+                self.combo_update_branch.setCurrentIndex(idx)
+            self.combo_update_branch.blockSignals(False)
+            return
+
+        def _task() -> object:
+            u = self._get_updater()
+            return u.switch_branch(branch)
+
+        def _on_success(check_result: object) -> None:
+            # Update version labels
+            self._lbl_update_branch.setText(f"Branch: {branch}")
+            try:
+                u = self._get_updater()
+                self._lbl_update_commit.setText(f"Commit: {u.get_current_commit()}")
+            except Exception:
+                pass
+
+            # Show update result
+            from jd2021_installer.ui.widgets.update_dialog import UpdateResultDialog
+            dialog = UpdateResultDialog(check_result, self._get_updater(), self)
+            dialog.exec()
+
+        self._run_background_task(
+            window_title="Switching Branch",
+            initial_status=f"Switching to branch '{branch}'",
+            task=_task,
+            on_success=_on_success,
+            error_title="Branch Switch Failed",
+        )
+
+    def _on_check_updates(self) -> None:
+        """Run a manual update check in a background thread."""
+        branch = self.combo_update_branch.currentText().strip()
+
+        def _task() -> object:
+            updater = self._get_updater()
+            return updater.check_for_updates(branch or None)
+
+        def _on_success(check_result: object) -> None:
+            from jd2021_installer.ui.widgets.update_dialog import UpdateResultDialog
+            dialog = UpdateResultDialog(check_result, self._get_updater(), self)
+            dialog.exec()
+
+        self._run_background_task(
+            window_title="Checking for Updates",
+            initial_status="Checking for updates",
+            task=_task,
+            on_success=_on_success,
+            error_title="Update Check Failed",
+        )
 
     def _on_update_localization(self) -> None:
         if not self._config.game_directory:
