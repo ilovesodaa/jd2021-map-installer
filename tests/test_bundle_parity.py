@@ -340,7 +340,7 @@ class TestBundleParity(unittest.TestCase):
         width, height = 16, 64
         img = Image.new("RGBA", (width, height), (255, 255, 255, 255))
         px = img.load()
-        fade_start = int(height * 0.72)
+        fade_start = int(height * 0.70)
         den = max(1, (height - 1) - fade_start)
         for y in range(fade_start, height):
             fade = ((height - 1) - y) / den

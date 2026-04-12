@@ -342,11 +342,20 @@ def _apply_jdnext_bottom_alpha_fade_if_needed(map_target: Path, codename: str) -
 
     def _row_alpha_means(alpha_img: "Image.Image") -> list[float]:
         width, height = alpha_img.size
+        alpha_px = alpha_img.load()
+        if alpha_px is None:
+            return []
         means: list[float] = []
         for y in range(height):
             row_sum = 0
             for x in range(width):
-                row_sum += int(alpha_img.getpixel((x, y)))
+                value = alpha_px[x, y]
+                if isinstance(value, tuple):
+                    row_sum += int(value[0])
+                elif value is None:
+                    row_sum += 0
+                else:
+                    row_sum += int(value)
             means.append(row_sum / max(1, width))
         return means
 
@@ -355,7 +364,7 @@ def _apply_jdnext_bottom_alpha_fade_if_needed(map_target: Path, codename: str) -
         if h < 8:
             return False
         top_end = max(1, int(h * 0.35))
-        fade_start = max(0, int(h * 0.72))
+        fade_start = max(0, int(h * 0.70))
         top_mean = sum(row_means[:top_end]) / max(1, top_end)
         bottom_min = min(row_means[fade_start:])
         tail = row_means[-1]
@@ -389,19 +398,24 @@ def _apply_jdnext_bottom_alpha_fade_if_needed(map_target: Path, codename: str) -
                 if _already_has_bottom_fade(row_means):
                     continue
 
-                fade_start = max(0, int(height * 0.72))
+                fade_start = max(0, int(height * 0.70))
                 if fade_start >= height - 1:
                     continue
 
                 fade_den = max(1, (height - 1) - fade_start)
                 px = rgba.load()
+                if px is None:
+                    continue
                 for y in range(fade_start, height):
                     fade = ((height - 1) - y) / fade_den
                     if fade < 0.0:
                         fade = 0.0
                     fade = fade ** 1.35
                     for x in range(width):
-                        r, g, b, a = px[x, y]
+                        px_value = px[x, y]
+                        if not isinstance(px_value, tuple) or len(px_value) < 4:
+                            continue
+                        r, g, b, a = px_value
                         new_a = int(round(a * fade))
                         if new_a < a:
                             px[x, y] = (r, g, b, new_a)
@@ -2097,9 +2111,12 @@ def install_map_to_game(
             
         if status_callback: status_callback("Decoding pictograms...")
         decoded_pictos = 0
-        # JDNext can require canvas placement for variable-size pictos.
-        # Canonical 512x512 and 512x354 pictos are preserved as-is in decoder.
-        picto_canvas_size = 512 if _is_jdnext_source_map() else None
+        # JDNext fallback canvas: solo maps use 512x512, multi-coach maps use 512x354.
+        # Decoder preserves any width-512 pictos as-is and only canvases non-512 widths.
+        picto_canvas_size = None
+        if _is_jdnext_source_map():
+            coach_count = int(getattr(getattr(map_data, "song_desc", None), "num_coach", 1) or 1)
+            picto_canvas_size = (512, 512) if coach_count <= 1 else (512, 354)
         if map_data.source_dir and map_data.source_dir.exists():
             for picto_dir in _collect_pictogram_sources(map_data.source_dir, codename, preferred=picto_src):
                 decoded_pictos += decode_pictograms(
