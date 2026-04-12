@@ -10,8 +10,10 @@ from jd2021_installer.core.exceptions import WebExtractionError
 from jd2021_installer.extractors.web_playwright import (
     WebPlaywrightExtractor,
     _classify_urls,
+    _embed_contains_codename_links,
     _extract_embed_fields_from_html,
     _has_valid_cdn_links,
+    _is_valid_embed_response,
     _is_valid_webm_file,
     _parse_jdnext_button_payloads,
     download_files,
@@ -342,6 +344,27 @@ def test_parse_jdnext_button_payloads_maps_expected_other_info_fields():
     assert other_info["map_length"] == "02:34"
     assert other_info["original_jd_version"] == "JD2023"
     assert other_info["coach_count"] == "2"
+
+
+def test_embed_contains_codename_links_matches_target_map_only():
+    target_html = (
+        '<a href="https://jd-s3.cdn.ubi.com/public/map/MyMap/MyMap_MAIN_SCENE_DURANGO.zip">scene</a>'
+    )
+    other_html = (
+        '<a href="https://jd-s3.cdn.ubi.com/public/map/OtherMap/OtherMap_MAIN_SCENE_DURANGO.zip">scene</a>'
+    )
+
+    assert _embed_contains_codename_links(target_html, "MyMap") is True
+    assert _embed_contains_codename_links(other_html, "MyMap") is False
+
+
+def test_is_valid_embed_response_rejects_other_user_codename_response():
+    other_user_html = (
+        '<div><a href="https://jd-s3.cdn.ubi.com/public/map/OtherMap/OtherMap_ULTRA.hd.webm">video</a></div>'
+    )
+
+    assert _is_valid_embed_response(other_user_html) is True
+    assert _is_valid_embed_response(other_user_html, expected_codename="MyMap") is False
 
 
 def test_parse_jdnext_button_payloads_uses_text_fallback_for_tags_and_coaches():

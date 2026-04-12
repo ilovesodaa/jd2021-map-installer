@@ -988,7 +988,9 @@ async def _send_slash_command(
 
 
 async def _wait_for_new_embed(
-    page, previous_last_id: Optional[str], timeout_s: int = 60
+    page,
+    previous_last_id: Optional[str],
+    timeout_s: int = 60,
 ) -> str:
     """Poll for a new message-accessories element (the bot's response).
 
@@ -1003,13 +1005,28 @@ async def _wait_for_new_embed(
             """(prevId) => {
                 const all = document.querySelectorAll('div[id^="message-accessories-"]');
                 if (all.length === 0) return null;
-                const last = all[all.length - 1];
-                const textContent = last.textContent || '';
-                return {
-                    id: last.id,
-                    hasChildren: last.children.length > 0,
-                    isLoading: textContent.includes('Loading'),
-                };
+                const list = Array.from(all);
+                let start = 0;
+                if (prevId) {
+                    const idx = list.findIndex((el) => el.id === prevId);
+                    if (idx >= 0) start = idx + 1;
+                }
+
+                for (let i = start; i < list.length; i++) {
+                    const candidate = list[i];
+                    const textContent = candidate.textContent || '';
+                    const hasChildren = candidate.children.length > 0;
+                    const isLoading = textContent.includes('Loading');
+                    if (!hasChildren || isLoading) continue;
+
+                    return {
+                        id: candidate.id,
+                        hasChildren,
+                        isLoading,
+                    };
+                }
+
+                return null;
             }""",
             previous_last_id,
         )
@@ -1025,18 +1042,17 @@ async def _wait_for_new_embed(
             for _ in range(3):
                 await page.wait_for_timeout(500)
                 latest = await page.evaluate(
-                    """() => {
-                        const all = document.querySelectorAll(
-                            'div[id^="message-accessories-"]');
-                        if (all.length === 0) return null;
-                        const last = all[all.length - 1];
-                        const tc = last.textContent || '';
+                    """(targetId) => {
+                        const el = document.getElementById(targetId);
+                        if (!el) return null;
+                        const tc = el.textContent || '';
                         return {
-                            id: last.id,
-                            hasChildren: last.children.length > 0,
+                            id: el.id,
+                            hasChildren: el.children.length > 0,
                             isLoading: tc.includes('Loading'),
                         };
-                    }"""
+                    }""",
+                    result["id"],
                 )
                 if (
                     not latest
@@ -1101,9 +1117,32 @@ def _has_gameplay_video_links(html: str) -> bool:
     return False
 
 
-def _is_valid_embed_response(html: str, require_gameplay_video: bool = False) -> bool:
+def _embed_contains_codename_links(html: str, codename: str) -> bool:
+    """Return True when at least one Ubisoft CDN map URL targets ``codename``."""
+    needle = (codename or "").strip().lower()
+    if not needle:
+        return True
+
+    for url in extract_urls_from_html(html):
+        if not (_UBI_CDN_HOST_PATTERN.search(url) and _MAP_PATH_PATTERN.search(url)):
+            continue
+
+        parsed = urlparse(url)
+        parts = [part for part in parsed.path.strip("/").split("/") if part]
+        if any(part.lower() == needle for part in parts):
+            return True
+    return False
+
+
+def _is_valid_embed_response(
+    html: str,
+    require_gameplay_video: bool = False,
+    expected_codename: Optional[str] = None,
+) -> bool:
     """Validate an embed response before accepting it as usable."""
     if not _has_valid_cdn_links(html):
+        return False
+    if expected_codename and not _embed_contains_codename_links(html, expected_codename):
         return False
     if require_gameplay_video and not _has_gameplay_video_links(html):
         return False
@@ -1385,23 +1424,33 @@ async def _fetch_command_with_retry(
         try:
             pre_id = await _get_last_accessory_id(page)
             await _send_slash_command(page, command=command, choices=choices, codename=codename)
-            embed_id = await _wait_for_new_embed(page, pre_id, timeout_s=bot_timeout_s)
-            html = await _extract_embed_html(page, embed_id)
+            scan_deadline = asyncio.get_event_loop().time() + bot_timeout_s
+            cursor_id = pre_id
 
-            if _is_valid_embed_response(html, require_gameplay_video=require_gameplay_video):
-                logger.debug("Extracted %s embed HTML.", label)
-                return html
+            while asyncio.get_event_loop().time() < scan_deadline:
+                remaining = max(1, int(scan_deadline - asyncio.get_event_loop().time()))
+                embed_id = await _wait_for_new_embed(page, cursor_id, timeout_s=remaining)
+                html = await _extract_embed_html(page, embed_id)
+                cursor_id = embed_id
 
-            if require_gameplay_video:
-                logger.warning(
-                    "%s response has no valid gameplay video links (bot may have returned an error).",
+                if _is_valid_embed_response(
+                    html,
+                    require_gameplay_video=require_gameplay_video,
+                    expected_codename=codename,
+                ):
+                    logger.debug("Extracted %s embed HTML.", label)
+                    return html
+
+                logger.debug(
+                    "Skipping %s response %s: links do not match requested codename '%s'.",
                     label,
+                    embed_id,
+                    codename,
                 )
-            else:
-                logger.warning(
-                    "%s response has no valid CDN links (bot may have returned an error).",
-                    label,
-                )
+
+            raise WebExtractionError(
+                f"Timed out waiting for a {label} response matching codename '{codename}'."
+            )
         except WebExtractionError as e:
             if attempt == max_retries:
                 raise
