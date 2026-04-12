@@ -1,15 +1,21 @@
 # Usage Guide
 
-> Last Updated: April 2026 | Applies to: JD2021 Map Installer v2
+> **Last Updated:** April 2026 | **Applies to:** JD2021 Map Installer v2
 
-This guide is a single beginner-friendly walkthrough that combines:
+This is the primary reference for new users. It combines setup, GUI orientation, mode selection, settings, and troubleshooting into a single walkthrough.
 
-1. Getting started setup
-2. Every main on-screen GUI option
-3. Complete mode selection help
-4. Settings dialog explanations
+---
 
-Use this as your primary reference if you are new to the tool.
+## Table of Contents
+
+- [1. Getting Started](#1-getting-started)
+- [2. Main Screen Guide](#2-main-screen-guide)
+- [3. Install Workflow (Recommended)](#3-install-workflow-recommended)
+- [4. Modes Guide (Which mode to use)](#4-modes-guide-which-mode-to-use)
+- [5. Settings Guide](#5-settings-guide)
+- [6. Quick Troubleshooting](#6-quick-troubleshooting)
+- [7. Suggested First Session](#7-suggested-first-session)
+- [8. Related Docs](#8-related-docs)
 
 ---
 
@@ -17,20 +23,21 @@ Use this as your primary reference if you are new to the tool.
 
 ### 1.1 First-time setup (Windows)
 
-1. Open a terminal in the project root.
-2. Run:
+1. Open the project folder in File Explorer.
+2. **Double-click `setup.bat`**. This will:
+   - Create a Python virtual environment
+   - Install required Python packages
+   - Download and configure FFmpeg if not already present
+3. **Double-click `RUN.bat`** to start the installer.
+
+If you prefer a terminal:
 
 ```bat
 setup.bat
-```
-
-3. Start the app:
-
-```bat
 RUN.bat
 ```
 
-If needed, manual launch also works:
+Manual launch (advanced):
 
 ```bash
 python -m jd2021_installer.main
@@ -38,326 +45,323 @@ python -m jd2021_installer.main
 
 ### 1.2 Required external tools
 
-For full media support you should have:
+`setup.bat` handles most of this automatically. For full media support, these tools must be available:
 
-1. `ffmpeg`
-2. `ffprobe`
-3. `vgmstream-cli` (important for some decode paths)
+| Tool | Purpose | How to get it |
+|------|---------|---------------|
+| `ffmpeg` | Audio/video transcoding | Auto-installed by `setup.bat`, or [download manually](https://ffmpeg.org) |
+| `ffprobe` | Media analysis | Included with FFmpeg |
+| `vgmstream-cli` | XMA2 audio decode (Xbox 360 sources) | Place in `tools/vgmstream/` |
 
-Fetch mode also needs Playwright Chromium:
+**Fetch modes** also require Playwright Chromium:
 
 ```bash
 python -m playwright install chromium
 ```
 
-JDNext mapPackage workflows also expect local tool staging under `tools/`:
+**JDNext modes** require additional Unity tools under `tools/`:
 
-1. `tools/AssetStudio` (source clone)
-2. `tools/UnityPy` (source clone)
-3. `tools/Unity2UbiArt/bin/AssetStudioModCLI/` (runtime CLI bundle)
+| Tool | Path |
+|------|------|
+| AssetStudio | `tools/AssetStudio` |
+| UnityPy | `tools/UnityPy` |
+| AssetStudioModCLI | `tools/Unity2UbiArt/bin/AssetStudioModCLI/AssetStudioModCLI.exe` |
 
-### 1.3 First launch checklist
+### 1.3 What happens on first launch
+
+When you start the app for the first time:
+
+1. A **Quick-Start Guide** dialog appears with the basics.
+2. The app runs a **dependency health check** and offers to auto-install anything missing.
+3. If `check_updates_on_launch` is enabled, a silent update check runs in the background.
+
+### 1.4 First launch checklist
 
 Before your first install:
 
-1. Set Game Directory in the Configuration panel.
-2. Choose the source Mode.
-3. Fill mode-specific inputs.
-4. Click Pre-flight Check.
-5. Click Install Map.
+1. ✅ Set **Game Directory** in the Configuration panel (left column).
+2. ✅ Choose a **Mode** from the Mode dropdown.
+3. ✅ Fill in mode-specific inputs (codename, file path, folder, etc.).
+4. ✅ Click **Pre-flight Check** in the Action Panel.
+5. ✅ Click **Install Map**.
 
 ---
 
-## 2. Main Screen Guide (All On-Screen Options)
+## 2. Main Screen Guide
 
-The main window is split into two columns:
+The main window has two columns and a status bar at the bottom.
 
-1. Left side: Mode + Configuration + Actions + Progress
-2. Right side: Preview + Sync Refinement + Log Console
+### Left Column (Where you set up and launch)
 
-### 2.1 Mode Selector (top-left)
+#### 2.1 Mode Selector (top of left column)
 
-Mode dropdown options:
+The **Mode** dropdown determines how you'll provide map data to the installer. The 7 available modes are:
 
-1. Fetch (Codename)
-2. HTML Files
-3. IPK Archive
-4. Batch (Directory)
-5. Manual (Directory)
+| Mode | What it expects |
+|------|-----------------|
+| **Fetch JDU** | JDU song codename(s), comma-separated |
+| **HTML JDU** | JDU `assets.html` + `nohud.html` pair |
+| **Fetch JDNext** | JDNext song codename(s) |
+| **HTML JDNext** | JDNext `assets.html` file |
+| **IPK Archive** | Xbox 360 `.ipk` file |
+| **Batch (Directory)** | Folder containing multiple map candidates |
+| **Manual (Directory)** | Pre-extracted folder with individual file fields |
 
-Each mode shows different inputs (see Section 4).
+When you change modes, the input area below the dropdown updates to show mode-specific fields. Each mode has a colored info banner describing what it does and any requirements.
 
-### 2.2 Configuration panel
+#### 2.2 Configuration Panel
 
-Visible controls:
+| Control | Purpose |
+|---------|---------|
+| **Game Directory** field | Shows your JD2021 installation path (read-only) |
+| **Browse…** button | Open a folder picker to select the game root |
+| **Video Quality** dropdown | Select from `ULTRA_HD` down to `LOW` |
 
-1. Game Directory field (read-only display)
-2. Auto-Detect button
-3. Browse button
-4. Video Quality dropdown
+> **Tip:** The game directory must be the folder that contains both `data` and `engine` subdirectories.
 
-Video Quality values:
+#### 2.3 Action Panel
 
-1. ULTRA_HD
-2. ULTRA
-3. HIGH_HD
-4. HIGH
-5. MID_HD
-6. MID
-7. LOW_HD
-8. LOW
+Buttons are grouped into three rows:
 
-### 2.3 Actions panel
+| Button | What it does |
+|--------|-------------|
+| **Install Map** | Run the full extract → normalize → install pipeline |
+| **Uninstall a Map** | Remove a previously installed custom map |
+| **Re-adjust Offset** | Open sync refinement for installed maps |
+| **Reset State** | Clear current mode inputs and temporary state |
+| **Settings** | Open the Settings dialog |
+| **Pre-flight Check** | Validate everything before install |
 
-Buttons and what they do:
+#### 2.4 Progress Panel (bottom of left column)
 
-1. Install Map: runs full extract -> normalize -> install pipeline
-2. Pre-flight Check: validates paths, mode inputs, and dependencies
-3. Re-adjust Offset: opens map selection for post-install sync work
-4. Settings: opens Installer Settings dialog
-5. Reset State: clears current mode input/state
+| Element | Purpose |
+|---------|---------|
+| **Step checklist** | Shows each pipeline step with status icons (⏳ waiting, 🔄 running, ✅ done, ❌ error) |
+| **Progress bar** | Visual 0–100% progress indicator |
 
-### 2.4 Progress panel
+Typical checklist entries include: extract, parse, normalize, decode/convert, tape conversion, registration, and finalize offsets.
 
-Shows:
+---
 
-1. Checklist of pipeline steps with status icons
-2. Progress bar from 0 to 100
+### Right Column (Where you monitor and refine)
 
-Typical checklist entries include extract, parse, normalize, decode/convert, tape conversion, registration, and finalizing offsets.
+#### 2.5 Preview Widget (top of right column)
 
-### 2.5 Preview panel
+| Control | Purpose |
+|---------|---------|
+| **Video canvas** | Shows the map's video playback |
+| **Seek slider** | Drag to jump to any time; shows current/total time |
+| **-5s** / **+5s** buttons | Skip backward or forward |
+| **Play/Stop** button | Toggle playback |
 
-Controls:
+Use this panel to visually inspect audio/video sync.
 
-1. Video canvas
-2. Seek slider with current/total time
-3. -5s button
-4. Play/Stop button
-5. +5s button
+#### 2.6 Sync Refinement Widget
 
-Use this panel to inspect sync visually.
+| Control | Purpose |
+|---------|---------|
+| **Audio Offset (ms)** | Adjust audio timing |
+| **Video Offset (ms)** | Optional separate video timing adjustment (checkbox to enable) |
+| **±1 / ±10 / ±100 / ±1000 buttons** | Quick-nudge offset values |
+| **Preview** | Play with current offsets |
+| **Pad Audio** | Add silence to the start of audio |
+| **Sync Beatgrid** | Recalculate beat timing |
+| **Apply Offset** | Save offset changes to installed files |
+| **Prev Map / Next Map** | Navigate between maps in multi-map flows |
 
-### 2.6 Sync Refinement panel
+#### 2.7 Log Console (bottom of right column)
 
-Controls:
+Read-only live log output with **color-coded** severity:
 
-1. Audio Offset (ms) input
-2. Video Offset (ms) checkbox
-3. Video Offset (ms) input
-4. Audio adjust buttons: -1000, -100, -10, -1, +1, +10, +100, +1000
-5. Video adjust buttons: -1000, -100, -10, -1, +1, +10, +100, +1000
-6. Preview button
-7. Pad Audio
-8. Sync Beatgrid
-9. Apply Offset
-10. Prev Map / Next Map navigation (shown in multi-map flows)
+- 🟢 Green — Success
+- Default — Info
+- 🟠 Orange — Warning
+- 🔴 Red — Error / Critical
 
-### 2.7 Log Console panel
+Use the Log Console for:
 
-Read-only live log output. Use it for:
+1. Tracking progress details during install
+2. Catching warnings about missing files or expired links
+3. Diagnosing dependency or input failures
 
-1. Progress details
-2. Warnings/errors
-3. Dependency or input failure clues
+#### 2.8 Status Bar (bottom of window)
 
-### 2.8 Status bar
-
-Bottom status message area. Default state is `Ready`.
+One-line status message. Default: `Ready`. Updates during mode changes, installs, and errors.
 
 ---
 
 ## 3. Install Workflow (Recommended)
 
-For most users, this order gives the best results:
+For the best results, follow this order:
 
-1. Select Game Directory.
-2. Select Mode.
-3. Fill all required inputs for that mode.
-4. Run Pre-flight Check and fix any red flags.
-5. Click Install Map.
-6. Watch Progress and Log Console.
-7. If timing is off, use Re-adjust Offset.
+1. **Set Game Directory** in the Configuration panel.
+2. **Select Mode** from the dropdown.
+3. **Fill all required inputs** for that mode.
+4. **Run Pre-flight Check** — fix any issues it reports in the Log Console.
+5. **Click Install Map**.
+6. **Watch Progress Panel** (left) and **Log Console** (right).
+7. **Test in game.**
+8. If timing is off, click **Re-adjust Offset** and use Sync Refinement.
 
 ---
 
 ## 4. Modes Guide (Which mode to use)
 
-### 4.1 Fetch (Codename)
+### 4.1 Fetch JDU
 
-Use when you know song codename(s) and want automation.
+- **Use when:** You know the JDU codename and want fully automated install.
+- **Input:** One or more codenames, comma-separated (e.g., `RainOnMe, DontStartNow`).
+- **Requires:** Internet + Playwright Chromium + Discord Channel URL in Settings.
 
-Required input:
+### 4.2 HTML JDU
 
-1. Codename(s), comma-separated (example: `RainOnMe,Koi`)
+- **Use when:** You already have `assets.html` and `nohud.html` from a JDU bot export.
+- **Input:** Browse for Asset HTML, then NOHUD HTML (auto-detection tries to find the pair).
+- **Warning:** Bot links expire after ~30 minutes. If downloads fail, re-export.
 
-Also required:
+### 4.3 Fetch JDNext
 
-1. Internet access
-2. Playwright Chromium runtime
-3. Valid Discord channel URL in Settings
+- **Use when:** You know the JDNext codename and want automated install.
+- **Input:** One or more JDNext codenames (e.g., `TelephoneALT`).
+- **Requires:** Internet + Playwright Chromium + Discord Channel URL + Unity tools under `tools/`.
 
-### 4.2 HTML Files
+### 4.4 HTML JDNext
 
-Use when you already have `assets.html` and `nohud.html`.
+- **Use when:** You have a saved JDNext bot HTML export.
+- **Input:** Browse for the Asset HTML file (only one file needed — no NOHUD).
+- **Requires:** Unity tools under `tools/`.
+- **Warning:** Asset links expire after ~30 minutes.
 
-Required inputs:
+### 4.5 IPK Archive
 
-1. Asset HTML file
-2. NOHUD HTML file
+- **Use when:** You have an Xbox 360 `.ipk` archive.
+- **Input:** Browse and select the `.ipk` file.
+- **Special:** Bundle IPKs with multiple maps open a selection dialog.
+- **Note:** Video timing may need manual refinement — this is expected.
 
-Notes:
+### 4.6 Batch (Directory)
 
-1. Both files should be from the same map/version.
-2. This mode is useful as a fallback when Fetch fails.
+- **Use when:** Processing many candidates at once.
+- **Input:** Browse and select the root folder with map subfolders.
+- **Accepted sources:** `.ipk` files, folders with HTML pairs, extracted map folders.
+- **Tip:** Retry failed maps individually using the most suitable mode.
 
-### 4.3 IPK Archive
+### 4.7 Manual (Directory)
 
-Use when your source is an Xbox 360 `.ipk` archive.
-
-Required input:
-
-1. IPK file path
-
-Behavior:
-
-1. Single-map IPKs install directly.
-2. Bundle IPKs open a map selection dialog.
-
-### 4.4 Batch (Directory)
-
-Use when processing many candidates at once.
-
-Required input:
-
-1. Root folder containing candidates
-
-Accepted candidates:
-
-1. `.ipk` files
-2. Folders containing `assets.html` and `nohud.html`
-3. Other supported map source layouts detected by scanner
-
-### 4.5 Manual (Directory)
-
-Use for advanced/manual control of source files.
+- **Use when:** You have pre-extracted files and want full manual control.
+- **Input:** Root folder, plus individual file fields for audio, video, musictrack, tapes, asset folders, and MenuArt.
 
 Top controls:
 
-1. Source Type: JDU / IPK / Mixed
-2. Root Folder
-3. Scan button
-4. Codename field
+| Field | Purpose |
+|-------|---------|
+| Source Type | `JDU` / `IPK` / `Mixed` — controls which field groups are shown |
+| Root Folder | Base directory for the map source |
+| Scan | Re-scan folder to auto-detect files |
+| Codename | Auto-detected or manually entered |
 
-Required Files group:
-
-1. Audio File
-2. Video File
-3. Musictrack
-
-Tapes and Config group:
-
-1. Songdesc
-2. Dance Tape
-3. Karaoke Tape
-4. Mainseq Tape
-
-Asset Folders group:
-
-1. Moves Folder
-2. Pictos Folder
-3. MenuArt Folder
-4. AMB Folder
-
-JDU MenuArt fields (shown when relevant):
-
-1. Cover Generic
-2. Cover Online
-3. Banner
-4. Banner Bkg
-5. Map Bkg
-6. Cover AlbumCoach
-7. Cover AlbumBkg
-8. Coach 1 Art
-9. Coach 2 Art
-10. Coach 3 Art
-11. Coach 4 Art
+Required files: Audio, Video, Musictrack. Optional: Songdesc, Dance Tape, Karaoke Tape, Mainseq Tape, asset folders, and JDU MenuArt images.
 
 ---
 
-## 5. Settings Guide (Every Settings dialog option)
+## 5. Settings Guide
 
-Open using the Settings button in the Actions panel.
+Open using the **Settings** button in the Action Panel. The dialog has five tabs:
 
-### 5.1 Behavior toggles
+### 5.1 General Tab
 
-1. Skip pre-flight checks
-2. Suppress offset refinement notification
-3. Show "Pre-flight passed" popup
-4. Show installation summary popup
-5. Show quick-start hint on launch
+| Setting | Options |
+|---------|---------|
+| Skip startup pre-flight checks | On / Off |
+| Hide post-install offset reminder | On / Off |
+| After install cleanup | Ask / Always delete / Keep |
+| Song unlock status | Ask / Force to 3 (unlocked) / Keep |
+| Show pre-flight success popup | On / Off |
+| Show installation summary popup | On / Off |
+| Show quick-start help on launch | On / Off |
+| Log detail level | Quiet / Normal / Detailed / Developer |
+| Theme | Light / Dark |
 
-### 5.2 Post-install behavior
+### 5.2 Window Tab
 
-1. After Apply and Finish:
-   - ask
-   - delete
-   - keep
-2. Non-3 song status handling:
-   - ask
-   - force3
-   - keep
+| Setting | Options |
+|---------|---------|
+| Enforce minimum window size | On / Off |
+| Minimum window size | Width × Height in px |
+| Show floating window size overlay | On / Off |
+| Enable Style Debug Mode | On / Off (for theme developers) |
 
-### 5.3 UI and diagnostics
+### 5.3 Media Tab
 
-1. Log detail level: quiet / user / detailed / developer
-2. Theme: light / dark
-3. Enforce minimum window size
-4. Minimum window width/height
-5. Show floating current window size while resizing
-6. Enable Style Debug Mode (outline sections)
+| Setting | Options |
+|---------|---------|
+| Default download quality | ULTRA_HD through LOW |
+| FFmpeg acceleration | auto / none |
+| VP9 handling | Re-encode to VP8 / Use next compatible quality |
+| Preview source | Low-res proxy / Original file |
 
-### 5.4 Media/fetch defaults
+### 5.4 Advanced Tab
 
-1. Default video quality
-2. Discord Channel URL (required for Fetch mode)
+| Setting | What it controls |
+|---------|-----------------|
+| FFmpeg executable | Path override for ffmpeg |
+| FFprobe executable | Path override for ffprobe |
+| vgmstream executable | Path override for vgmstream-cli |
+| 3rd-party tools root | Root dir for JDNext tools |
+| AssetStudio CLI | Path override for AssetStudioModCLI |
+| Download timeout / retries / delays | Network behavior |
+| Fetch login timeout | Discord login wait time |
+| Fetch bot response timeout | Bot link wait time |
+| Window size overlay timeout | Overlay display duration |
+| Preview FPS / startup compensation | Preview playback tuning |
+| Audio-only preview offset | Nudge for audio-only preview |
+| Audio preview fade | Fade-out duration |
 
-### 5.5 Localization helper
+### 5.5 Integrations Tab
 
-Button: Update In-Game Localization...
-
-This updates game localization from a selected JSON and creates a backup before writing.
+| Setting | Purpose |
+|---------|---------|
+| Discord Channel URL | Required for Fetch modes (paste from browser) |
+| Update In-Game Localization | Import a JSON file to update game locale |
+| Update Song Database | Import JDNext songdb JSON |
+| Install All JDU Maps | Bulk-install from JDU songdb JSON |
+| Install All JDNext Maps | Bulk-install from JDNext songdb JSON |
+| Clean Game Data | Remove all custom maps and caches |
+| Clear mapDownloads | Delete downloaded source files |
 
 ---
 
 ## 6. Quick Troubleshooting
 
-1. Install button stays disabled:
-   Run Pre-flight Check and review missing requirements in logs.
-2. Fetch mode fails:
-   Confirm Discord Channel URL and Playwright Chromium install.
-3. Audio/video out of sync:
-   Use Re-adjust Offset with Preview and Apply Offset.
-4. Missing media output:
-   Verify ffmpeg/ffprobe/vgmstream-cli availability.
-5. Batch failures:
-   Re-run failed maps one-by-one in their best-fit mode.
+| Symptom | What to check |
+|---------|---------------|
+| Install button stays disabled | Run Pre-flight Check and review errors in Log Console |
+| Fetch mode fails | Confirm Discord Channel URL in Settings and Playwright Chromium install |
+| Audio/video out of sync | Use Re-adjust Offset → Preview → Apply Offset |
+| Missing media output | Verify ffmpeg, ffprobe, vgmstream-cli availability |
+| Batch failures | Re-run failed maps individually in best-fit mode |
+| JDNext mode fails | Confirm Unity tools exist under `tools/` |
+| Metadata encoding dialog appears | Decide whether to keep or replace non-ASCII characters |
+| App won't start | Re-run `setup.bat`, then `RUN.bat` |
 
 ---
 
-## 7. Suggested First Session for New Users
+## 7. Suggested First Session
 
-1. Start with one known-good map.
-2. Use Fetch or HTML mode first.
-3. Run Pre-flight before every install.
-4. Finish one successful install end-to-end.
-5. Then move to Batch or Manual workflows.
+If you've never used this tool before:
+
+1. **Start with one map** you know works.
+2. Use **Fetch JDU** or **Fetch JDNext** mode — these are the simplest.
+3. Run **Pre-flight Check** before every install.
+4. Complete one successful install end-to-end and test it in-game.
+5. Once comfortable, try **Batch**, **Manual**, or **IPK Archive** modes.
 
 ---
 
 ## 8. Related Docs
 
-1. [Getting Started](GETTING_STARTED.md)
-2. [Modes Guide](MODES_GUIDE.md)
-3. [GUI Reference](GUI_REFERENCE.md)
-4. [Troubleshooting](TROUBLESHOOTING.md)
+1. [Modes Guide](MODES_GUIDE.md) — Detailed per-mode documentation
+2. [GUI Reference](GUI_REFERENCE.md) — Technical widget reference
+3. [Troubleshooting](TROUBLESHOOTING.md)
+4. [Audio Timing](../03_media/AUDIO_TIMING.md)
+5. [Pipeline Reference](../02_core/PIPELINE_REFERENCE.md)

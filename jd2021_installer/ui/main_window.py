@@ -236,7 +236,7 @@ class MainWindow(QMainWindow):
         self._config.log_detail_level = apply_log_detail(self._config.log_detail_level)
         self._current_map: Optional[NormalizedMapData] = None
         self._current_target: Optional[str] = None
-        self._current_mode: str = "Fetch (Codename)"
+        self._current_mode: str = "Fetch JDU"
 
         self._active_threads: set[QThread] = set()
         self._active_worker: Optional[object] = None
@@ -1190,7 +1190,7 @@ class MainWindow(QMainWindow):
                 if idx == MODE_JDNEXT:
                     issues.append("Enter at least one codename for Fetch JDNext mode.")
                 else:
-                    issues.append("Enter at least one codename for Fetch mode.")
+                    issues.append("Enter at least one codename for Fetch JDU mode.")
             else:
                 self._current_target = ",".join(codenames)
             return issues
@@ -1214,7 +1214,7 @@ class MainWindow(QMainWindow):
             html_jdnext_fields = fields.get("html_jdnext", {}) if isinstance(fields, dict) else {}
             asset_html = str(html_jdnext_fields.get("asset", "")).strip()
             if not asset_html:
-                issues.append("Asset HTML file is required for HTML Files JDNext mode.")
+                issues.append("Asset HTML file is required for HTML JDNext mode.")
                 return issues
             if not Path(asset_html).is_file():
                 issues.append(f"Asset HTML file was not found: {asset_html}")
