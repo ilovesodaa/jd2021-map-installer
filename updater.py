@@ -182,7 +182,9 @@ class Updater:
             if sha:
                 return sha
         state = self._load_state()
-        return state.get("current_commit_sha", "unknown")
+        full = state.get("current_commit_sha", "unknown")
+        # Truncate to short form (7 chars) to match git rev-parse --short
+        return full[:7] if full != "unknown" else full
 
     def get_current_commit_full(self) -> str:
         """Return the full 40-char commit SHA."""

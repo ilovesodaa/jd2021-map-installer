@@ -2,7 +2,7 @@
 
 > **Last Updated:** April 2026 | **Applies to:** JD2021 Map Installer v2
 
-This document covers the NOHUD video quality system in JD2021 Map Installer v2: available tiers, selection/fallback behavior, VP9 compatibility handling, and how `media_processor.py` processes video files using FFmpeg.
+This document covers the NOHUD video quality system in JD2021 Map Installer v2: available tiers for both **JDU** and **JDNext** sources, selection/fallback behavior, VP9 compatibility handling, and how `media_processor.py` processes video files using FFmpeg. Empirical data for JDNext is drawn from a 46-file sample across 30+ maps.
 
 ---
 
@@ -53,8 +53,19 @@ JDNext uses explicit `hd`, `vp9`, and sometimes `vp8` variant filenames. The ins
 | `LOW` | `vp9` | `/video_low.vp9.webm/...` |
 
 Notes:
-- If both `hd` and legacy `vp8` exist for the same `*_HD` tier, `hd` is preferred.
+- If both `hd` and legacy `vp8` exist for the same `*_HD` tier, `hd` is preferred (controlled by `_classify_urls()` in `web_playwright.py`).
 - JDNext non-HD tiers are VP9 by design unless compatibility fallback mode is enabled.
+
+### JDNext vs JDU Filename Conventions
+
+| Convention | JDU Pattern | JDNext Pattern |
+|---|---|---|
+| Prefix | `{MapName}_` (e.g. `BadRomance_HIGH.hd.webm`) | `video_` (e.g. `video_HIGH.hd.webm`) |
+| HD variant | `_TIER.hd.webm` | `video_TIER.hd.webm` |
+| Non-HD variant | `_TIER.webm` | `video_TIER.vp9.webm` |
+| Fallback format | N/A | `video_TIER.vp8.webm` (rare) |
+
+Some JDU-origin maps that have been mirrored through JDNext CDN paths retain the `{MapName}_` prefix pattern. The quality classifier handles both patterns transparently.
 
 ---
 
@@ -175,9 +186,22 @@ On later installs/reinstalls, these global settings are loaded automatically.
 
 ## File Size Considerations
 
-Higher tiers produce much larger WebM files. `ULTRA_HD` commonly lands in the ~200-500 MB range per map.
+Higher tiers produce much larger WebM files. File sizes vary by source:
 
-If disk space is constrained, `HIGH` or `MID` are practical defaults.
+| Tier | Typical JDU Size | Typical JDNext `.hd` Size | Typical JDNext `.vp9` Size |
+|---|---|---|---|
+| `ULTRA_HD` | ~214 MB | ~213 MB | N/A |
+| `ULTRA` | ~192 MB | N/A | ~147 MB |
+| `HIGH_HD` | ~93 MB | ~67–143 MB (varies) | N/A |
+| `HIGH` | ~93 MB | N/A | ~74 MB |
+| `MID_HD` | ~46 MB | ~40 MB | N/A |
+| `MID` | ~46 MB | N/A | ~37 MB |
+| `LOW_HD` | ~13 MB | ~10 MB | N/A |
+| `LOW` | ~13 MB | N/A | ~19 MB* |
+
+\* JDNext VP9 LOW is an anomaly — the VP9 file is nearly 2× the size of the VP8 HD variant at the same resolution, likely because VP9 at 480×270 uses a higher target bitrate than the VP8 LOW encode.
+
+If disk space is constrained, `HIGH_HD` is the recommended default for both JDU and JDNext — it provides 720p VP8 output with no transcoding required.
 
 In standard workflows, one quality tier is used per map install target. Switching tier usually requires redownloading unless multiple tier files are already present locally.
 
@@ -217,10 +241,14 @@ Input: source WebM + config
 
 ## NOHUD Video File Analysis
 
-These are **NOHUD (No Heads-Up Display) coach videos**: dance footage without gameplay overlays (score, arrows, coach UI, etc.). The 8 logical tiers represent **4 quality levels x 2 slots** (`*_HD` and non-`HD`) plus one shared audio stream.
+These are **NOHUD (No Heads-Up Display) coach videos**: dance footage without gameplay overlays (score, arrows, coach UI, etc.). The 8 logical tiers represent **4 quality levels × 2 slots** (`*_HD` and non-`HD`) plus one shared audio stream.
 
 For JDU, non-HD slots are typically VP8 (`_ULTRA.webm`, `_HIGH.webm`, etc.).
 For JDNext, non-HD slots are typically VP9 (`video_ULTRA.vp9.webm`, etc.) unless compatibility-down mode is used.
+
+---
+
+### JDU File Reference (Example: single map sample)
 
 **Common `.webm` properties:**
 
@@ -229,41 +257,106 @@ For JDNext, non-HD slots are typically VP9 (`video_ULTRA.vp9.webm`, etc.) unless
 - Frame rate: 25 fps
 - Duration: ~194.36s
 
-### File Reference Table
-
 | File | Resolution | Bitrate | Size | VP8 Profile |
 |---|---|---|---|---|
-| `ULTRA HD.webm` | 1920x1080 | 8,822 kbps | 214 MB | 0 |
-| `ULTRA.webm` | 1216x720 | 7,889 kbps | 192 MB | **2** |
-| `HIGH HD.webm` | 1280x720 | 3,834 kbps | 93.1 MB | 0 |
-| `HIGH.webm` | 1216x720 | 3,850 kbps | 93.5 MB | **2** |
-| `MID HD.webm` | 768x432 | 1,902 kbps | 46.2 MB | 0 |
-| `MID.webm` | 768x432 | 1,902 kbps | 46.2 MB | 0 |
-| `LOW HD.webm` | 480x270 | 533 kbps | 12.9 MB | 0 |
-| `LOW.webm` | 480x270 | 529 kbps | 12.9 MB | 0 |
+| `ULTRA HD.webm` | 1920×1080 | 8,822 kbps | 214 MB | 0 |
+| `ULTRA.webm` | 1216×720 | 7,889 kbps | 192 MB | **2** |
+| `HIGH HD.webm` | 1280×720 | 3,834 kbps | 93.1 MB | 0 |
+| `HIGH.webm` | 1216×720 | 3,850 kbps | 93.5 MB | **2** |
+| `MID HD.webm` | 768×432 | 1,902 kbps | 46.2 MB | 0 |
+| `MID.webm` | 768×432 | 1,902 kbps | 46.2 MB | 0 |
+| `LOW HD.webm` | 480×270 | 533 kbps | 12.9 MB | 0 |
+| `LOW.webm` | 480×270 | 529 kbps | 12.9 MB | 0 |
 
-### The Two Encoding Generations
+#### The Two Encoding Generations
 
 The non-`HD` and `HD` files appear to represent two encoding targets: likely original extracted assets vs. re-encoded/corrected assets.
 
-#### The 1216-Wide Non-Standard Width
+##### The 1216-Wide Non-Standard Width
 
 `HIGH.webm` and `ULTRA.webm` are 1216 pixels wide, which is non-standard for typical web/video delivery (720p standard width is 1280).
 
-This is consistent with source cropping (for example HUD-safe or letterbox-area removal). `HD` variants normalize this to standard frames (1280x720 and 1920x1080).
+This is consistent with source cropping (for example HUD-safe or letterbox-area removal). `HD` variants normalize this to standard frames (1280×720 and 1920×1080).
 
-#### VP8 Profile Difference
+##### VP8 Profile Difference
 
 - **Profile 0** (HD variants): broad compatibility and typical decode behavior.
 - **Profile 2** (`ULTRA.webm`, `HIGH.webm`): more complex profile, commonly seen in legacy engine-generated encodes.
 
 This again supports the interpretation that non-HD files are closer to original extracted game encodes, while HD files are compatibility-focused re-encodes.
 
-### MID and LOW: Minimal Practical Difference
+#### MID and LOW: Minimal Practical Difference
 
 For `MID` and `LOW`, `HD` and non-`HD` are effectively equivalent in practice (same resolution/profile and near-identical size/bitrate).
 
-### Audio Gap
+---
+
+### JDNext File Reference (Empirical: 46 files / 30+ maps)
+
+Data sourced from `jdnext_videos_ffprobe.csv` — real ffprobe output from downloaded JDNext WebM files.
+
+**Common `.webm` properties (all JDNext samples):**
+
+- Pixel format: yuv420p
+- Frame rate: 25 fps (25/1)
+- Duration range: 156s–296s (varies per song)
+
+#### Complete 8-Tier Reference (BirdsOfAFeather)
+
+BirdsOfAFeather is the only map in the sample with all 8 tiers downloaded, providing a direct comparison:
+
+| File | Codec | Resolution | Bitrate | Size |
+|---|---|---|---|---|
+| `video_ULTRA.hd.webm` | VP8 | 1920×1080 | 7,879 kbps | 213 MB |
+| `video_ULTRA.vp9.webm` | **VP9** | 1280×720 | 5,434 kbps | 147 MB |
+| `video_HIGH.hd.webm` | VP8 | 1280×720 | 2,954 kbps | 80 MB |
+| `video_HIGH.vp9.webm` | **VP9** | 1280×720 | 2,740 kbps | 74 MB |
+| `video_MID.hd.webm` | VP8 | 768×432 | 1,486 kbps | 40 MB |
+| `video_MID.vp9.webm` | **VP9** | 768×432 | 1,363 kbps | 37 MB |
+| `video_LOW.hd.webm` | VP8 | 480×270 | 375 kbps | 10 MB |
+| `video_LOW.vp9.webm` | **VP9** | 480×270 | 691 kbps | 19 MB |
+
+> [!NOTE]
+> A transcoded test file `video_ULTRA.vp9_to_vp8.webm` (147 MB, VP8 1280×720, 5,451 kbps) is also present — this confirms that VP9→VP8 re-encoding preserves resolution and produces near-identical file size to the VP9 source.
+
+#### JDNext `HIGH_HD` Tier Statistics (27 maps)
+
+Most JDNext maps in the sample were downloaded at `HIGH_HD` (the recommended default). Aggregate statistics:
+
+| Metric | Value |
+|---|---|
+| Codec | VP8 (all) |
+| Resolution | 1280×720 (all) |
+| Frame rate | 25 fps (all) |
+| Bitrate range | 2,601–4,123 kbps |
+| Bitrate median | ~3,790 kbps |
+| File size range | 66–143 MB |
+| Duration range | 156–296s |
+
+#### JDU-Origin Maps on JDNext CDN (ULTRA Tier)
+
+Several maps (Balance, Chiwawa, Domino, Hangover, Koi, MamaMia, MrBlueSky) use the JDU `{MapName}_ULTRA.webm` naming convention despite being downloaded through JDNext workflows. These files share JDU encoding characteristics:
+
+| Metric | Value |
+|---|---|
+| Codec | VP8 (all) |
+| Resolution | 1216×720 (non-standard JDU width) |
+| Bitrate range | 7,376–7,954 kbps |
+| File size range | 165–242 MB |
+
+This confirms these are JDU-origin encodes served through JDNext infrastructure, not native JDNext re-encodes.
+
+#### Key JDNext Observations
+
+1. **VP9 is more size-efficient** at HIGH/MID/ULTRA, achieving ~7–15% smaller files than the equivalent `.hd` (VP8) tier at the same resolution.
+2. **VP9 LOW is the exception** — at 480×270, the VP9 variant is ~1.8× larger than the VP8 HD variant (19 MB vs 10 MB), likely due to a higher target bitrate setting in the JDNext encoding pipeline.
+3. **JDNext `.hd` variants always use VP8** and match the exact resolution/codec of JDU HD files, making them drop-in compatible with JD2021 without transcoding.
+4. **JDNext `.vp9` variants always use VP9**, even when the resolution is the same as the `.hd` counterpart (e.g., both HIGH variants are 1280×720).
+5. **ULTRA resolution differs by variant**: `.hd` is 1920×1080, `.vp9` is 1280×720 — the VP9 non-HD tier is lower resolution.
+
+---
+
+### Audio Gap (Both Sources)
 
 `AUDIO.ogg` (Vorbis, ~224 kbps) is typically shorter than the corresponding NOHUD video (roughly 5+ seconds in common sets).
 
@@ -287,8 +380,11 @@ Audio/video are intentionally not 1:1 duration-matched at source level. Final pl
 
 | Question | Answer |
 |---|---|
-| Which variants should I use? | Prefer **HD** for ULTRA/HIGH (standard aspect output, Profile 0). MID/LOW variants are mostly interchangeable. |
-| Why is ULTRA_HD much larger? | 1920x1080 contains about 2.3x the pixel count of 1216x720, reflected in output size and bitrate. |
+| Which variants should I use? | For **JDU**: prefer `*_HD` for ULTRA/HIGH (standard aspect output, Profile 0). MID/LOW are interchangeable. For **JDNext**: prefer `*.hd.webm` variants — they are already VP8 and need no transcoding. |
+| Why is ULTRA_HD much larger? | 1920×1080 contains about 2.3× the pixel count of 1216×720 (JDU) or 1280×720 (JDNext VP9), reflected in output size and bitrate. |
+| Do JDNext `.hd` files need transcoding? | No — JDNext `.hd.webm` files are VP8 at standard resolutions and can be byte-copied to the install target without FFmpeg. |
+| Why is JDNext VP9 LOW larger than VP8 LOW? | The JDNext encoding pipeline appears to use a higher target bitrate for VP9 LOW (~691 kbps) than VP8 LOW HD (~375 kbps) at the same 480×270 resolution. |
+| How do I tell JDU-origin maps from true JDNext? | Check the filename prefix: `{MapName}_TIER.webm` = JDU origin; `video_TIER.{variant}.webm` = native JDNext. JDU-origin also shows the non-standard 1216px width at ULTRA tier. |
 | Why is video sync still off on some IPK maps? | IPK `videoStartTime` metadata is often incomplete/approximate, so manual Video Offset tuning is expected for some maps. |
 | Can I skip VP9→VP8 re-encoding? | Yes — set `vp9_handling_mode` to `fallback_compatible_down` in settings. The pipeline will select HD-variant tiers (VP8) instead. |
 | Where does binary video processing happen? | Exclusively in `media_processor.py` functions: `copy_video()`, `generate_map_preview()`, `_get_video_codec()`, `get_video_duration()`. |
