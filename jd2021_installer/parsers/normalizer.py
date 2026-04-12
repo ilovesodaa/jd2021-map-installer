@@ -248,6 +248,69 @@ def _find_ckd_files(
     return result
 
 
+def _infer_ckd_stem_alias(directory: str, codename: Optional[str]) -> Optional[str]:
+    """Infer an alternate CKD stem when source filenames don't match codename.
+
+    Some JDNext payloads expose runtime map codename in map.json (e.g. Jukebox)
+    but ship CKDs with legacy stems (e.g. pigstep..._musictrack.tpl.ckd).
+    """
+    root = Path(directory)
+    codename_low = str(codename or "").strip().lower()
+
+    candidates: Dict[str, int] = {}
+    suffixes = (
+        "_musictrack.tpl",
+        "_musictrack",
+        "_tml_dance.dtape",
+        "_tml_dance",
+        "_tml_karaoke.ktape",
+        "_tml_karaoke",
+        "_songdesc.tpl",
+        "_songdesc",
+    )
+
+    scan_patterns = (
+        "*musictrack*.tpl.ckd",
+        "*dtape*ckd",
+        "*ktape*ckd",
+        "*songdesc*.tpl.ckd",
+    )
+
+    for pattern in scan_patterns:
+        for path in root.rglob(pattern):
+            stem = path.stem
+            stem_low = stem.lower()
+            base = stem
+            for suffix in suffixes:
+                if stem_low.endswith(suffix):
+                    base = stem[: -len(suffix)]
+                    break
+            base = base.strip("_- ")
+            base_low = base.lower()
+            if not base_low:
+                continue
+            if codename_low and base_low == codename_low:
+                continue
+            if not re.search(r"[a-z]", base_low):
+                continue
+            candidates[base] = candidates.get(base, 0) + 1
+
+    if not candidates:
+        return None
+
+    alias = max(candidates.items(), key=lambda item: item[1])[0]
+    logger.debug("Inferred CKD stem alias for '%s': %s", codename or "<none>", alias)
+    return alias
+
+
+def _has_scoped_ckd_candidates(directory: str, pattern: str, codename: Optional[str]) -> bool:
+    """Return True when at least one CKD candidate matches codename scoping."""
+    paths = [str(p) for p in Path(directory).rglob(pattern)]
+    if not paths:
+        return False
+    return bool(_filter_by_codename(paths, codename, directory))
+
+
 # ---------------------------------------------------------------------------
 # Individual CKD extractors
 # ---------------------------------------------------------------------------
@@ -1499,17 +1562,49 @@ def normalize(
     source_dir_str = str(source_dir)
 
     # 1. & 2. Extract basic metadata
+    ckd_alias = _infer_ckd_stem_alias(source_root_str, codename)
+
+    preferred_ckd_key = codename
+    if ckd_alias and codename and ckd_alias.lower() != codename.lower():
+        codename_has_musictrack = _has_scoped_ckd_candidates(
+            source_root_str,
+            "*musictrack*.tpl.ckd",
+            codename,
+        )
+        alias_has_musictrack = _has_scoped_ckd_candidates(
+            source_root_str,
+            "*musictrack*.tpl.ckd",
+            ckd_alias,
+        )
+        if not codename_has_musictrack and alias_has_musictrack:
+            preferred_ckd_key = ckd_alias
+            logger.debug(
+                "Using inferred CKD alias '%s' as primary lookup key for codename '%s'",
+                ckd_alias,
+                codename,
+            )
+
     try:
-        music_track = _extract_music_track(source_root_str, codename)
+        music_track = _extract_music_track(source_root_str, preferred_ckd_key)
+        if music_track is None and ckd_alias and preferred_ckd_key != ckd_alias:
+            music_track = _extract_music_track(source_root_str, ckd_alias)
     except NormalizationError:
         music_track = None
 
     song_desc = _extract_song_desc(source_root_str, codename)
     effective_codename = codename or song_desc.map_name
     _apply_jdnext_metadata_songdesc_overrides(source_root_str, song_desc)
-    dance_tape = _extract_dance_tape(source_root_str, codename)
-    karaoke_tape = _extract_karaoke_tape(source_root_str, codename)
-    cinematic_tape = _extract_cinematic_tape(source_root_str, codename)
+    dance_tape = _extract_dance_tape(source_root_str, preferred_ckd_key)
+    if dance_tape is None and ckd_alias and preferred_ckd_key != ckd_alias:
+        dance_tape = _extract_dance_tape(source_root_str, ckd_alias)
+
+    karaoke_tape = _extract_karaoke_tape(source_root_str, preferred_ckd_key)
+    if karaoke_tape is None and ckd_alias and preferred_ckd_key != ckd_alias:
+        karaoke_tape = _extract_karaoke_tape(source_root_str, ckd_alias)
+
+    cinematic_tape = _extract_cinematic_tape(source_root_str, preferred_ckd_key)
+    if cinematic_tape is None and ckd_alias and preferred_ckd_key != ckd_alias:
+        cinematic_tape = _extract_cinematic_tape(source_root_str, ckd_alias)
 
     # Media discovery uses the resolved map subtree first, with full extraction root
     # as search_root fallback for assets that live outside world/maps/<codename>.

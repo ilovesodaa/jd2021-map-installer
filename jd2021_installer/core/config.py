@@ -71,6 +71,10 @@ class AppConfig(BaseModel):
     fetch_login_timeout_s: int = 300
     fetch_bot_response_timeout_s: int = 60
 
+    # Update checker settings
+    check_updates_on_launch: bool = True
+    update_branch: str = ""  # empty = auto-detect from git or state file
+
     # FFmpeg configuration
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"

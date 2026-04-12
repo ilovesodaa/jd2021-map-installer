@@ -316,6 +316,118 @@ def _ensure_jdnext_albumcoach_texture_from_coach(map_target: Path, codename: str
         return False
 
 
+def _apply_jdnext_bottom_alpha_fade_if_needed(map_target: Path, codename: str) -> int:
+    """Apply JDNext-style bottom alpha fade to coach textures when missing.
+
+    Returns number of textures updated. Files that already have a bottom fade are
+    left untouched.
+    """
+    try:
+        from PIL import Image
+    except Exception:
+        return 0
+
+    texture_dirs = [
+        map_target / "menuart" / "textures",
+        map_target / "MenuArt" / "textures",
+    ]
+
+    def _candidate_texture(path: Path) -> bool:
+        name_low = path.name.lower()
+        if not name_low.startswith(f"{codename.lower()}_"):
+            return False
+        if "coach_" not in name_low and "cover_albumcoach" not in name_low:
+            return False
+        return path.suffix.lower() in {".png", ".tga"}
+
+    def _row_alpha_means(alpha_img: "Image.Image") -> list[float]:
+        width, height = alpha_img.size
+        alpha_px = alpha_img.load()
+        if alpha_px is None:
+            return []
+        means: list[float] = []
+        for y in range(height):
+            row_sum = 0
+            for x in range(width):
+                value = alpha_px[x, y]
+                if isinstance(value, tuple):
+                    row_sum += int(value[0])
+                elif value is None:
+                    row_sum += 0
+                else:
+                    row_sum += int(value)
+            means.append(row_sum / max(1, width))
+        return means
+
+    def _already_has_bottom_fade(row_means: list[float]) -> bool:
+        h = len(row_means)
+        if h < 8:
+            return False
+        top_end = max(1, int(h * 0.35))
+        fade_start = max(0, int(h * 0.70))
+        top_mean = sum(row_means[:top_end]) / max(1, top_end)
+        bottom_min = min(row_means[fade_start:])
+        tail = row_means[-1]
+        # Consider it already faded when the bottom approaches full transparency
+        # and differs strongly from the opaque upper region.
+        return tail <= 8 and bottom_min <= (top_mean * 0.35)
+
+    updated = 0
+    seen: set[str] = set()
+    for tex_dir in texture_dirs:
+        if not tex_dir.is_dir():
+            continue
+        for path in tex_dir.iterdir():
+            key = str(path).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+
+            if not path.is_file() or not _candidate_texture(path):
+                continue
+
+            try:
+                with Image.open(path) as img:
+                    rgba = img.convert("RGBA")
+                width, height = rgba.size
+                if width < 4 or height < 8:
+                    continue
+
+                alpha = rgba.getchannel("A")
+                row_means = _row_alpha_means(alpha)
+                if _already_has_bottom_fade(row_means):
+                    continue
+
+                fade_start = max(0, int(height * 0.70))
+                if fade_start >= height - 1:
+                    continue
+
+                fade_den = max(1, (height - 1) - fade_start)
+                px = rgba.load()
+                if px is None:
+                    continue
+                for y in range(fade_start, height):
+                    fade = ((height - 1) - y) / fade_den
+                    if fade < 0.0:
+                        fade = 0.0
+                    fade = fade ** 1.35
+                    for x in range(width):
+                        px_value = px[x, y]
+                        if not isinstance(px_value, tuple) or len(px_value) < 4:
+                            continue
+                        r, g, b, a = px_value
+                        new_a = int(round(a * fade))
+                        if new_a < a:
+                            px[x, y] = (r, g, b, new_a)
+
+                rgba.save(path)
+                updated += 1
+            except OSError:
+                continue
+
+    return updated
+
+
 def _install_menuart_companion_assets(menuart_sources: list[Path], map_target: Path) -> int:
     """Install non-texture MenuArt companion files shipped as *.ckd payloads.
 
@@ -1161,7 +1273,7 @@ class BatchInstallWorker(QObject):
             success_count = 0
             attempted_maps = 0
             installed_maps: list[NormalizedMapData] = []
-            html_prepared: list[tuple[str, Path]] = []
+            html_prepared: list[tuple[str, Path, str]] = []
             installed_codenames: set[str] = set()
             
             # Temporary cache for extracted IPKs
@@ -1202,7 +1314,7 @@ class BatchInstallWorker(QObject):
                             config=self._config,
                         )
                         prepared_dir = extractor.extract(batch_cache)
-                        html_prepared.append((map_name, prepared_dir))
+                        html_prepared.append((map_name, prepared_dir, source_game))
                     except Exception as e:
                         logger.debug("Failed HTML prepare for %s: %s", map_name, e)
                         self.status.emit(f"Warning: Failed HTML prepare for {map_name} ({str(e)[:40]})")
@@ -1242,8 +1354,7 @@ class BatchInstallWorker(QObject):
                             config=self._config,
                         )
                         map_dir = extractor.extract(batch_cache)
-                        resolved_name = (extractor.get_codename() or map_name).strip()
-                        map_names_for_candidate = [resolved_name or map_name]
+                        map_names_for_candidate = [map_name]
                     elif is_candidate_ipk:
                         # Extract IPK to temp dir
                         from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor
@@ -1334,6 +1445,12 @@ class BatchInstallWorker(QObject):
                             map_data.media.audio_path = persisted_audio
                         
                         self.status.emit(f"[{map_data.codename}] Installing map...")
+                        install_source_mode = ""
+                        if is_candidate_fetch:
+                            install_source_mode = "Fetch JDNext" if self._fetch_source == "jdnext" else "Fetch"
+                        elif bool(getattr(map_data, "is_html_source", False)):
+                            install_source_mode = "HTML JDNext" if bool(getattr(map_data, "is_jdnext_source", False)) else "HTML"
+                        setattr(map_data, "_install_source_mode", install_source_mode)
                         self._install_map_synchronously(map_data)
                         emit_map_stage(2)
                         completed_units += 3
@@ -1348,7 +1465,7 @@ class BatchInstallWorker(QObject):
                     self.status.emit(f"Warning: Failed {cpath.name} ({str(e)[:30]})")
 
             # Process maps prepared from HTML folders in phase 1.
-            for map_name, map_dir in html_prepared:
+            for map_name, map_dir, source_game in html_prepared:
                 try:
                     if selected_lookup and map_name.lower() not in selected_lookup:
                         continue
@@ -1406,6 +1523,8 @@ class BatchInstallWorker(QObject):
                         map_data.media.audio_path = persisted_audio
 
                     self.status.emit(f"[{map_data.codename}] Installing map...")
+                    install_source_mode = "HTML JDNext" if source_game == "jdnext" else "HTML"
+                    setattr(map_data, "_install_source_mode", install_source_mode)
                     self._install_map_synchronously(map_data)
                     emit_map_stage(2)
                     completed_units += 3
@@ -1436,8 +1555,15 @@ class BatchInstallWorker(QObject):
         def callback(msg: str):
             prefix = f"[{map_data.codename}] "
             self.status.emit(prefix + msg)
-            
-        install_map_to_game(map_data, self._target_dir, self._config, status_callback=callback)
+
+        source_mode = str(getattr(map_data, "_install_source_mode", "") or "")
+        install_map_to_game(
+            map_data,
+            self._target_dir,
+            self._config,
+            source_mode=source_mode,
+            status_callback=callback,
+        )
 
 
 
@@ -1962,6 +2088,13 @@ def install_map_to_game(
                     "Synthesized missing albumcoach texture from coach_1 for JDNext map '%s'.",
                     codename,
                 )
+            faded_coaches = _apply_jdnext_bottom_alpha_fade_if_needed(map_target, codename)
+            if faded_coaches:
+                logger.debug(
+                    "Applied JDNext bottom alpha fade to %d coach texture(s) for '%s'.",
+                    faded_coaches,
+                    codename,
+                )
 
             
         # V1 Parity: Validate and heal MenuArt (case-fix + RGBA re-save)
@@ -1978,7 +2111,12 @@ def install_map_to_game(
             
         if status_callback: status_callback("Decoding pictograms...")
         decoded_pictos = 0
-        picto_canvas_size = 512 if _is_jdnext_source_map() else None
+        # JDNext fallback canvas: solo maps use 512x512, multi-coach maps use 512x354.
+        # Decoder preserves any width-512 pictos as-is and only canvases non-512 widths.
+        picto_canvas_size = None
+        if _is_jdnext_source_map():
+            coach_count = int(getattr(getattr(map_data, "song_desc", None), "num_coach", 1) or 1)
+            picto_canvas_size = (512, 512) if coach_count <= 1 else (512, 354)
         if map_data.source_dir and map_data.source_dir.exists():
             for picto_dir in _collect_pictogram_sources(map_data.source_dir, codename, preferred=picto_src):
                 decoded_pictos += decode_pictograms(

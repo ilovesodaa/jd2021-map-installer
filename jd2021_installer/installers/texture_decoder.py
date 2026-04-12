@@ -36,8 +36,12 @@ _X360_FMT_DXT5 = 0x54
 _X360_GPU_DESC_SIZE = 52
 
 
-def _save_picto_on_canvas(img, output_path: Path, canvas_size: Optional[int]) -> None:
-    """Save a pictogram either directly or centered on a transparent square canvas.
+def _save_picto_on_canvas(
+    img,
+    output_path: Path,
+    canvas_size: Optional[int | Tuple[int, int]],
+) -> None:
+    """Save a pictogram either directly or centered on a transparent canvas.
 
     When ``canvas_size`` is provided, the image is never upscaled; if the
     source exceeds the canvas, it is proportionally downscaled to fit.
@@ -48,20 +52,39 @@ def _save_picto_on_canvas(img, output_path: Path, canvas_size: Optional[int]) ->
         img.save(output_path)
         return
 
+    if isinstance(canvas_size, tuple):
+        canvas_width, canvas_height = int(canvas_size[0]), int(canvas_size[1])
+    else:
+        canvas_width = int(canvas_size)
+        canvas_height = int(canvas_size)
+
+    if canvas_width <= 0 or canvas_height <= 0:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(output_path)
+        return
+
     src = img.convert("RGBA")
     width, height = src.size
     if width <= 0 or height <= 0:
         return
 
-    scale = min(1.0, float(canvas_size) / float(max(width, height)))
+    # Preserve JDNext-native width exactly as provided.
+    # Any picto already authored at width 512 is kept untouched, regardless
+    # of height. Only non-512-width pictos are fit onto the configured canvas.
+    if width == 512:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        src.save(output_path)
+        return
+
+    scale = min(1.0, min(float(canvas_width) / float(width), float(canvas_height) / float(height)))
     fit_width = max(1, int(round(width * scale)))
     fit_height = max(1, int(round(height * scale)))
     if (fit_width, fit_height) != (width, height):
         src = src.resize((fit_width, fit_height), Image.Resampling.LANCZOS)
 
-    canvas = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
-    offset_x = max(0, (canvas_size - src.size[0]) // 2)
-    offset_y = max(0, canvas_size - src.size[1])
+    canvas = Image.new("RGBA", (canvas_width, canvas_height), (0, 0, 0, 0))
+    offset_x = max(0, (canvas_width - src.size[0]) // 2)
+    offset_y = max(0, canvas_height - src.size[1])
     canvas.paste(src, (offset_x, offset_y), src)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(output_path)
@@ -199,7 +222,11 @@ def x360_to_dds(payload: bytes) -> bytes:
     return _x360_build_dds(untiled, width, height, fourcc, block_bytes)
 
 
-def dds_to_image(dds_data: bytes, output_path: Path, canvas_size: Optional[int] = None) -> bool:
+def dds_to_image(
+    dds_data: bytes,
+    output_path: Path,
+    canvas_size: Optional[int | Tuple[int, int]] = None,
+) -> bool:
     """Convert DDS data to TGA or PNG using Pillow."""
     try:
         from PIL import Image
@@ -230,7 +257,7 @@ def dds_to_image(dds_data: bytes, output_path: Path, canvas_size: Optional[int] 
 def decode_ckd_texture(
     ckd_path: Path,
     output_path: Optional[Path] = None,
-    canvas_size: Optional[int] = None,
+    canvas_size: Optional[int | Tuple[int, int]] = None,
 ) -> bool:
     """Full pipeline: CKD → detect format → DDS → TGA/PNG.
 
@@ -295,7 +322,11 @@ def decode_ckd_texture(
 # Batch decoders
 # ---------------------------------------------------------------------------
 
-def decode_pictograms(picto_dir: Path, output_dir: Path, canvas_size: Optional[int] = None) -> int:
+def decode_pictograms(
+    picto_dir: Path,
+    output_dir: Path,
+    canvas_size: Optional[int | Tuple[int, int]] = None,
+) -> int:
     """Decode all pictogram CKD textures in a directory.
 
     Args:

@@ -2,6 +2,7 @@ __pycache__
 docs/todo/
 cache/
 installer_settings.json
+updater_state.json
 logs/
 .browser-profile/
 maps/

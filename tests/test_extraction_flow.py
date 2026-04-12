@@ -1,4 +1,5 @@
 import pytest
+import json
 import os
 import subprocess
 import zipfile
@@ -10,10 +11,17 @@ from jd2021_installer.core.exceptions import WebExtractionError
 from jd2021_installer.extractors.web_playwright import (
     WebPlaywrightExtractor,
     _classify_urls,
+    _embed_matches_requester,
+    _embed_mentions_expected_codename,
+    _embed_contains_codename_links,
+    _extract_embed_error_message,
     _extract_embed_fields_from_html,
     _has_valid_cdn_links,
+    _infer_codename_from_source_files,
+    _is_valid_embed_response,
     _is_valid_webm_file,
     _parse_jdnext_button_payloads,
+    extract_codename_from_urls,
     download_files,
 )
 
@@ -167,6 +175,24 @@ def test_web_extractor_raises_when_critical_assets_still_missing(tmp_path, monke
 
     with pytest.raises(WebExtractionError, match=r"Critical download\(s\) missing"):
         extractor.extract(tmp_path / "out")
+
+
+def test_web_extractor_download_dir_groups_jdu_under_mapdownloads(tmp_path):
+    extractor = WebPlaywrightExtractor(
+        source_game="jdu",
+        config=AppConfig(download_root=tmp_path),
+    )
+
+    assert extractor._download_dir_for_codename("TestMap") == tmp_path / "jdu" / "TestMap"
+
+
+def test_web_extractor_download_dir_groups_jdnext_under_mapdownloads(tmp_path):
+    extractor = WebPlaywrightExtractor(
+        source_game="jdnext",
+        config=AppConfig(download_root=tmp_path),
+    )
+
+    assert extractor._download_dir_for_codename("TestMap") == tmp_path / "jdnext" / "TestMap"
 
 
 def test_download_files_respects_retry_after_header(tmp_path, monkeypatch):
@@ -342,6 +368,113 @@ def test_parse_jdnext_button_payloads_maps_expected_other_info_fields():
     assert other_info["map_length"] == "02:34"
     assert other_info["original_jd_version"] == "JD2023"
     assert other_info["coach_count"] == "2"
+
+
+def test_embed_contains_codename_links_matches_target_map_only():
+    target_html = (
+        '<a href="https://jd-s3.cdn.ubi.com/public/map/MyMap/MyMap_MAIN_SCENE_DURANGO.zip">scene</a>'
+    )
+    other_html = (
+        '<a href="https://jd-s3.cdn.ubi.com/public/map/OtherMap/OtherMap_MAIN_SCENE_DURANGO.zip">scene</a>'
+    )
+
+    assert _embed_contains_codename_links(target_html, "MyMap") is True
+    assert _embed_contains_codename_links(other_html, "MyMap") is False
+
+
+def test_is_valid_embed_response_rejects_other_user_codename_response():
+    other_user_html = (
+        '<div><a href="https://jd-s3.cdn.ubi.com/public/map/OtherMap/OtherMap_ULTRA.hd.webm">video</a></div>'
+    )
+
+    assert _is_valid_embed_response(other_user_html) is True
+    assert _is_valid_embed_response(other_user_html, expected_codename="MyMap") is False
+
+
+def test_is_valid_embed_response_allows_textual_codename_fallback():
+    # Simulates JDNext-style response where link path may not carry the requested codename.
+    html = (
+        '<div class="embedTitle__x"><span>Judas</span></div>'
+        '<a href="https://jdcn-switch.cdn.ubisoft.cn/private/jdnext/maps/abcd/video_ultra.webm">video</a>'
+    )
+
+    assert _is_valid_embed_response(
+        html,
+        require_gameplay_video=True,
+        expected_codename="Judas",
+        allow_textual_codename_fallback=True,
+    ) is True
+
+
+def test_extract_embed_error_message_from_error_field():
+    html = (
+        '<div class="embedFieldName__x"><span>Error</span></div>'
+        '<div class="embedFieldValue__x"><span>❌ Couldn\'t find this track ❌</span></div>'
+    )
+
+    msg = _extract_embed_error_message(html)
+
+    assert "Couldn" in msg
+    assert "find this track" in msg
+
+
+def test_embed_mentions_expected_codename_matches_embed_title():
+    html = '<div class="embedTitle__x"><span>Koi</span></div>'
+
+    assert _embed_mentions_expected_codename(html, "Koi") is True
+    assert _embed_mentions_expected_codename(html, "OtherMap") is False
+
+
+def test_extract_codename_from_urls_ignores_jdnext_public_uuid_maps_id():
+    urls = [
+        "https://jd-s3.cdn.ubi.com/public/jdnext/maps/267ea001-65e8-4c60-b8a1-daa2b25dbd5f/nx/mapPackage/hash.bundle",
+    ]
+
+    assert extract_codename_from_urls(urls) is None
+
+
+def test_extract_codename_from_urls_ignores_jdnext_private_uuid_maps_id():
+    urls = [
+        "https://cdn-jdhelper.ramaprojects.ru/private/jdnext/maps/267ea001-65e8-4c60-b8a1-daa2b25dbd5f/video_ULTRA.hd.webm/hash.webm?auth=abc",
+    ]
+
+    assert extract_codename_from_urls(urls) is None
+
+
+def test_infer_codename_from_source_files_prefers_map_json_songdesc(tmp_path: Path):
+    map_json = tmp_path / "monobehaviour" / "map.json"
+    map_json.parent.mkdir(parents=True, exist_ok=True)
+    map_json.write_text(
+        json.dumps({"SongDesc": {"MapName": "Jukebox"}}),
+        encoding="utf-8",
+    )
+
+    assert _infer_codename_from_source_files(tmp_path) == "Jukebox"
+
+
+def test_infer_codename_from_source_files_uses_moves_prefix_fallback(tmp_path: Path):
+    moves_dir = tmp_path / "Timeline" / "Moves" / "durango"
+    moves_dir.mkdir(parents=True, exist_ok=True)
+    (moves_dir / "jukebox_cross.gesture").write_text("x", encoding="utf-8")
+    (moves_dir / "jukebox_spin.gesture").write_text("x", encoding="utf-8")
+    (moves_dir / "jukebox_pose.msm").write_text("x", encoding="utf-8")
+
+    assert _infer_codename_from_source_files(tmp_path) == "jukebox"
+
+
+def test_embed_matches_requester_with_matching_mention():
+    html = '<div><span>@Monika</span><span>Couldn\'t find this track</span></div>'
+    assert _embed_matches_requester(html, ["monika"]) is True
+
+
+def test_embed_matches_requester_with_different_mention():
+    html = '<div><span>@SomeoneElse</span><span>Couldn\'t find this track</span></div>'
+    assert _embed_matches_requester(html, ["monika"]) is False
+
+
+def test_embed_matches_requester_neutral_when_no_mentions():
+    html = '<div><span>Error:</span><span>Couldn\'t find this track</span></div>'
+    assert _embed_matches_requester(html, ["monika"]) is True
 
 
 def test_parse_jdnext_button_payloads_uses_text_fallback_for_tags_and_coaches():

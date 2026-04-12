@@ -32,13 +32,18 @@ def test_copy_moves_only_accepts_kinect_v1_v2_gestures(tmp_path: Path) -> None:
 
     assert (pc / "x360_ok.gesture").exists()
     assert (pc / "durango_ok.gesture").exists()
-    assert not (pc / "scarlett_should_skip.gesture").exists()
+    assert (pc / "scarlett_should_skip.gesture").exists()
+
+    # Original source platform layout is preserved alongside PC mirror copies.
+    assert (target / "timeline" / "moves" / "x360" / "x360_ok.gesture").exists()
+    assert (target / "timeline" / "moves" / "durango" / "durango_ok.gesture").exists()
+    assert (target / "timeline" / "moves" / "scarlett" / "scarlett_should_skip.gesture").exists()
 
     # MSM is still copied cross-platform.
     assert (pc / "x360_ok.msm").exists()
     assert (pc / "scarlett_ok.msm").exists()
 
-    assert copied == 4
+    assert copied == 5
 
 
 def test_copy_moves_rejects_text_like_or_tiny_gesture_files(tmp_path: Path) -> None:
@@ -116,6 +121,34 @@ def test_copy_moves_uses_bundled_generic_template(tmp_path: Path) -> None:
     assert out.exists()
     assert copied == 1
 
-    bundled = Path(__file__).resolve().parents[1] / "assets" / "gesture_templates" / "discorope.gesture"
-    assert bundled.exists()
-    assert out.read_bytes() == bundled.read_bytes()
+    # Unsupported-platform gesture is now mirrored directly into PC.
+    assert out.read_bytes() == (scarlett / "need_fallback.gesture").read_bytes()
+
+
+def test_copy_moves_skip_gestures_synthesizes_to_pc_and_durango(tmp_path: Path) -> None:
+    src = tmp_path / "source_moves"
+    x360 = src / "x360"
+    x360.mkdir(parents=True)
+
+    # In JDNext mode, gestures are skipped and later synthesized from dtape refs.
+    _write_binary_gesture(x360 / "ignored_when_skip_true.gesture")
+
+    target = tmp_path / "game_map"
+    timeline = target / "timeline"
+    timeline.mkdir(parents=True, exist_ok=True)
+    (timeline / "game_map_TML_Dance.dtape").write_text(
+        'params = { Tape = { Clips = {\n'
+        '  { MotionClip = { ClassifierPath = "world/maps/game_map/timeline/moves/jdnext_generated.msm" } }\n'
+        '} } }',
+        encoding="utf-8",
+    )
+
+    copied = copy_moves(src, target, skip_gestures=True)
+
+    pc = target / "timeline" / "moves" / "pc"
+    durango = target / "timeline" / "moves" / "durango"
+
+    assert (pc / "jdnext_generated.gesture").exists()
+    assert (durango / "jdnext_generated.gesture").exists()
+    assert (target / "timeline" / "moves" / "x360" / "ignored_when_skip_true.gesture").exists()
+    assert copied >= 2

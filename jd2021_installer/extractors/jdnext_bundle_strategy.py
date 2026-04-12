@@ -428,7 +428,7 @@ def map_assetstudio_output(assetstudio_out: Path, mapped_root: Path, codename: s
         if karaoke_ckd:
             summary.karaoke_tape_ckd = str(karaoke_ckd)
 
-    moves_platform_dir = mapped_root / "timeline" / "moves" / "x360"
+    moves_platform_dir = mapped_root / "timeline" / "moves" / "wiiu"
     for src in sorted(textasset_dir.glob("*.gesture")):
         dst = moves_platform_dir / src.name.lower()
         dst.parent.mkdir(parents=True, exist_ok=True)

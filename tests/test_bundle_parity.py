@@ -4,6 +4,10 @@ import shutil
 import tempfile
 from unittest.mock import patch
 from pathlib import Path
+try:
+    from PIL import Image
+except Exception:
+    Image = None
 from jd2021_installer.extractors.archive_ipk import _detect_maps_in_dir
 from jd2021_installer.parsers.normalizer import _discover_media, _find_ckd_files
 from jd2021_installer.core.models import (
@@ -14,7 +18,10 @@ from jd2021_installer.core.models import (
     SongDescription,
 )
 from jd2021_installer.core.config import AppConfig
-from jd2021_installer.ui.workers.pipeline_workers import install_map_to_game
+from jd2021_installer.ui.workers.pipeline_workers import (
+    _apply_jdnext_bottom_alpha_fade_if_needed,
+    install_map_to_game,
+)
 
 class TestBundleParity(unittest.TestCase):
     def setUp(self):
@@ -300,6 +307,61 @@ class TestBundleParity(unittest.TestCase):
         expected_act = game_root / "data" / "world" / "maps" / "MapA" / "MenuArt" / "Actors" / "MapA_cover_albumcoach.act"
         self.assertTrue(expected_texture.exists())
         self.assertTrue(expected_act.exists())
+
+    @unittest.skipIf(Image is None, "Pillow not available")
+    def test_jdnext_bottom_fade_applies_when_alpha_is_fully_opaque(self):
+        texture_dir = self.test_dir / "game" / "data" / "world" / "maps" / "MapA" / "menuart" / "textures"
+        texture_dir.mkdir(parents=True)
+        coach_path = texture_dir / "MapA_coach_1.png"
+
+        img = Image.new("RGBA", (16, 64), (255, 255, 255, 255))
+        img.save(coach_path)
+
+        updated = _apply_jdnext_bottom_alpha_fade_if_needed(
+            self.test_dir / "game" / "data" / "world" / "maps" / "MapA",
+            "MapA",
+        )
+        self.assertEqual(updated, 1)
+
+        with Image.open(coach_path) as out:
+            alpha = out.convert("RGBA").getchannel("A")
+            top_alpha = alpha.getpixel((8, 8))
+            bottom_alpha = alpha.getpixel((8, 63))
+
+        self.assertGreaterEqual(top_alpha, 240)
+        self.assertLessEqual(bottom_alpha, 8)
+
+    @unittest.skipIf(Image is None, "Pillow not available")
+    def test_jdnext_bottom_fade_skips_when_texture_already_transparent(self):
+        texture_dir = self.test_dir / "game" / "data" / "world" / "maps" / "MapA" / "menuart" / "textures"
+        texture_dir.mkdir(parents=True)
+        coach_path = texture_dir / "MapA_coach_1.png"
+
+        width, height = 16, 64
+        img = Image.new("RGBA", (width, height), (255, 255, 255, 255))
+        px = img.load()
+        fade_start = int(height * 0.70)
+        den = max(1, (height - 1) - fade_start)
+        for y in range(fade_start, height):
+            fade = ((height - 1) - y) / den
+            a = int(round(255 * (fade ** 1.35)))
+            for x in range(width):
+                px[x, y] = (255, 255, 255, a)
+        img.save(coach_path)
+
+        with Image.open(coach_path) as before_img:
+            before_bottom_alpha = before_img.convert("RGBA").getchannel("A").getpixel((8, 63))
+
+        updated = _apply_jdnext_bottom_alpha_fade_if_needed(
+            self.test_dir / "game" / "data" / "world" / "maps" / "MapA",
+            "MapA",
+        )
+        self.assertEqual(updated, 0)
+
+        with Image.open(coach_path) as after_img:
+            after_bottom_alpha = after_img.convert("RGBA").getchannel("A").getpixel((8, 63))
+
+        self.assertEqual(before_bottom_alpha, after_bottom_alpha)
 
 if __name__ == "__main__":
     unittest.main()

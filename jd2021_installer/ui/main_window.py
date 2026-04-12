@@ -72,6 +72,7 @@ from jd2021_installer.core.readjust_index import (
     update_offsets,
     upsert_entry,
 )
+from jd2021_installer.installers.sku_scene import list_registered_maps
 from jd2021_installer.ui.widgets import (
     ActionWidget,
     ConfigWidget,
@@ -134,6 +135,8 @@ _SETTINGS_CHANGE_LABELS: dict[str, str] = {
     "vgmstream_path": "vgmstream executable",
     "third_party_tools_root": "3rd-party tools root",
     "assetstudio_cli_path": "AssetStudio CLI",
+    "check_updates_on_launch": "Check updates on launch",
+    "update_branch": "Update branch",
 }
 
 _SETTINGS_CHANGE_ORDER: tuple[str, ...] = (
@@ -172,6 +175,8 @@ _SETTINGS_CHANGE_ORDER: tuple[str, ...] = (
     "vgmstream_path",
     "third_party_tools_root",
     "assetstudio_cli_path",
+    "check_updates_on_launch",
+    "update_branch",
 )
 
 _READY_STATUS_VALUE = 3
@@ -235,7 +240,7 @@ class MainWindow(QMainWindow):
 
         self._active_threads: set[QThread] = set()
         self._active_worker: Optional[object] = None
-        self._file_logger_handler: Optional[logging.Handler] = None
+        self._file_logger_handlers: list[logging.Handler] = []
         self._preview_audio_warning_shown = False
         self._size_overlay: Optional[QLabel] = None
         self._preview_hint_label: Optional[QLabel] = None
@@ -276,6 +281,7 @@ class MainWindow(QMainWindow):
         # Show Quickstart Guide after first paint.
         QTimer.singleShot(500, self._show_quickstart_if_needed)
         QTimer.singleShot(900, self._run_startup_dependency_guardrail)
+        QTimer.singleShot(1500, self._run_startup_update_check)
 
     def closeEvent(self, event) -> None:
         """Ensure all background processes (especially ffplay) are stopped."""
@@ -787,6 +793,93 @@ class MainWindow(QMainWindow):
         # Do not force Playwright browser launch at startup; that check is mode-specific.
         self._ensure_runtime_dependencies(include_fetch_checks=False)
 
+    def _run_startup_update_check(self) -> None:
+        """Silently check for updates on launch if enabled in settings.
+
+        Only shows a dialog if an update is available.  Network errors
+        are swallowed silently so users are never nagged on startup.
+        """
+        if not getattr(self._config, "check_updates_on_launch", True):
+            return
+
+        import sys
+        project_root = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(project_root))
+        try:
+            from updater import Updater
+        except ImportError:
+            logger.debug("Updater module not found, skipping startup update check.")
+            return
+        finally:
+            try:
+                sys.path.remove(str(project_root))
+            except ValueError:
+                pass
+
+        updater = Updater(project_root)
+        updater.initialize_state()
+
+        branch = getattr(self._config, "update_branch", "") or None
+
+        def _check():
+            return updater.check_for_updates(branch)
+
+        thread = QThread(self)
+        from jd2021_installer.ui.widgets.update_dialog import UpdateResultDialog
+        from PyQt6.QtCore import QObject, pyqtSignal
+
+        class _Worker(QObject):
+            finished = pyqtSignal(object)
+            error = pyqtSignal(str)
+
+            def run(self):
+                try:
+                    result = _check()
+                    self.finished.emit(result)
+                except Exception as exc:
+                    self.error.emit(str(exc))
+
+        worker = _Worker()
+        worker.moveToThread(thread)
+
+        def _on_finished(result):
+            if result.error:
+                logger.debug("Startup update check failed: %s", result.error)
+            elif not result.is_up_to_date:
+                logger.info(
+                    "Update available: %s -> %s on branch %s",
+                    result.local_commit,
+                    result.remote_commit,
+                    result.branch,
+                )
+                dialog = UpdateResultDialog(result, updater, self)
+                dialog.exec()
+            else:
+                logger.debug(
+                    "Up to date on branch %s (commit %s)",
+                    result.branch,
+                    result.local_commit,
+                )
+            thread.quit()
+
+        def _on_error(msg):
+            logger.debug("Startup update check error: %s", msg)
+            thread.quit()
+
+        def _cleanup():
+            self._active_threads.discard(thread)
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(_on_finished)
+        worker.error.connect(_on_error)
+        worker.finished.connect(worker.deleteLater)
+        worker.error.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(_cleanup)
+
+        self._active_threads.add(thread)
+        thread.start()
+
     # ==================================================================
     # UI COMPOSITION  (Phase 3)
     # ==================================================================
@@ -1277,33 +1370,30 @@ class MainWindow(QMainWindow):
 
         candidates: dict[str, tuple[str, str, str]] = {}
 
-        maps_roots = [
-            game_dir / "data" / "World" / "MAPS",
-            game_dir / "data" / "world" / "maps",
-        ]
-        for maps_root in maps_roots:
-            if not maps_root.is_dir():
-                continue
-            for child in maps_root.iterdir():
-                if not child.is_dir():
-                    continue
-                codename = child.name
-                key = codename.lower()
-                source_mode = "Unknown"
-                if key in index_by_codename:
-                    source_mode = index_by_codename[key].source_mode or "Unknown"
-                candidates[key] = (codename, source_mode, str(child))
+        registered_codenames = list_registered_maps(game_dir)
+        for codename in registered_codenames:
+            key = codename.lower()
+            source_mode = "Unknown"
+            location = "Registered in SkuScene (map folder not found)"
 
-        for entry in index_entries:
-            installed_dir = Path(entry.installed_map_dir)
-            if not installed_dir.is_dir():
-                continue
-            key = entry.codename.lower()
-            candidates[key] = (
-                entry.codename,
-                entry.source_mode or "Unknown",
-                str(installed_dir),
-            )
+            if key in index_by_codename:
+                entry = index_by_codename[key]
+                source_mode = entry.source_mode or "Unknown"
+                installed_dir = Path(entry.installed_map_dir)
+                if installed_dir.is_dir():
+                    location = str(installed_dir)
+
+            if location.startswith("Registered in SkuScene"):
+                map_dir_candidates = [
+                    game_dir / "data" / "World" / "MAPS" / codename,
+                    game_dir / "data" / "world" / "maps" / codename,
+                ]
+                for map_dir in map_dir_candidates:
+                    if map_dir.is_dir():
+                        location = str(map_dir)
+                        break
+
+            candidates[key] = (codename, source_mode, location)
 
         return sorted(candidates.values(), key=lambda item: item[0].lower())
 
@@ -2129,9 +2219,19 @@ class MainWindow(QMainWindow):
         self._feedback_panel.update_checklist_step("Extracting map data...", StepStatus.IN_PROGRESS)
 
         # Create worker + thread
+        worker_codename: str | None = None
+        if mode_index in (MODE_FETCH, MODE_JDNEXT):
+            fetch_mode_key = "jdnext" if mode_index == MODE_JDNEXT else "fetch"
+            fetch_fields = source_fields.get(fetch_mode_key, {}) if isinstance(source_fields, dict) else {}
+            raw_codenames = str(fetch_fields.get("codenames", "")).strip()
+            fetch_codenames = [c.strip() for c in raw_codenames.split(",") if c.strip()]
+            if len(fetch_codenames) == 1:
+                worker_codename = fetch_codenames[0]
+
         worker = ExtractAndNormalizeWorker(
             extractor=extractor,
             output_dir=self._config.temp_directory / "_extraction",
+            codename=worker_codename,
         )
         thread = QThread()
         worker.moveToThread(thread)
@@ -3273,7 +3373,7 @@ class MainWindow(QMainWindow):
 
     def _start_file_logging(self, current_target: str) -> None:
         """Starts a dynamic FileHandler log for this installation."""
-        if self._file_logger_handler:
+        if self._file_logger_handlers:
             self._stop_file_logging()
 
         # Sanitize codename for filename and cap to avoid Windows path-length issues.
@@ -3305,20 +3405,42 @@ class MainWindow(QMainWindow):
         if len(codename) > max_segment_len:
             codename = codename[:max_segment_len]
 
-        log_path = logs_dir / f"{file_prefix}{codename}{file_suffix}"
-        
-        self._file_logger_handler = logging.FileHandler(str(log_path), encoding="utf-8")
-        self._file_logger_handler.setLevel(get_file_log_level(self._config.log_detail_level))
-        logging.getLogger("jd2021").addHandler(self._file_logger_handler)
+        log_paths: list[Path] = []
+        if is_fetch_batch:
+            log_paths.append(logs_dir / f"{file_prefix}FetchBatch_{len(raw_fetch_tokens)}{file_suffix}")
+            seen: set[str] = set()
+            for token in raw_fetch_tokens:
+                safe_token = "".join(c for c in token if c.isalnum() or c in ("-", "_")).strip()
+                if not safe_token:
+                    continue
+                if len(safe_token) > max_segment_len:
+                    safe_token = safe_token[:max_segment_len]
+                key = safe_token.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                log_paths.append(logs_dir / f"{file_prefix}{safe_token}{file_suffix}")
+        else:
+            log_paths.append(logs_dir / f"{file_prefix}{codename}{file_suffix}")
+
+        level = get_file_log_level(self._config.log_detail_level)
+        for log_path in log_paths:
+            handler = logging.FileHandler(str(log_path), encoding="utf-8")
+            handler.setLevel(level)
+            logging.getLogger("jd2021").addHandler(handler)
+            self._file_logger_handlers.append(handler)
+
         self._config.log_detail_level = apply_log_detail(self._config.log_detail_level)
-        logger.info("Install log file: %s", log_path)
+        for log_path in log_paths:
+            logger.info("Install log file: %s", log_path)
 
     def _stop_file_logging(self) -> None:
         """Removes the active FileHandler and cleanly closes handles."""
-        if self._file_logger_handler:
-            logging.getLogger("jd2021").removeHandler(self._file_logger_handler)
-            self._file_logger_handler.close()
-            self._file_logger_handler = None
+        if self._file_logger_handlers:
+            for handler in self._file_logger_handlers:
+                logging.getLogger("jd2021").removeHandler(handler)
+                handler.close()
+            self._file_logger_handlers = []
 
     def _set_status(self, text: str) -> None:
         self._status_bar.showMessage(text)

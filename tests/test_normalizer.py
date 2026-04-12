@@ -116,6 +116,53 @@ class TestNormalizerEdgeCases:
 
         assert media.audio_path == ckd_audio
 
+    def test_normalize_uses_ckd_stem_alias_when_codename_differs(self, tmp_path: Path) -> None:
+        """JDNext map.json codename may differ from CKD filename stems."""
+        import json
+
+        mt_data = {
+            "COMPONENTS": [{
+                "trackData": {
+                    "structure": {
+                        "markers": [0, 2400, 4800],
+                        "signatures": [{"beats": 4, "marker": 0}],
+                        "sections": [{"sectionType": 0, "marker": 0}],
+                        "startBeat": 0,
+                        "endBeat": 2,
+                        "videoStartTime": 0.0,
+                    }
+                }
+            }]
+        }
+
+        (tmp_path / "pigstepjustdancexminecraftversion_musictrack.tpl.ckd").write_text(
+            json.dumps(mt_data),
+            encoding="utf-8",
+        )
+
+        map_json = tmp_path / "monobehaviour" / "map.json"
+        map_json.parent.mkdir(parents=True, exist_ok=True)
+        map_json.write_text(
+            json.dumps(
+                {
+                    "MapName": "Jukebox",
+                    "SongDesc": {
+                        "MapName": "Jukebox",
+                        "Title": "Jukebox",
+                        "Artist": "Artist",
+                        "NumCoach": 1,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = normalize(tmp_path, codename="Jukebox")
+
+        assert result.codename == "Jukebox"
+        assert result.music_track is not None
+        assert len(result.music_track.markers) == 3
+
     def test_autodance_stub_files_do_not_enable_autodance(self, tmp_path: Path) -> None:
         import json
 

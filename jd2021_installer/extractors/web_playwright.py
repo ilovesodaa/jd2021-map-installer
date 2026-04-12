@@ -59,6 +59,10 @@ _SEL_MESSAGE_LIST_ITEMS = 'li[id^="chat-messages-"]'
 _UBI_CDN_HOST_PATTERN = re.compile(r"https?://[^\s\"']*(?:cdn\.ubi\.com|cdn\.ubisoft\.cn)", re.IGNORECASE)
 _MAP_PATH_PATTERN = re.compile(r"/(?:public|private)/(?:map|jdnext/maps)/", re.IGNORECASE)
 _WEBM_VALIDATION_CACHE: Dict[str, tuple[int, int, bool]] = {}
+_UUID_LIKE_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 
 def _is_browser_closed_error(exc: BaseException) -> bool:
@@ -114,14 +118,135 @@ def get_filename_from_url(url: str) -> str:
 def extract_codename_from_urls(urls: List[str]) -> Optional[str]:
     """Extract map codename from JDU asset URLs.
 
-    Pattern: https://jd-s3.cdn.ubi.com/public/map/{MapName}/...
+    Supported patterns:
+    - https://.../public/map/{MapName}/...
+
+    Note: JDNext URLs often use opaque map IDs (UUID-like) under
+    ``.../jdnext/maps/<id>/...``. Those IDs are not stable codenames and should
+    not be used as map folder names.
     """
     for url in urls:
         parsed = urlparse(url)
-        parts = parsed.path.strip("/").split("/")
-        if len(parts) >= 3 and parts[0] == "public" and parts[1] == "map":
-            if parts[2]:
-                return parts[2]
+        parts = [p for p in parsed.path.strip("/").split("/") if p]
+        if not parts:
+            continue
+
+        low_parts = [p.lower() for p in parts]
+
+        # JDU: /public/map/<codename>/...
+        for idx in range(len(parts) - 1):
+            if low_parts[idx] == "map":
+                candidate = parts[idx + 1].strip()
+                if candidate:
+                    return candidate
+
+        # JDNext: /public|private/jdnext/maps/<id-or-codename>/...
+        # Ignore UUID-like IDs so caller can fall back to requested codename
+        # (Fetch/JDNext mode) or embed title (HTML mode).
+        for idx in range(len(parts) - 2):
+            if low_parts[idx] == "jdnext" and low_parts[idx + 1] == "maps":
+                candidate = parts[idx + 2].strip()
+                if candidate and not _UUID_LIKE_RE.match(candidate):
+                    return candidate
+    return None
+
+
+def _is_valid_source_codename(candidate: str) -> bool:
+    value = str(candidate or "").strip()
+    if not value:
+        return False
+    if _UUID_LIKE_RE.match(value):
+        return False
+    # Codenames are safe path stems and should include at least one letter.
+    if not re.match(r"^[A-Za-z0-9_-]+$", value):
+        return False
+    if not re.search(r"[A-Za-z]", value):
+        return False
+    if value.lower() in {"unknown", "unknownmap", "map", "jdnext"}:
+        return False
+    return True
+
+
+def _infer_codename_from_source_files(source_root: Path) -> Optional[str]:
+    """Infer codename from extracted source assets (no songdb/cache dependency)."""
+    if not source_root.exists():
+        return None
+
+    # 1) JDNext mapPackage metadata (strongest signal)
+    map_json_candidates = sorted(source_root.rglob("map.json"))
+    for map_json in map_json_candidates:
+        try:
+            payload = json.loads(map_json.read_text(encoding="utf-8", errors="ignore"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        sd = payload.get("SongDesc")
+        if isinstance(sd, dict):
+            map_name = str(sd.get("MapName", "") or "").strip()
+            if _is_valid_source_codename(map_name):
+                return map_name
+
+        for key in ("MapName", "mapName"):
+            map_name = str(payload.get(key, "") or "").strip()
+            if _is_valid_source_codename(map_name):
+                return map_name
+
+    # 2) SongDesc CKD/JSON payload
+    for songdesc in sorted(source_root.rglob("*songdesc*.tpl.ckd")):
+        try:
+            raw_text = songdesc.read_text(encoding="utf-8", errors="ignore").replace("\x00", "")
+            payload = json.loads(raw_text)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        comps = payload.get("COMPONENTS")
+        if isinstance(comps, list) and comps:
+            first = comps[0]
+            if isinstance(first, dict):
+                map_name = str(first.get("MapName", "") or "").strip()
+                if _is_valid_source_codename(map_name):
+                    return map_name
+
+    # 3) MAIN_SCENE filename stem
+    for scene in sorted(source_root.rglob("*_MAIN_SCENE.isc")):
+        stem = scene.stem
+        if stem.upper().endswith("_MAIN_SCENE"):
+            candidate = stem[:-11]
+            if _is_valid_source_codename(candidate):
+                return candidate
+
+    # 4) Music track filename stems
+    suffixes = ("_musictrack", "_musictrack.tpl", "_musictrack.tpl.ckd")
+    music_candidates = list(source_root.rglob("*.trk")) + list(source_root.rglob("*musictrack*.tpl.ckd"))
+    for path in sorted(music_candidates):
+        candidate = path.stem
+        for suffix in suffixes:
+            if candidate.lower().endswith(suffix):
+                candidate = candidate[: -len(suffix)]
+                break
+        if _is_valid_source_codename(candidate):
+            return candidate
+
+    # 5) Timeline move prefix heuristic (weak signal fallback)
+    prefix_count: Dict[str, int] = {}
+    for move in source_root.rglob("*"):
+        if not move.is_file() or move.suffix.lower() not in {".gesture", ".msm"}:
+            continue
+        stem = move.stem
+        if "_" not in stem:
+            continue
+        prefix = stem.split("_", 1)[0]
+        if not _is_valid_source_codename(prefix):
+            continue
+        key = prefix
+        prefix_count[key] = prefix_count.get(key, 0) + 1
+
+    if prefix_count:
+        return max(prefix_count.items(), key=lambda item: item[1])[0]
+
     return None
 
 
@@ -988,7 +1113,9 @@ async def _send_slash_command(
 
 
 async def _wait_for_new_embed(
-    page, previous_last_id: Optional[str], timeout_s: int = 60
+    page,
+    previous_last_id: Optional[str],
+    timeout_s: int = 60,
 ) -> str:
     """Poll for a new message-accessories element (the bot's response).
 
@@ -1003,13 +1130,28 @@ async def _wait_for_new_embed(
             """(prevId) => {
                 const all = document.querySelectorAll('div[id^="message-accessories-"]');
                 if (all.length === 0) return null;
-                const last = all[all.length - 1];
-                const textContent = last.textContent || '';
-                return {
-                    id: last.id,
-                    hasChildren: last.children.length > 0,
-                    isLoading: textContent.includes('Loading'),
-                };
+                const list = Array.from(all);
+                let start = 0;
+                if (prevId) {
+                    const idx = list.findIndex((el) => el.id === prevId);
+                    if (idx >= 0) start = idx + 1;
+                }
+
+                for (let i = start; i < list.length; i++) {
+                    const candidate = list[i];
+                    const textContent = candidate.textContent || '';
+                    const hasChildren = candidate.children.length > 0;
+                    const isLoading = textContent.includes('Loading');
+                    if (!hasChildren || isLoading) continue;
+
+                    return {
+                        id: candidate.id,
+                        hasChildren,
+                        isLoading,
+                    };
+                }
+
+                return null;
             }""",
             previous_last_id,
         )
@@ -1025,18 +1167,17 @@ async def _wait_for_new_embed(
             for _ in range(3):
                 await page.wait_for_timeout(500)
                 latest = await page.evaluate(
-                    """() => {
-                        const all = document.querySelectorAll(
-                            'div[id^="message-accessories-"]');
-                        if (all.length === 0) return null;
-                        const last = all[all.length - 1];
-                        const tc = last.textContent || '';
+                    """(targetId) => {
+                        const el = document.getElementById(targetId);
+                        if (!el) return null;
+                        const tc = el.textContent || '';
                         return {
-                            id: last.id,
-                            hasChildren: last.children.length > 0,
+                            id: el.id,
+                            hasChildren: el.children.length > 0,
                             isLoading: tc.includes('Loading'),
                         };
-                    }"""
+                    }""",
+                    result["id"],
                 )
                 if (
                     not latest
@@ -1101,10 +1242,38 @@ def _has_gameplay_video_links(html: str) -> bool:
     return False
 
 
-def _is_valid_embed_response(html: str, require_gameplay_video: bool = False) -> bool:
+def _embed_contains_codename_links(html: str, codename: str) -> bool:
+    """Return True when at least one Ubisoft CDN map URL targets ``codename``."""
+    needle = (codename or "").strip().lower()
+    if not needle:
+        return True
+
+    for url in extract_urls_from_html(html):
+        if not (_UBI_CDN_HOST_PATTERN.search(url) and _MAP_PATH_PATTERN.search(url)):
+            continue
+
+        parsed = urlparse(url)
+        parts = [part for part in parsed.path.strip("/").split("/") if part]
+        if any(part.lower() == needle for part in parts):
+            return True
+    return False
+
+
+def _is_valid_embed_response(
+    html: str,
+    require_gameplay_video: bool = False,
+    expected_codename: Optional[str] = None,
+    allow_textual_codename_fallback: bool = False,
+) -> bool:
     """Validate an embed response before accepting it as usable."""
     if not _has_valid_cdn_links(html):
         return False
+    if expected_codename and not _embed_contains_codename_links(html, expected_codename):
+        if not (
+            allow_textual_codename_fallback
+            and _embed_mentions_expected_codename(html, expected_codename)
+        ):
+            return False
     if require_gameplay_video and not _has_gameplay_video_links(html):
         return False
     return True
@@ -1132,6 +1301,130 @@ def _extract_embed_fields_from_html(html: str) -> Dict[str, str]:
         else:
             fields[name] = value
     return fields
+
+
+def _extract_embed_title_from_accessory_html(html: str) -> str:
+    """Extract embed title text from a Discord accessory HTML block."""
+    match = re.search(
+        r'<div class="embedTitle[^\"]*">\s*<span>(.*?)</span>',
+        html,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return ""
+    return unescape(_strip_html_tags(match.group(1))).strip()
+
+
+def _extract_embed_error_message(html: str) -> str:
+    """Return an error message when the embed clearly reports a failure."""
+    fields = _extract_embed_fields_from_html(html)
+    for name, value in fields.items():
+        if re.search(r"\berror\b", name, re.IGNORECASE):
+            return value.strip()
+
+    text = unescape(_strip_html_tags(html))
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return ""
+
+    error_hint = re.search(
+        r"(could(?:n['’]t| not)\s+find\s+this\s+track|track\s+not\s+found|\berror\b)",
+        text,
+        re.IGNORECASE,
+    )
+    if not error_hint:
+        return ""
+
+    return text[:300]
+
+
+def _embed_mentions_expected_codename(html: str, expected_codename: Optional[str]) -> bool:
+    """Return True if embed content appears to reference the requested codename."""
+    needle = (expected_codename or "").strip().lower()
+    if not needle:
+        return True
+
+    title = _extract_embed_title_from_accessory_html(html).strip().lower()
+    if title == needle:
+        return True
+
+    text = unescape(_strip_html_tags(html)).lower()
+    return re.search(rf"\b{re.escape(needle)}\b", text) is not None
+
+
+def _extract_requester_mentions_from_embed(html: str) -> Set[str]:
+    """Extract @mention display names from embed markup/text."""
+    mentions: Set[str] = set()
+
+    for match in re.findall(r"@([A-Za-z0-9_.\-]{2,32})", html or ""):
+        name = (match or "").strip().lower()
+        if name:
+            mentions.add(name)
+
+    return mentions
+
+
+def _embed_matches_requester(html: str, requester_handles: Optional[List[str]]) -> bool:
+    """Return True when embed appears to target the logged-in requester.
+
+    If no requester handles are known, this check is neutral (True).
+    If embed has no @mentions, this check is also neutral to avoid false negatives.
+    """
+    if not requester_handles:
+        return True
+
+    expected = {
+        (h or "").strip().lstrip("@").lower()
+        for h in requester_handles
+        if (h or "").strip()
+    }
+    if not expected:
+        return True
+
+    mentions = _extract_requester_mentions_from_embed(html)
+    if not mentions:
+        return True
+
+    return bool(mentions.intersection(expected))
+
+
+async def _get_logged_in_requester_handles(page) -> List[str]:
+    """Best-effort extraction of logged-in Discord account handles from the UI."""
+    candidates = await page.evaluate(
+        """() => {
+            const out = new Set();
+
+            const accountBtn = document.querySelector('[aria-label*="Set Status"], [aria-label*="User Settings"]');
+            if (accountBtn) {
+                const t = (accountBtn.textContent || '').trim();
+                if (t) out.add(t);
+            }
+
+            const display = document.querySelector('[class*="nameTag"], [class*="username"], [class*="userTag"]');
+            if (display) {
+                const t = (display.textContent || '').trim();
+                if (t) out.add(t);
+            }
+
+            const bodyText = (document.body?.innerText || '').split('\\n').slice(-40).join('\\n');
+            const m = bodyText.match(/@([A-Za-z0-9_.-]{2,32})/g) || [];
+            for (const token of m) out.add(token);
+
+            return Array.from(out);
+        }"""
+    )
+
+    handles: Set[str] = set()
+    for raw in cast(List[str], candidates or []):
+        token = (raw or "").strip()
+        if not token:
+            continue
+        for part in re.split(r"\s+|#", token):
+            part = part.strip().lstrip("@").lower()
+            if re.fullmatch(r"[a-z0-9_.\-]{2,32}", part):
+                handles.add(part)
+
+    return sorted(handles)
 
 
 def _parse_bool_text(value: str) -> Optional[bool]:
@@ -1367,6 +1660,8 @@ async def _fetch_command_with_retry(
     max_retries: int = 2,
     bot_timeout_s: int = 60,
     require_gameplay_video: bool = False,
+    allow_textual_codename_fallback: bool = False,
+    requester_handles: Optional[List[str]] = None,
 ) -> str:
     """Send a slash command, wait for bot response, extract and validate HTML.
 
@@ -1385,23 +1680,56 @@ async def _fetch_command_with_retry(
         try:
             pre_id = await _get_last_accessory_id(page)
             await _send_slash_command(page, command=command, choices=choices, codename=codename)
-            embed_id = await _wait_for_new_embed(page, pre_id, timeout_s=bot_timeout_s)
-            html = await _extract_embed_html(page, embed_id)
+            scan_deadline = asyncio.get_event_loop().time() + bot_timeout_s
+            cursor_id = pre_id
 
-            if _is_valid_embed_response(html, require_gameplay_video=require_gameplay_video):
-                logger.debug("Extracted %s embed HTML.", label)
-                return html
+            while asyncio.get_event_loop().time() < scan_deadline:
+                remaining = max(1, int(scan_deadline - asyncio.get_event_loop().time()))
+                embed_id = await _wait_for_new_embed(page, cursor_id, timeout_s=remaining)
+                html = await _extract_embed_html(page, embed_id)
+                cursor_id = embed_id
 
-            if require_gameplay_video:
-                logger.warning(
-                    "%s response has no valid gameplay video links (bot may have returned an error).",
+                if not _embed_matches_requester(html, requester_handles):
+                    logger.debug(
+                        "Skipping %s response %s: embed mentions a different requester.",
+                        label,
+                        embed_id,
+                    )
+                    continue
+
+                error_message = _extract_embed_error_message(html)
+                if error_message:
+                    if _embed_mentions_expected_codename(html, codename):
+                        raise WebExtractionError(
+                            f"{label} bot error for '{codename}': {error_message}"
+                        )
+                    logger.debug(
+                        "Skipping %s response %s: bot error does not reference requested codename '%s'.",
+                        label,
+                        embed_id,
+                        codename,
+                    )
+                    continue
+
+                if _is_valid_embed_response(
+                    html,
+                    require_gameplay_video=require_gameplay_video,
+                    expected_codename=codename,
+                    allow_textual_codename_fallback=allow_textual_codename_fallback,
+                ):
+                    logger.debug("Extracted %s embed HTML.", label)
+                    return html
+
+                logger.debug(
+                    "Skipping %s response %s: links do not match requested codename '%s'.",
                     label,
+                    embed_id,
+                    codename,
                 )
-            else:
-                logger.warning(
-                    "%s response has no valid CDN links (bot may have returned an error).",
-                    label,
-                )
+
+            raise WebExtractionError(
+                f"Timed out waiting for a {label} response matching codename '{codename}'."
+            )
         except WebExtractionError as e:
             if attempt == max_retries:
                 raise
@@ -1462,6 +1790,15 @@ class WebPlaywrightExtractor(BaseExtractor):
         self._codenames = codenames or []
         self._codename: Optional[str] = self._codenames[0] if self._codenames else None
         self._source_game = (source_game or "jdu").strip().lower() or "jdu"
+
+    def _download_group(self) -> str:
+        """Return the mapDownloads subgroup name for the active source game."""
+        return "jdnext" if self._source_game == "jdnext" else "jdu"
+
+    def _download_dir_for_codename(self, codename: str) -> Path:
+        """Build the canonical fetch cache path under mapDownloads/<game>/<codename>."""
+        safe_codename = (codename or "UnknownMap").strip() or "UnknownMap"
+        return self._config.download_root / self._download_group() / safe_codename
 
     def extract(self, output_dir: Path) -> Path:
         """Download files into download_root and extract them into output_dir."""
@@ -1525,7 +1862,7 @@ class WebPlaywrightExtractor(BaseExtractor):
         if self._asset_html and Path(self._asset_html).is_file():
             download_dir = Path(self._asset_html).parent
         else:
-            download_dir = self._config.download_root / codename
+            download_dir = self._download_dir_for_codename(codename)
             download_dir.mkdir(parents=True, exist_ok=True)
 
         downloaded = download_files(all_urls, download_dir, self._quality, self._config)
@@ -1645,6 +1982,26 @@ class WebPlaywrightExtractor(BaseExtractor):
                 logger.debug("Copying %s to extraction dir", f)
                 shutil.copy2(src_file, dst_file)
 
+        # JDNext HTML mode: derive codename from extracted source payloads.
+        # This avoids using opaque UUID map IDs or noisy embed titles as map folder names.
+        if self._source_game == "jdnext" and not self._codenames:
+            source_codename = _infer_codename_from_source_files(extract_dir)
+            if source_codename and source_codename.lower() != codename.lower():
+                logger.info(
+                    "Resolved JDNext codename from source files: '%s' -> '%s'",
+                    codename,
+                    source_codename,
+                )
+                self._codename = source_codename
+                target_extract_dir = output_dir / source_codename
+                if target_extract_dir != extract_dir:
+                    if target_extract_dir.exists():
+                        shutil.copytree(extract_dir, target_extract_dir, dirs_exist_ok=True)
+                        shutil.rmtree(extract_dir, ignore_errors=True)
+                    else:
+                        extract_dir.rename(target_extract_dir)
+                    extract_dir = target_extract_dir
+
         return extract_dir
 
     def get_codename(self) -> Optional[str]:
@@ -1755,6 +2112,11 @@ class WebPlaywrightExtractor(BaseExtractor):
                     pass  # Channel might be empty
 
                 bot_timeout = self._config.fetch_bot_response_timeout_s
+                requester_handles = await _get_logged_in_requester_handles(page)
+                if requester_handles:
+                    logger.debug("Requester identity detected: %s", ", ".join(requester_handles))
+                else:
+                    logger.debug("Requester identity not detected; proceeding without requester filter.")
 
                 nohud_html: Optional[str] = None
                 jdnext_metadata_payloads: Dict[str, Dict[str, str]] = {}
@@ -1768,6 +2130,8 @@ class WebPlaywrightExtractor(BaseExtractor):
                         label="asset",
                         bot_timeout_s=bot_timeout,
                         require_gameplay_video=True,
+                        allow_textual_codename_fallback=True,
+                        requester_handles=requester_handles,
                     )
                     assets_accessory_id = await _get_last_accessory_id(page)
                     if assets_accessory_id:
@@ -1789,6 +2153,7 @@ class WebPlaywrightExtractor(BaseExtractor):
                         codename=codename,
                         label="assets",
                         bot_timeout_s=bot_timeout,
+                        requester_handles=requester_handles,
                     )
                     await page.wait_for_timeout(500)
 
@@ -1801,18 +2166,19 @@ class WebPlaywrightExtractor(BaseExtractor):
                         codename=codename,
                         label="nohud",
                         bot_timeout_s=bot_timeout,
+                        requester_handles=requester_handles,
                     )
 
                 # Save HTML to output dir for caching / debugging
                 # Save HTML to download dir for caching / debugging / portability
-                # We use download_root which is 'mapDownloads'
-                output_dir = self._config.download_root / codename
-                output_dir.mkdir(parents=True, exist_ok=True)
-                (output_dir / "assets.html").write_text(assets_html, encoding="utf-8")
+                # We use download_root which is 'mapDownloads', grouped by source game.
+                download_dir = self._download_dir_for_codename(codename)
+                download_dir.mkdir(parents=True, exist_ok=True)
+                (download_dir / "assets.html").write_text(assets_html, encoding="utf-8")
                 if nohud_html is not None:
-                    (output_dir / "nohud.html").write_text(nohud_html, encoding="utf-8")
+                    (download_dir / "nohud.html").write_text(nohud_html, encoding="utf-8")
                 if self._source_game == "jdnext" and jdnext_metadata_payloads:
-                    meta_dir = output_dir / "jdnext_metadata"
+                    meta_dir = download_dir / "jdnext_metadata"
                     meta_dir.mkdir(parents=True, exist_ok=True)
                     for key, payload in jdnext_metadata_payloads.items():
                         (meta_dir / f"{key}.message.html").write_text(
@@ -1824,11 +2190,11 @@ class WebPlaywrightExtractor(BaseExtractor):
                             encoding="utf-8",
                         )
                     metadata_summary = _parse_jdnext_button_payloads(jdnext_metadata_payloads)
-                    (output_dir / "jdnext_metadata.json").write_text(
+                    (download_dir / "jdnext_metadata.json").write_text(
                         json.dumps(metadata_summary, indent=2, sort_keys=True),
                         encoding="utf-8",
                     )
-                logger.debug("Saved HTML to %s", output_dir)
+                logger.debug("Saved HTML to %s", download_dir)
 
             finally:
                 try:
