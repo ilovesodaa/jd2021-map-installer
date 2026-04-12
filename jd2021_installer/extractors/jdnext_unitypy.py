@@ -8,7 +8,7 @@ extract/install flow.
 from __future__ import annotations
 
 import importlib
-import json
+import logging
 import re
 import sys
 from dataclasses import asdict, dataclass
@@ -16,8 +16,15 @@ from pathlib import Path
 from typing import Any
 
 from jd2021_installer.core.config import AppConfig
+from jd2021_installer.core.fs_utils import write_json
+
+logger = logging.getLogger("jd2021.extractors.jdnext_unitypy")
 
 _DEFAULT_UNITY_FALLBACK_VERSION = "2021.3.0f1"
+
+# Cached reference to the UnityPy module so repeated calls within a session
+# skip the sys.path manipulation and FALLBACK_UNITY_VERSION patching.
+_unitypy_cache: Any = None
 
 
 @dataclass
@@ -33,6 +40,7 @@ class JDNextUnpackSummary:
     video_clips: int = 0
     json_typetrees: int = 0
     unknown_objects: int = 0
+    failed_objects: int = 0
 
 
 def _safe_name(value: str, fallback: str) -> str:
@@ -44,7 +52,15 @@ def _safe_name(value: str, fallback: str) -> str:
 
 
 def _load_unitypy(config: AppConfig | None = None) -> Any:
-    """Import UnityPy from site-packages or local tools clone."""
+    """Import UnityPy from site-packages or a local tools clone.
+
+    The result is cached at module level so repeated calls within the same
+    process incur no additional I/O or sys.path manipulation.
+    """
+    global _unitypy_cache
+    if _unitypy_cache is not None:
+        return _unitypy_cache
+
     try:
         unitypy = importlib.import_module("UnityPy")
     except ModuleNotFoundError:
@@ -80,6 +96,7 @@ def _load_unitypy(config: AppConfig | None = None) -> Any:
     if cfg is not None and getattr(cfg, "FALLBACK_UNITY_VERSION", None) in (None, ""):
         cfg.FALLBACK_UNITY_VERSION = _DEFAULT_UNITY_FALLBACK_VERSION
 
+    _unitypy_cache = unitypy
     return unitypy
 
 
@@ -95,11 +112,6 @@ def _extract_encryption_hints(error_text: str) -> dict[str, str]:
     return {"key_sig": key_sig, "data_sig": data_sig}
 
 
-def _write_json(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=True, indent=2), encoding="utf-8")
-
-
 def unpack_jdnext_bundle_with_unitypy(
     bundle_path: str | Path,
     output_dir: str | Path,
@@ -110,6 +122,7 @@ def unpack_jdnext_bundle_with_unitypy(
     Args:
         bundle_path: Path to one downloaded JDNext .bundle file.
         output_dir:  Destination root for extracted diagnostics/artifacts.
+        config:      Optional AppConfig carrying third_party_tools_root.
 
     Returns:
         JDNextUnpackSummary with counts and destination paths.
@@ -149,6 +162,7 @@ def unpack_jdnext_bundle_with_unitypy(
         path_id = int(getattr(obj, "path_id", getattr(obj, "m_PathID", 0)) or 0)
 
         exported = False
+        error_msg: str | None = None
         base_name = _safe_name(getattr(obj, "peek_name", lambda: "")() or "", f"obj_{path_id}")
 
         try:
@@ -156,7 +170,13 @@ def unpack_jdnext_bundle_with_unitypy(
                 tex = obj.parse_as_object()
                 name = _safe_name(getattr(tex, "m_Name", ""), base_name)
                 out_file = textures_dir / f"{name}.png"
-                tex.image.save(out_file)
+                out_file.parent.mkdir(parents=True, exist_ok=True)
+                img = tex.image
+                if img is None:
+                    raise ValueError(
+                        "tex.image is None — unsupported texture format or missing platform data"
+                    )
+                img.save(out_file)
                 summary.textures += 1
                 exported = True
 
@@ -174,7 +194,7 @@ def unpack_jdnext_bundle_with_unitypy(
                 else:
                     # Fallback if clip has no decoded samples available.
                     typetree = obj.parse_as_dict()
-                    _write_json(typetree_dir / f"{base_name}_audioclip.json", typetree)
+                    write_json(typetree_dir / f"{base_name}_audioclip.json", typetree)
                     summary.json_typetrees += 1
                 summary.audio_clips += 1
                 exported = True
@@ -188,7 +208,7 @@ def unpack_jdnext_bundle_with_unitypy(
                     (video_dir / f"{name}.bin").write_bytes(bytes(raw))
                 else:
                     typetree = obj.parse_as_dict()
-                    _write_json(typetree_dir / f"{name}_videoclip.json", typetree)
+                    write_json(typetree_dir / f"{name}_videoclip.json", typetree)
                     summary.json_typetrees += 1
                 summary.video_clips += 1
                 exported = True
@@ -204,7 +224,7 @@ def unpack_jdnext_bundle_with_unitypy(
 
             elif type_name == "MonoBehaviour":
                 typetree = obj.parse_as_dict()
-                _write_json(typetree_dir / f"{base_name}_monobehaviour.json", typetree)
+                write_json(typetree_dir / f"{base_name}_monobehaviour.json", typetree)
                 summary.mono_behaviours += 1
                 summary.json_typetrees += 1
                 exported = True
@@ -212,13 +232,22 @@ def unpack_jdnext_bundle_with_unitypy(
             else:
                 # Keep one-pass diagnostics broad to learn unknown structures quickly.
                 typetree = obj.parse_as_dict()
-                _write_json(typetree_dir / f"{base_name}_{type_name.lower()}.json", typetree)
+                write_json(typetree_dir / f"{base_name}_{type_name.lower()}.json", typetree)
                 summary.json_typetrees += 1
                 summary.unknown_objects += 1
                 exported = True
-        except Exception:
-            # If parsing fails for a specific object, still capture metadata and continue.
-            pass
+
+        except Exception as exc:
+            error_msg = str(exc)
+            summary.failed_objects += 1
+            logger.warning(
+                "Failed to export object path_id=%s type=%s name=%s: %s",
+                path_id,
+                type_name,
+                base_name,
+                exc,
+                exc_info=logger.isEnabledFor(logging.DEBUG),
+            )
 
         if exported:
             summary.exported_objects += 1
@@ -229,10 +258,23 @@ def unpack_jdnext_bundle_with_unitypy(
                 "type": type_name,
                 "name_hint": base_name,
                 "exported": exported,
+                **({"error": error_msg} if error_msg else {}),
             }
         )
 
-    _write_json(out_root / "summary.json", asdict(summary))
-    _write_json(out_root / "objects_index.json", {"objects": object_entries})
+    # Warn on high failure rate so operators know extraction is degraded.
+    if summary.total_objects > 0:
+        failure_rate = summary.failed_objects / summary.total_objects
+        if failure_rate > 0.25:
+            logger.warning(
+                "High object failure rate: %d/%d objects failed to export (%.0f%%). "
+                "Bundle may be encrypted or use an unsupported type-tree schema.",
+                summary.failed_objects,
+                summary.total_objects,
+                failure_rate * 100,
+            )
+
+    write_json(out_root / "summary.json", asdict(summary))
+    write_json(out_root / "objects_index.json", {"objects": object_entries})
 
     return summary

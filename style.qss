@@ -52,10 +52,28 @@ QListWidget:focus {
 	border: 1px solid #4b82ff;
 }
 
+QSpinBox,
+QDoubleSpinBox {
+	padding-right: 22px;
+	padding-left: 22px;
+	text-align: center;
+}
+
 QSpinBox::up-button,
+QDoubleSpinBox::up-button {
+	subcontrol-origin: border;
+	subcontrol-position: right;
+	border: none;
+	background: #2c3240;
+	width: 16px;
+	border-radius: 4px;
+	margin: 1px;
+}
+
 QSpinBox::down-button,
-QDoubleSpinBox::up-button,
 QDoubleSpinBox::down-button {
+	subcontrol-origin: border;
+	subcontrol-position: left;
 	border: none;
 	background: #2c3240;
 	width: 16px;
@@ -87,6 +105,26 @@ QDoubleSpinBox::down-arrow {
 QComboBox::drop-down {
 	border: none;
 	width: 22px;
+}
+
+QComboBox QAbstractItemView {
+	background-color: #20242d;
+	color: #e4e8f2;
+	border: 1px solid #313745;
+	border-radius: 6px;
+	padding: 4px;
+	outline: none;
+}
+
+QComboBox QAbstractItemView::item {
+	min-height: 24px;
+	padding: 4px 8px;
+	border-radius: 4px;
+}
+
+QComboBox QAbstractItemView::item:selected {
+	background-color: #2e6cff;
+	color: #ffffff;
 }
 
 QPushButton {
