@@ -1,4 +1,5 @@
 import pytest
+import json
 import os
 import subprocess
 import zipfile
@@ -16,9 +17,11 @@ from jd2021_installer.extractors.web_playwright import (
     _extract_embed_error_message,
     _extract_embed_fields_from_html,
     _has_valid_cdn_links,
+    _infer_codename_from_source_files,
     _is_valid_embed_response,
     _is_valid_webm_file,
     _parse_jdnext_button_payloads,
+    extract_codename_from_urls,
     download_files,
 )
 
@@ -402,6 +405,43 @@ def test_embed_mentions_expected_codename_matches_embed_title():
 
     assert _embed_mentions_expected_codename(html, "Koi") is True
     assert _embed_mentions_expected_codename(html, "OtherMap") is False
+
+
+def test_extract_codename_from_urls_ignores_jdnext_public_uuid_maps_id():
+    urls = [
+        "https://jd-s3.cdn.ubi.com/public/jdnext/maps/267ea001-65e8-4c60-b8a1-daa2b25dbd5f/nx/mapPackage/hash.bundle",
+    ]
+
+    assert extract_codename_from_urls(urls) is None
+
+
+def test_extract_codename_from_urls_ignores_jdnext_private_uuid_maps_id():
+    urls = [
+        "https://cdn-jdhelper.ramaprojects.ru/private/jdnext/maps/267ea001-65e8-4c60-b8a1-daa2b25dbd5f/video_ULTRA.hd.webm/hash.webm?auth=abc",
+    ]
+
+    assert extract_codename_from_urls(urls) is None
+
+
+def test_infer_codename_from_source_files_prefers_map_json_songdesc(tmp_path: Path):
+    map_json = tmp_path / "monobehaviour" / "map.json"
+    map_json.parent.mkdir(parents=True, exist_ok=True)
+    map_json.write_text(
+        json.dumps({"SongDesc": {"MapName": "Jukebox"}}),
+        encoding="utf-8",
+    )
+
+    assert _infer_codename_from_source_files(tmp_path) == "Jukebox"
+
+
+def test_infer_codename_from_source_files_uses_moves_prefix_fallback(tmp_path: Path):
+    moves_dir = tmp_path / "Timeline" / "Moves" / "durango"
+    moves_dir.mkdir(parents=True, exist_ok=True)
+    (moves_dir / "jukebox_cross.gesture").write_text("x", encoding="utf-8")
+    (moves_dir / "jukebox_spin.gesture").write_text("x", encoding="utf-8")
+    (moves_dir / "jukebox_pose.msm").write_text("x", encoding="utf-8")
+
+    assert _infer_codename_from_source_files(tmp_path) == "jukebox"
 
 
 def test_embed_matches_requester_with_matching_mention():

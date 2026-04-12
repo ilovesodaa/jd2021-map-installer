@@ -1242,8 +1242,7 @@ class BatchInstallWorker(QObject):
                             config=self._config,
                         )
                         map_dir = extractor.extract(batch_cache)
-                        resolved_name = (extractor.get_codename() or map_name).strip()
-                        map_names_for_candidate = [resolved_name or map_name]
+                        map_names_for_candidate = [map_name]
                     elif is_candidate_ipk:
                         # Extract IPK to temp dir
                         from jd2021_installer.extractors.archive_ipk import ArchiveIPKExtractor

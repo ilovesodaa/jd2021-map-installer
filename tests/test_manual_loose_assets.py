@@ -1,8 +1,9 @@
 from pathlib import Path
+import json
 
 import pytest
 
-from jd2021_installer.installers.tape_converter import auto_convert_tapes
+from jd2021_installer.installers.tape_converter import auto_convert_tapes, convert_dance_tape
 from jd2021_installer.installers.texture_decoder import decode_pictograms
 
 
@@ -27,6 +28,43 @@ def test_auto_convert_tapes_accepts_loose_dtape_and_ktape(tmp_path: Path):
     assert karaoke_out.exists()
     assert dance_out.read_text(encoding="utf-8") == dance_src.read_text(encoding="utf-8")
     assert karaoke_out.read_text(encoding="utf-8") == karaoke_src.read_text(encoding="utf-8")
+
+
+def test_convert_dance_tape_rewrites_internal_map_refs_to_codename(tmp_path: Path):
+    src = tmp_path / "pigstepjustdancexminecraftversion_tml_dance.dtape.ckd"
+    out_dir = tmp_path / "game"
+
+    payload = {
+        "__class": "Tape",
+        "MapName": "pigstepjustdancexminecraftversion",
+        "Clips": [
+            {
+                "__class": "MotionClip",
+                "ClassifierPath": "world/maps/pigstepjustdancexminecraftversion/timeline/moves/jukebox_cross.msm",
+                "StartTime": 0,
+                "Duration": 48,
+                "Id": 1,
+                "TrackId": 0,
+                "IsActive": 1,
+                "GoldMove": 0,
+                "CoachId": 0,
+                "MoveType": 0,
+                "Color": [1.0, 1.0, 1.0, 1.0],
+            }
+        ],
+        "TapeClock": 0,
+        "TapeBarCount": 1,
+        "FreeResourcesAfterPlay": 0,
+        "SoundwichEvent": "",
+    }
+    src.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert convert_dance_tape(src, out_dir, "Jukebox")
+
+    out = out_dir / "timeline" / "Jukebox_TML_Dance.dtape"
+    text = out.read_text(encoding="utf-8")
+    assert 'MapName = "Jukebox"' in text
+    assert 'world/maps/jukebox/timeline/moves/jukebox_cross.msm' in text
 
 
 def test_decode_pictograms_copies_loose_png(tmp_path: Path):

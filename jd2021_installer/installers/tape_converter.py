@@ -149,10 +149,34 @@ def _load_ckd_json(ckd_path: Path) -> Dict[str, Any]:
         return {}
 
 
+def _rewrite_tape_codename_refs(lua_str: str, codename: str) -> str:
+    """Normalize tape-internal map references to the target codename."""
+    map_low = codename.lower()
+
+    # Keep world/maps paths aligned with the installed map folder.
+    lua_str = re.sub(
+        r'("world/maps/)([^/"\\]+)(/)'
+        ,
+        lambda m: f'{m.group(1)}{map_low}{m.group(3)}',
+        lua_str,
+        flags=re.IGNORECASE,
+    )
+
+    # Ensure tape metadata MapName follows the installed codename.
+    lua_str = re.sub(
+        r'(MapName\s*=\s*")([^"]+)(")',
+        rf'\1{codename}\3',
+        lua_str,
+        flags=re.IGNORECASE,
+    )
+
+    return lua_str
+
+
 from jd2021_installer.parsers.binary_ckd import parse_binary_ckd
 
 
-def convert_tape_file(ckd_path: Path, output_path: Path) -> bool:
+def convert_tape_file(ckd_path: Path, output_path: Path, codename: Optional[str] = None) -> bool:
     """Convert a CKD (JSON or Binary) tape file to UbiArt Lua format.
 
     Works for dance tapes (.dtape.ckd), karaoke tapes (.ktape.ckd),
@@ -198,6 +222,9 @@ def convert_tape_file(ckd_path: Path, output_path: Path) -> bool:
         lua_str = lua_str.replace('"Timeline/pictos/', '"timeline/pictos/')
         lua_str = lua_str.replace('"Timeline/', '"timeline/')
 
+        if codename:
+            lua_str = _rewrite_tape_codename_refs(lua_str, codename)
+
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(lua_str, encoding="utf-8")
         logger.debug("Converted tape: %s → %s", ckd_path.name, output_path.name)
@@ -215,7 +242,7 @@ def convert_dance_tape(ckd_path: Path, target_dir: Path, codename: str) -> bool:
     Output: ``Timeline/{codename}_TML_Dance.dtape``
     """
     output = target_dir / "timeline" / f"{codename}_TML_Dance.dtape"
-    return convert_tape_file(ckd_path, output)
+    return convert_tape_file(ckd_path, output, codename=codename)
 
 
 def convert_karaoke_tape(ckd_path: Path, target_dir: Path, codename: str) -> bool:
@@ -225,7 +252,7 @@ def convert_karaoke_tape(ckd_path: Path, target_dir: Path, codename: str) -> boo
     Output: ``Timeline/{codename}_TML_Karaoke.ktape``
     """
     output = target_dir / "timeline" / f"{codename}_TML_Karaoke.ktape"
-    return convert_tape_file(ckd_path, output)
+    return convert_tape_file(ckd_path, output, codename=codename)
 
 
 def convert_cinematic_tape(ckd_path: Path, target_dir: Path, codename: str) -> bool:
@@ -235,7 +262,7 @@ def convert_cinematic_tape(ckd_path: Path, target_dir: Path, codename: str) -> b
     Output: ``Cinematics/{codename}_MainSequence.tape``
     """
     output = target_dir / "cinematics" / f"{codename}_MainSequence.tape"
-    return convert_tape_file(ckd_path, output)
+    return convert_tape_file(ckd_path, output, codename=codename)
 
 
 def convert_beats_tape(ckd_path: Path, target_dir: Path, codename: str) -> bool:
@@ -245,7 +272,7 @@ def convert_beats_tape(ckd_path: Path, target_dir: Path, codename: str) -> bool:
     Output: ``timeline/{codename}.btape``
     """
     output = target_dir / "timeline" / f"{codename}.btape"
-    return convert_tape_file(ckd_path, output)
+    return convert_tape_file(ckd_path, output, codename=codename)
 
 
 def _copy_loose_tape(source_path: Path, output_path: Path, tape_label: str) -> bool:

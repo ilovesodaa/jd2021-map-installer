@@ -2127,9 +2127,19 @@ class MainWindow(QMainWindow):
         self._feedback_panel.update_checklist_step("Extracting map data...", StepStatus.IN_PROGRESS)
 
         # Create worker + thread
+        worker_codename: str | None = None
+        if mode_index in (MODE_FETCH, MODE_JDNEXT):
+            fetch_mode_key = "jdnext" if mode_index == MODE_JDNEXT else "fetch"
+            fetch_fields = source_fields.get(fetch_mode_key, {}) if isinstance(source_fields, dict) else {}
+            raw_codenames = str(fetch_fields.get("codenames", "")).strip()
+            fetch_codenames = [c.strip() for c in raw_codenames.split(",") if c.strip()]
+            if len(fetch_codenames) == 1:
+                worker_codename = fetch_codenames[0]
+
         worker = ExtractAndNormalizeWorker(
             extractor=extractor,
             output_dir=self._config.temp_directory / "_extraction",
+            codename=worker_codename,
         )
         thread = QThread()
         worker.moveToThread(thread)

@@ -59,6 +59,10 @@ _SEL_MESSAGE_LIST_ITEMS = 'li[id^="chat-messages-"]'
 _UBI_CDN_HOST_PATTERN = re.compile(r"https?://[^\s\"']*(?:cdn\.ubi\.com|cdn\.ubisoft\.cn)", re.IGNORECASE)
 _MAP_PATH_PATTERN = re.compile(r"/(?:public|private)/(?:map|jdnext/maps)/", re.IGNORECASE)
 _WEBM_VALIDATION_CACHE: Dict[str, tuple[int, int, bool]] = {}
+_UUID_LIKE_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 
 def _is_browser_closed_error(exc: BaseException) -> bool:
@@ -114,14 +118,135 @@ def get_filename_from_url(url: str) -> str:
 def extract_codename_from_urls(urls: List[str]) -> Optional[str]:
     """Extract map codename from JDU asset URLs.
 
-    Pattern: https://jd-s3.cdn.ubi.com/public/map/{MapName}/...
+    Supported patterns:
+    - https://.../public/map/{MapName}/...
+
+    Note: JDNext URLs often use opaque map IDs (UUID-like) under
+    ``.../jdnext/maps/<id>/...``. Those IDs are not stable codenames and should
+    not be used as map folder names.
     """
     for url in urls:
         parsed = urlparse(url)
-        parts = parsed.path.strip("/").split("/")
-        if len(parts) >= 3 and parts[0] == "public" and parts[1] == "map":
-            if parts[2]:
-                return parts[2]
+        parts = [p for p in parsed.path.strip("/").split("/") if p]
+        if not parts:
+            continue
+
+        low_parts = [p.lower() for p in parts]
+
+        # JDU: /public/map/<codename>/...
+        for idx in range(len(parts) - 1):
+            if low_parts[idx] == "map":
+                candidate = parts[idx + 1].strip()
+                if candidate:
+                    return candidate
+
+        # JDNext: /public|private/jdnext/maps/<id-or-codename>/...
+        # Ignore UUID-like IDs so caller can fall back to requested codename
+        # (Fetch/JDNext mode) or embed title (HTML mode).
+        for idx in range(len(parts) - 2):
+            if low_parts[idx] == "jdnext" and low_parts[idx + 1] == "maps":
+                candidate = parts[idx + 2].strip()
+                if candidate and not _UUID_LIKE_RE.match(candidate):
+                    return candidate
+    return None
+
+
+def _is_valid_source_codename(candidate: str) -> bool:
+    value = str(candidate or "").strip()
+    if not value:
+        return False
+    if _UUID_LIKE_RE.match(value):
+        return False
+    # Codenames are safe path stems and should include at least one letter.
+    if not re.match(r"^[A-Za-z0-9_-]+$", value):
+        return False
+    if not re.search(r"[A-Za-z]", value):
+        return False
+    if value.lower() in {"unknown", "unknownmap", "map", "jdnext"}:
+        return False
+    return True
+
+
+def _infer_codename_from_source_files(source_root: Path) -> Optional[str]:
+    """Infer codename from extracted source assets (no songdb/cache dependency)."""
+    if not source_root.exists():
+        return None
+
+    # 1) JDNext mapPackage metadata (strongest signal)
+    map_json_candidates = sorted(source_root.rglob("map.json"))
+    for map_json in map_json_candidates:
+        try:
+            payload = json.loads(map_json.read_text(encoding="utf-8", errors="ignore"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        sd = payload.get("SongDesc")
+        if isinstance(sd, dict):
+            map_name = str(sd.get("MapName", "") or "").strip()
+            if _is_valid_source_codename(map_name):
+                return map_name
+
+        for key in ("MapName", "mapName"):
+            map_name = str(payload.get(key, "") or "").strip()
+            if _is_valid_source_codename(map_name):
+                return map_name
+
+    # 2) SongDesc CKD/JSON payload
+    for songdesc in sorted(source_root.rglob("*songdesc*.tpl.ckd")):
+        try:
+            raw_text = songdesc.read_text(encoding="utf-8", errors="ignore").replace("\x00", "")
+            payload = json.loads(raw_text)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        comps = payload.get("COMPONENTS")
+        if isinstance(comps, list) and comps:
+            first = comps[0]
+            if isinstance(first, dict):
+                map_name = str(first.get("MapName", "") or "").strip()
+                if _is_valid_source_codename(map_name):
+                    return map_name
+
+    # 3) MAIN_SCENE filename stem
+    for scene in sorted(source_root.rglob("*_MAIN_SCENE.isc")):
+        stem = scene.stem
+        if stem.upper().endswith("_MAIN_SCENE"):
+            candidate = stem[:-11]
+            if _is_valid_source_codename(candidate):
+                return candidate
+
+    # 4) Music track filename stems
+    suffixes = ("_musictrack", "_musictrack.tpl", "_musictrack.tpl.ckd")
+    music_candidates = list(source_root.rglob("*.trk")) + list(source_root.rglob("*musictrack*.tpl.ckd"))
+    for path in sorted(music_candidates):
+        candidate = path.stem
+        for suffix in suffixes:
+            if candidate.lower().endswith(suffix):
+                candidate = candidate[: -len(suffix)]
+                break
+        if _is_valid_source_codename(candidate):
+            return candidate
+
+    # 5) Timeline move prefix heuristic (weak signal fallback)
+    prefix_count: Dict[str, int] = {}
+    for move in source_root.rglob("*"):
+        if not move.is_file() or move.suffix.lower() not in {".gesture", ".msm"}:
+            continue
+        stem = move.stem
+        if "_" not in stem:
+            continue
+        prefix = stem.split("_", 1)[0]
+        if not _is_valid_source_codename(prefix):
+            continue
+        key = prefix
+        prefix_count[key] = prefix_count.get(key, 0) + 1
+
+    if prefix_count:
+        return max(prefix_count.items(), key=lambda item: item[1])[0]
+
     return None
 
 
@@ -1847,6 +1972,26 @@ class WebPlaywrightExtractor(BaseExtractor):
             if src_file.is_file() and not f.endswith(".zip") and not dst_file.exists():
                 logger.debug("Copying %s to extraction dir", f)
                 shutil.copy2(src_file, dst_file)
+
+        # JDNext HTML mode: derive codename from extracted source payloads.
+        # This avoids using opaque UUID map IDs or noisy embed titles as map folder names.
+        if self._source_game == "jdnext" and not self._codenames:
+            source_codename = _infer_codename_from_source_files(extract_dir)
+            if source_codename and source_codename.lower() != codename.lower():
+                logger.info(
+                    "Resolved JDNext codename from source files: '%s' -> '%s'",
+                    codename,
+                    source_codename,
+                )
+                self._codename = source_codename
+                target_extract_dir = output_dir / source_codename
+                if target_extract_dir != extract_dir:
+                    if target_extract_dir.exists():
+                        shutil.copytree(extract_dir, target_extract_dir, dirs_exist_ok=True)
+                        shutil.rmtree(extract_dir, ignore_errors=True)
+                    else:
+                        extract_dir.rename(target_extract_dir)
+                    extract_dir = target_extract_dir
 
         return extract_dir
 
