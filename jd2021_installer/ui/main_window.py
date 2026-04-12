@@ -72,6 +72,7 @@ from jd2021_installer.core.readjust_index import (
     update_offsets,
     upsert_entry,
 )
+from jd2021_installer.installers.sku_scene import list_registered_maps
 from jd2021_installer.ui.widgets import (
     ActionWidget,
     ConfigWidget,
@@ -1272,32 +1273,35 @@ class MainWindow(QMainWindow):
         while game_dir.name.lower() in ("world", "data"):
             game_dir = game_dir.parent
 
-        from jd2021_installer.installers.sku_scene import list_registered_maps
-
         index_entries = load_index().entries
         index_by_codename = {entry.codename.lower(): entry for entry in index_entries}
 
         candidates: dict[str, tuple[str, str, str]] = {}
 
-        maps_roots = [
-            game_dir / "data" / "World" / "MAPS",
-            game_dir / "data" / "world" / "maps",
-        ]
-
-        for codename in list_registered_maps(game_dir):
+        registered_codenames = list_registered_maps(game_dir)
+        for codename in registered_codenames:
             key = codename.lower()
             source_mode = "Unknown"
+            location = "Registered in SkuScene (map folder not found)"
+
             if key in index_by_codename:
-                source_mode = index_by_codename[key].source_mode or "Unknown"
+                entry = index_by_codename[key]
+                source_mode = entry.source_mode or "Unknown"
+                installed_dir = Path(entry.installed_map_dir)
+                if installed_dir.is_dir():
+                    location = str(installed_dir)
 
-            map_location = "Registered in SkuScene (map folder missing)"
-            for maps_root in maps_roots:
-                map_dir = maps_root / codename
-                if map_dir.is_dir():
-                    map_location = str(map_dir)
-                    break
+            if location.startswith("Registered in SkuScene"):
+                map_dir_candidates = [
+                    game_dir / "data" / "World" / "MAPS" / codename,
+                    game_dir / "data" / "world" / "maps" / codename,
+                ]
+                for map_dir in map_dir_candidates:
+                    if map_dir.is_dir():
+                        location = str(map_dir)
+                        break
 
-            candidates[key] = (codename, source_mode, map_location)
+            candidates[key] = (codename, source_mode, location)
 
         return sorted(candidates.values(), key=lambda item: item[0].lower())
 
