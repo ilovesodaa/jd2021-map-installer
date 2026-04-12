@@ -177,6 +177,24 @@ def test_web_extractor_raises_when_critical_assets_still_missing(tmp_path, monke
         extractor.extract(tmp_path / "out")
 
 
+def test_web_extractor_download_dir_groups_jdu_under_mapdownloads(tmp_path):
+    extractor = WebPlaywrightExtractor(
+        source_game="jdu",
+        config=AppConfig(download_root=tmp_path),
+    )
+
+    assert extractor._download_dir_for_codename("TestMap") == tmp_path / "jdu" / "TestMap"
+
+
+def test_web_extractor_download_dir_groups_jdnext_under_mapdownloads(tmp_path):
+    extractor = WebPlaywrightExtractor(
+        source_game="jdnext",
+        config=AppConfig(download_root=tmp_path),
+    )
+
+    assert extractor._download_dir_for_codename("TestMap") == tmp_path / "jdnext" / "TestMap"
+
+
 def test_download_files_respects_retry_after_header(tmp_path, monkeypatch):
     class FakeResponse:
         def __init__(self, status_code, headers=None, chunks=None):

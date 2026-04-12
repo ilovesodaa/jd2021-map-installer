@@ -2097,6 +2097,8 @@ def install_map_to_game(
             
         if status_callback: status_callback("Decoding pictograms...")
         decoded_pictos = 0
+        # JDNext can require canvas placement for variable-size pictos.
+        # Canonical 512x512 and 512x354 pictos are preserved as-is in decoder.
         picto_canvas_size = 512 if _is_jdnext_source_map() else None
         if map_data.source_dir and map_data.source_dir.exists():
             for picto_dir in _collect_pictogram_sources(map_data.source_dir, codename, preferred=picto_src):

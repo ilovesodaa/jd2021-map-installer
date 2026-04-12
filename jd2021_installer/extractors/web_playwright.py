@@ -1791,6 +1791,15 @@ class WebPlaywrightExtractor(BaseExtractor):
         self._codename: Optional[str] = self._codenames[0] if self._codenames else None
         self._source_game = (source_game or "jdu").strip().lower() or "jdu"
 
+    def _download_group(self) -> str:
+        """Return the mapDownloads subgroup name for the active source game."""
+        return "jdnext" if self._source_game == "jdnext" else "jdu"
+
+    def _download_dir_for_codename(self, codename: str) -> Path:
+        """Build the canonical fetch cache path under mapDownloads/<game>/<codename>."""
+        safe_codename = (codename or "UnknownMap").strip() or "UnknownMap"
+        return self._config.download_root / self._download_group() / safe_codename
+
     def extract(self, output_dir: Path) -> Path:
         """Download files into download_root and extract them into output_dir."""
         all_urls = list(self._urls)
@@ -1853,7 +1862,7 @@ class WebPlaywrightExtractor(BaseExtractor):
         if self._asset_html and Path(self._asset_html).is_file():
             download_dir = Path(self._asset_html).parent
         else:
-            download_dir = self._config.download_root / codename
+            download_dir = self._download_dir_for_codename(codename)
             download_dir.mkdir(parents=True, exist_ok=True)
 
         downloaded = download_files(all_urls, download_dir, self._quality, self._config)
@@ -2162,14 +2171,14 @@ class WebPlaywrightExtractor(BaseExtractor):
 
                 # Save HTML to output dir for caching / debugging
                 # Save HTML to download dir for caching / debugging / portability
-                # We use download_root which is 'mapDownloads'
-                output_dir = self._config.download_root / codename
-                output_dir.mkdir(parents=True, exist_ok=True)
-                (output_dir / "assets.html").write_text(assets_html, encoding="utf-8")
+                # We use download_root which is 'mapDownloads', grouped by source game.
+                download_dir = self._download_dir_for_codename(codename)
+                download_dir.mkdir(parents=True, exist_ok=True)
+                (download_dir / "assets.html").write_text(assets_html, encoding="utf-8")
                 if nohud_html is not None:
-                    (output_dir / "nohud.html").write_text(nohud_html, encoding="utf-8")
+                    (download_dir / "nohud.html").write_text(nohud_html, encoding="utf-8")
                 if self._source_game == "jdnext" and jdnext_metadata_payloads:
-                    meta_dir = output_dir / "jdnext_metadata"
+                    meta_dir = download_dir / "jdnext_metadata"
                     meta_dir.mkdir(parents=True, exist_ok=True)
                     for key, payload in jdnext_metadata_payloads.items():
                         (meta_dir / f"{key}.message.html").write_text(
@@ -2181,11 +2190,11 @@ class WebPlaywrightExtractor(BaseExtractor):
                             encoding="utf-8",
                         )
                     metadata_summary = _parse_jdnext_button_payloads(jdnext_metadata_payloads)
-                    (output_dir / "jdnext_metadata.json").write_text(
+                    (download_dir / "jdnext_metadata.json").write_text(
                         json.dumps(metadata_summary, indent=2, sort_keys=True),
                         encoding="utf-8",
                     )
-                logger.debug("Saved HTML to %s", output_dir)
+                logger.debug("Saved HTML to %s", download_dir)
 
             finally:
                 try:
