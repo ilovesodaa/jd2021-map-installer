@@ -72,6 +72,7 @@ class ProgressLogWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._step_items: dict[str, QListWidgetItem] = {}
+        self._last_progress: int = 0
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -150,11 +151,17 @@ class ProgressLogWidget(QWidget):
     # ------------------------------------------------------------------
 
     def set_progress(self, value: int) -> None:
-        """Set progress bar value (0–100)."""
-        self._progress.setValue(max(0, min(100, value)))
+        """Set progress bar value (0–100). Monotonically non-decreasing to prevent
+        backward jumps when transitioning between worker phases."""
+        clamped = max(0, min(100, value))
+        if clamped < self._last_progress:
+            return
+        self._last_progress = clamped
+        self._progress.setValue(clamped)
 
     def reset_progress(self) -> None:
         """Reset the progress bar to zero."""
+        self._last_progress = 0
         self._progress.setValue(0)
 
 
@@ -166,4 +173,5 @@ class ProgressLogWidget(QWidget):
         """Clear checklist and progress bar."""
         self._checklist.clear()
         self._step_items.clear()
+        self._last_progress = 0
         self._progress.setValue(0)

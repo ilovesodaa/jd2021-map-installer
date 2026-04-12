@@ -578,7 +578,7 @@ class ExtractAndNormalizeWorker(QObject):
             self._output_dir.mkdir(parents=True, exist_ok=True)
 
             self.status.emit("Extracting map data...")
-            self.progress.emit(10)
+            self.progress.emit(5)
             try:
                 map_output_dir = self._extractor.extract(self._output_dir)
             except Exception as exc:
@@ -617,11 +617,11 @@ class ExtractAndNormalizeWorker(QObject):
 
             failed_stage = "Parsing CKDs and metadata..."
             self.status.emit("Parsing CKDs and metadata...")
-            self.progress.emit(40)
-            
+            self.progress.emit(10)
+
             failed_stage = "Normalizing assets..."
             self.status.emit("Normalizing assets...")
-            self.progress.emit(50)
+            self.progress.emit(15)
 
             map_data = normalize(
                 map_output_dir,
@@ -629,7 +629,10 @@ class ExtractAndNormalizeWorker(QObject):
                 search_root=normalize_search_root,
             )
 
-            self.progress.emit(100)
+            # Extraction/normalisation is only the first phase of the overall pipeline.
+            # Emit 20 here so the install worker's 5→100 range continues forward without
+            # the bar snapping back to a lower value.
+            self.progress.emit(20)
             self.status.emit("Normalization completed.")
             self.finished.emit(map_data)
 
