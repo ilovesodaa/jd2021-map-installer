@@ -1272,6 +1272,8 @@ class MainWindow(QMainWindow):
         while game_dir.name.lower() in ("world", "data"):
             game_dir = game_dir.parent
 
+        from jd2021_installer.installers.sku_scene import list_registered_maps
+
         index_entries = load_index().entries
         index_by_codename = {entry.codename.lower(): entry for entry in index_entries}
 
@@ -1281,29 +1283,21 @@ class MainWindow(QMainWindow):
             game_dir / "data" / "World" / "MAPS",
             game_dir / "data" / "world" / "maps",
         ]
-        for maps_root in maps_roots:
-            if not maps_root.is_dir():
-                continue
-            for child in maps_root.iterdir():
-                if not child.is_dir():
-                    continue
-                codename = child.name
-                key = codename.lower()
-                source_mode = "Unknown"
-                if key in index_by_codename:
-                    source_mode = index_by_codename[key].source_mode or "Unknown"
-                candidates[key] = (codename, source_mode, str(child))
 
-        for entry in index_entries:
-            installed_dir = Path(entry.installed_map_dir)
-            if not installed_dir.is_dir():
-                continue
-            key = entry.codename.lower()
-            candidates[key] = (
-                entry.codename,
-                entry.source_mode or "Unknown",
-                str(installed_dir),
-            )
+        for codename in list_registered_maps(game_dir):
+            key = codename.lower()
+            source_mode = "Unknown"
+            if key in index_by_codename:
+                source_mode = index_by_codename[key].source_mode or "Unknown"
+
+            map_location = "Registered in SkuScene (map folder missing)"
+            for maps_root in maps_roots:
+                map_dir = maps_root / codename
+                if map_dir.is_dir():
+                    map_location = str(map_dir)
+                    break
+
+            candidates[key] = (codename, source_mode, map_location)
 
         return sorted(candidates.values(), key=lambda item: item[0].lower())
 

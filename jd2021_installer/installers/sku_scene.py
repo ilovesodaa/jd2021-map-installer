@@ -84,6 +84,33 @@ def is_registered(game_dir: str | Path, codename: str) -> bool:
     return bool(pattern.search(content))
 
 
+def list_registered_maps(game_dir: str | Path) -> list[str]:
+    """List map codenames currently registered in SkuScene ISC.
+
+    Returns codenames in file order and removes case-insensitive duplicates.
+    """
+    isc = _sku_scene_path(game_dir)
+    if not isc.is_file():
+        return []
+
+    content = isc.read_text(encoding="utf-8", errors="replace")
+    pattern = re.compile(r'USERFRIENDLY\s*=\s*"([^"]+)"', re.IGNORECASE)
+
+    codenames: list[str] = []
+    seen: set[str] = set()
+    for match in pattern.finditer(content):
+        codename = match.group(1).strip()
+        if not codename:
+            continue
+        key = codename.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        codenames.append(codename)
+
+    return codenames
+
+
 def register_map(game_dir: str | Path, codename: str) -> None:
     """Register a map in SkuScene_Maps_PC_All.isc.
 
