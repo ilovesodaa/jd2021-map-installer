@@ -21,10 +21,12 @@ import requests
 import shutil
 import ssl
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional, Set, cast
 from urllib.parse import unquote, urlparse
@@ -59,6 +61,7 @@ _SEL_MESSAGE_LIST_ITEMS = 'li[id^="chat-messages-"]'
 _UBI_CDN_HOST_PATTERN = re.compile(r"https?://[^\s\"']*(?:cdn\.ubi\.com|cdn\.ubisoft\.cn)", re.IGNORECASE)
 _MAP_PATH_PATTERN = re.compile(r"/(?:public|private)/(?:map|jdnext/maps)/", re.IGNORECASE)
 _WEBM_VALIDATION_CACHE: Dict[str, tuple[int, int, bool]] = {}
+_webm_cache_lock = threading.Lock()
 _UUID_LIKE_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.IGNORECASE,
@@ -291,6 +294,8 @@ def _is_valid_webm_file(path: Path, config: AppConfig) -> bool:
 
     Prefers ffmpeg null-decode for robust corruption detection. Falls back to
     EBML magic check if ffmpeg is unavailable.
+
+    Thread-safe: cache reads and writes are protected by ``_webm_cache_lock``.
     """
     try:
         if not path.exists():
@@ -306,12 +311,14 @@ def _is_valid_webm_file(path: Path, config: AppConfig) -> bool:
     except OSError:
         cache_key = str(path)
 
-    cached = _WEBM_VALIDATION_CACHE.get(cache_key)
+    with _webm_cache_lock:
+        cached = _WEBM_VALIDATION_CACHE.get(cache_key)
     if cached and cached[0] == st.st_size and cached[1] == st.st_mtime_ns:
         return cached[2]
 
     def _cache_result(result: bool) -> bool:
-        _WEBM_VALIDATION_CACHE[cache_key] = (st.st_size, st.st_mtime_ns, result)
+        with _webm_cache_lock:
+            _WEBM_VALIDATION_CACHE[cache_key] = (st.st_size, st.st_mtime_ns, result)
         return result
 
     try:
@@ -551,6 +558,64 @@ def _extract_jdnext_aux_texture_bundles(
 # File downloader
 # ---------------------------------------------------------------------------
 
+def _build_quality_search_order(
+    selected_quality: str,
+    is_jdnext_url_set: bool,
+    config: Optional[AppConfig] = None,
+) -> List[str]:
+    """Return an ordered list of quality keys to probe for the selected tier.
+
+    Promoted from an inner function inside ``_classify_urls`` so that the
+    quality-ladder logic can be unit-tested and reasoned about independently.
+
+    Args:
+        selected_quality:  The user's preferred quality key (e.g. ``'ULTRA_HD'``).
+        is_jdnext_url_set: True when the URL set contains JDNext-style links, which
+                           enables the ``fallback_compatible_down`` VP9-avoidance path.
+        config:            App configuration (used for ``vp9_handling_mode``).
+    """
+    tiers = ["ULTRA", "HIGH", "MID", "LOW"]
+    selected = (selected_quality or "ULTRA_HD").upper()
+    cfg = config or AppConfig()
+    vp9_mode = getattr(cfg, "vp9_handling_mode", "reencode_to_vp8")
+
+    if selected.endswith("_HD"):
+        selected_tier = selected[:-3]
+        selected_is_hd = True
+    else:
+        selected_tier = selected
+        selected_is_hd = False
+
+    if selected_tier not in tiers:
+        selected_tier = "ULTRA"
+
+    # Compatibility mode: avoid VP9 tiers entirely, pick the next HD tier down.
+    if vp9_mode == "fallback_compatible_down" and is_jdnext_url_set:
+        start_idx = tiers.index(selected_tier)
+        if not selected_is_hd:
+            start_idx = min(start_idx + 1, len(tiers) - 1)
+        return [f"{tier}_HD" for tier in tiers[start_idx:]]
+
+    prefer_hd_first = selected_is_hd
+
+    start_idx = tiers.index(selected_tier)
+    ordered_tiers = tiers[start_idx:]
+
+    order: List[str] = []
+    for tier in ordered_tiers:
+        if prefer_hd_first:
+            order.extend([f"{tier}_HD", tier])
+        else:
+            order.extend([tier, f"{tier}_HD"])
+
+    # Ensure uniqueness while preserving order
+    deduped: List[str] = []
+    for item in order:
+        if item in QUALITY_ORDER and item not in deduped:
+            deduped.append(item)
+    return deduped
+
+
 def _classify_urls(
     urls: List[str], quality: str, config: Optional[AppConfig] = None
 ) -> Dict[str, object]:
@@ -626,53 +691,9 @@ def _classify_urls(
             if ".ckd" in u.lower() or ".ad" in u.lower() or ("discordapp.net" not in u):
                 other_urls.append(u)
 
-    # Select best video
+    # Select best video using the promoted quality-search-order helper.
     video_url = None
-
-    def _build_quality_search_order(selected_quality: str) -> List[str]:
-        tiers = ["ULTRA", "HIGH", "MID", "LOW"]
-        selected = (selected_quality or "ULTRA_HD").upper()
-        cfg = config or AppConfig()
-        vp9_mode = getattr(cfg, "vp9_handling_mode", "reencode_to_vp8")
-
-        if selected.endswith("_HD"):
-            selected_tier = selected[:-3]
-            selected_is_hd = True
-        else:
-            selected_tier = selected
-            selected_is_hd = False
-
-        if selected_tier not in tiers:
-            selected_tier = "ULTRA"
-
-        # Compatibility mode requested by user: avoid VP9 tiers entirely and
-        # pick the next compatible HD tier down.
-        if vp9_mode == "fallback_compatible_down" and is_jdnext_url_set:
-            start_idx = tiers.index(selected_tier)
-            if not selected_is_hd:
-                start_idx = min(start_idx + 1, len(tiers) - 1)
-            return [f"{tier}_HD" for tier in tiers[start_idx:]]
-
-        prefer_hd_first = selected_is_hd
-
-        start_idx = tiers.index(selected_tier)
-        ordered_tiers = tiers[start_idx:]
-
-        order: List[str] = []
-        for tier in ordered_tiers:
-            if prefer_hd_first:
-                order.extend([f"{tier}_HD", tier])
-            else:
-                order.extend([tier, f"{tier}_HD"])
-
-        # Ensure uniqueness while preserving order
-        deduped: List[str] = []
-        for item in order:
-            if item in QUALITY_ORDER and item not in deduped:
-                deduped.append(item)
-        return deduped
-
-    search_order = _build_quality_search_order(quality)
+    search_order = _build_quality_search_order(quality, is_jdnext_url_set, config)
     for q in search_order:
         if q in video_urls_by_quality:
             video_url = video_urls_by_quality[q]
@@ -697,6 +718,176 @@ def _classify_urls(
     }
 
 
+# ---------------------------------------------------------------------------
+# Thread-local session + per-URL worker  (supports ThreadPoolExecutor)
+# ---------------------------------------------------------------------------
+
+_thread_local_sessions = threading.local()
+
+
+def _get_thread_session(config: AppConfig) -> requests.Session:
+    """Return a thread-local :class:`requests.Session`, creating one on first access.
+
+    Using per-thread sessions avoids the data races that arise when a single
+    shared session is used from multiple threads simultaneously.
+    """
+    if not hasattr(_thread_local_sessions, "session"):
+        s = requests.Session()
+        s.headers.update({
+            "User-Agent": config.user_agent,
+            "Referer": "https://discord.com/",
+        })
+        _thread_local_sessions.session = s
+    return _thread_local_sessions.session
+
+
+def _download_url_worker(
+    url: str,
+    download_path: Path,
+    config: AppConfig,
+    game_map_dir: Optional[Path],
+) -> tuple[str, Optional[str]]:
+    """Download a single URL to ``download_path``.
+
+    Returns ``(filename, local_path_str)`` on success or
+    ``(filename, None)`` on failure.  Handles retry logic, integrity
+    checks, and DNS fallbacks internally so it can be submitted to a
+    :class:`~concurrent.futures.ThreadPoolExecutor` without shared state.
+    """
+    fname = get_filename_from_url(url)
+    target = download_path / fname
+    is_nohud_video = _is_nohud_video_url(url)
+
+    # --- Local cache check ---
+    if target.exists() and target.stat().st_size > 1024:
+        if is_nohud_video and not _is_valid_webm_file(target, config):
+            logger.debug("Cached NOHUD video %s is corrupt; redownloading...", fname)
+            target.unlink(missing_ok=True)
+        else:
+            logger.debug("%s already in cache, skipping download.", fname)
+            return fname, str(target)
+
+    if target.exists():
+        target.unlink()
+
+    # --- Game installation reuse ---
+    if game_map_dir and game_map_dir.exists():
+        for fpath in game_map_dir.rglob(fname):
+            if fpath.is_file() and fpath.stat().st_size > 1024:
+                logger.debug("Found %s in game installation; copying to cache...", fname)
+                shutil.copy2(fpath, target)
+                if is_nohud_video and not _is_valid_webm_file(target, config):
+                    logger.debug(
+                        "Installed NOHUD video %s failed integrity check; redownloading...",
+                        fname,
+                    )
+                    target.unlink(missing_ok=True)
+                else:
+                    return fname, str(target)
+                break
+
+    # --- Primary: curl --resolve for known CDN mirror ---
+    prefer_curl_resolve = "cdn-jdhelper.ramaprojects.ru" in url.lower()
+    if prefer_curl_resolve:
+        logger.debug("Using curl --resolve as primary downloader for %s", fname)
+        if _download_with_curl_resolve(url, target, config.download_timeout_s):
+            if is_nohud_video and not _is_valid_webm_file(target, config):
+                logger.debug("curl --resolve primary produced corrupt NOHUD video %s", fname)
+                target.unlink(missing_ok=True)
+            else:
+                time.sleep(config.inter_request_delay_s)
+                return fname, str(target)
+
+    # --- Main retry loop via thread-local requests.Session ---
+    session = _get_thread_session(config)
+    success = False
+    for attempt in range(1, config.max_retries + 1):
+        try:
+            with session.get(url, stream=True, timeout=config.download_timeout_s) as r:
+                if r.status_code == 429:
+                    retry_after = _parse_retry_after_seconds(
+                        r.headers.get("Retry-After"),
+                        config.retry_base_delay_s * attempt,
+                    )
+                    logger.warning(
+                        "Rate limited (429) for %s. Waiting %ds before retry %d/%d...",
+                        fname, retry_after, attempt, config.max_retries,
+                    )
+                    if attempt < config.max_retries:
+                        time.sleep(retry_after)
+                        continue
+                    else:
+                        break
+
+                if r.status_code in (403, 404):
+                    logger.warning(
+                        "HTTP %d for %s (links may have expired).",
+                        r.status_code,
+                        fname,
+                    )
+                    break
+
+                r.raise_for_status()
+                with open(target, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            f.write(chunk)
+
+                if target.stat().st_size > 1024:
+                    if is_nohud_video and not _is_valid_webm_file(target, config):
+                        logger.warning(
+                            "Downloaded NOHUD video %s failed integrity check (attempt %d/%d)",
+                            fname, attempt, config.max_retries,
+                        )
+                        target.unlink(missing_ok=True)
+                        if attempt < config.max_retries:
+                            time.sleep(config.retry_base_delay_s * (2 ** (attempt - 1)))
+                            continue
+                        break
+                    success = True
+                    break
+                else:
+                    logger.debug("Download produced empty file for %s", fname)
+        except Exception as e:
+            logger.debug(
+                "Download error for %s: %s (Attempt %d/%d)",
+                fname, e, attempt, config.max_retries,
+            )
+            if attempt < config.max_retries:
+                time.sleep(config.retry_base_delay_s * (2 ** (attempt - 1)))
+            else:
+                break
+
+    if success:
+        time.sleep(config.inter_request_delay_s)
+        return fname, str(target)
+
+    # --- Fallbacks for prefer_curl_resolve hosts ---
+    if prefer_curl_resolve:
+        logger.debug("Trying curl --resolve fallback download for %s", fname)
+        if _download_with_curl_resolve(url, target, config.download_timeout_s):
+            if is_nohud_video and not _is_valid_webm_file(target, config):
+                logger.debug("curl --resolve fallback produced corrupt NOHUD video %s", fname)
+                target.unlink(missing_ok=True)
+            else:
+                logger.info("curl --resolve fallback succeeded for %s", fname)
+                time.sleep(config.inter_request_delay_s)
+                return fname, str(target)
+
+        logger.debug("Trying PowerShell fallback download for %s", fname)
+        if _download_with_powershell(url, target, config.download_timeout_s):
+            if is_nohud_video and not _is_valid_webm_file(target, config):
+                logger.debug("PowerShell fallback produced corrupt NOHUD video %s", fname)
+                target.unlink(missing_ok=True)
+            else:
+                logger.info("PowerShell fallback succeeded for %s", fname)
+                time.sleep(config.inter_request_delay_s)
+                return fname, str(target)
+
+    logger.error("Failed to download %s after %d attempts", fname, config.max_retries)
+    return fname, None
+
+
 def download_files(
     urls: List[str],
     download_dir: str | Path,
@@ -704,7 +895,12 @@ def download_files(
     config: Optional[AppConfig] = None,
     progress_callback=None,
 ) -> Dict[str, str]:
-    """Download map asset files from URLs.
+    """Download map asset files from URLs concurrently.
+
+    Uses a :class:`~concurrent.futures.ThreadPoolExecutor` with up to 4
+    workers so that audio, video, scene-ZIP, and CKD assets are fetched in
+    parallel rather than sequentially.  Each worker uses its own
+    thread-local :class:`requests.Session`.
 
     Args:
         urls:              List of asset URLs.
@@ -731,184 +927,57 @@ def download_files(
     important_urls.extend(cast(List[str], classified.get("others", [])))
 
     unique_urls = list(set(important_urls))
-    # Prioritize: mainscene > audio > video > others
-    def priority(u):
-        if "MAIN_SCENE" in u or "mappackage" in u.lower(): return 0
-        if ".ogg" in u or ".wav" in u: return 1
-        if ".opus" in u: return 1
-        if any(pat in u for pat in QUALITY_PATTERNS.values()): return 2
-        if re.search(r"/video_(ultra|high|mid|low)\.(hd|vp9|vp8)\.webm/", u, re.IGNORECASE): return 2
+
+    # Prioritize: mainscene > audio > video > others so the pool starts
+    # the most critical downloads first when max_workers < total.
+    def priority(u: str) -> int:
+        if "MAIN_SCENE" in u or "mappackage" in u.lower():
+            return 0
+        if ".ogg" in u or ".wav" in u or ".opus" in u:
+            return 1
+        if any(pat in u for pat in QUALITY_PATTERNS.values()):
+            return 2
+        if re.search(r"/video_(ultra|high|mid|low)\.(hd|vp9|vp8)\.webm/", u, re.IGNORECASE):
+            return 2
         return 3
-    
+
     unique_urls.sort(key=priority)
-    
+
+    # Resolve game map directory once (shared read-only across all workers).
+    codename = download_path.name
+    game_map_dir: Optional[Path] = None
+    if config.game_directory:
+        base_game_dir = config.game_directory
+        while base_game_dir.name.lower() in ("world", "data"):
+            base_game_dir = base_game_dir.parent
+        game_map_dir = base_game_dir / "data" / "World" / "MAPS" / codename
+
     downloaded: Dict[str, str] = {}
     total = len(unique_urls)
-    selected_video_url = classified.get("video")
-    selected_video_fname = get_filename_from_url(selected_video_url) if selected_video_url else None
+    _progress_lock = threading.Lock()
+    _completed = [0]  # mutable counter accessible from the result loop
 
-    session = requests.Session()
-    session.headers.update({"User-Agent": config.user_agent})
-    session.headers.update({"Referer": "https://discord.com/"})
-
-    for idx, url in enumerate(unique_urls):
-        fname = get_filename_from_url(url)
-        target = download_path / fname
-        is_nohud_video = _is_nohud_video_url(url)
-
-        # Check if already in cache and not empty
-        if target.exists() and target.stat().st_size > 1024:
-            if is_nohud_video and not _is_valid_webm_file(target, config):
-                logger.debug("Cached NOHUD video %s is corrupt, redownloading...", fname)
-                target.unlink(missing_ok=True)
-            else:
-                logger.debug("%s already in cache, skipping download.", fname)
-                downloaded[fname] = str(target)
-                continue
-        
-        if target.exists():
-            target.unlink()
-
-        # Respect selected tier: do not silently substitute a different cached
-        # gameplay quality when the requested file is missing.
-
-        # Check if already installed
-        codename = download_path.name
-        game_map_dir = None
-        if config.game_directory:
-            base_game_dir = config.game_directory
-            while base_game_dir.name.lower() in ("world", "data"):
-                base_game_dir = base_game_dir.parent
-            game_map_dir = base_game_dir / "data" / "World" / "MAPS" / codename
-            
-        found_in_game = False
-        if game_map_dir and game_map_dir.exists():
-            for fpath in game_map_dir.rglob(fname):
-                if fpath.is_file() and fpath.stat().st_size > 1024:
-                    import shutil
-                    logger.debug("Found %s in existing game installation, copying to cache...", fname)
-                    shutil.copy2(fpath, target)
-                    if is_nohud_video and not _is_valid_webm_file(target, config):
-                        logger.debug("Installed NOHUD video %s failed integrity check, redownloading...", fname)
-                        target.unlink(missing_ok=True)
-                        continue
-                    found_in_game = True
-                    break
-        
-        if found_in_game:
-            downloaded[fname] = str(target)
-            continue
-
-        logger.debug("Downloading %s... (%d/%d)", fname, idx + 1, total)
-        if progress_callback:
-            progress_callback(fname, idx + 1, total)
-
-        success = False
-        prefer_curl_resolve = "cdn-jdhelper.ramaprojects.ru" in url.lower()
-        if prefer_curl_resolve:
-            logger.debug("Using curl --resolve as primary downloader for %s", fname)
-            if _download_with_curl_resolve(url, target, config.download_timeout_s):
-                if is_nohud_video and not _is_valid_webm_file(target, config):
-                    logger.debug("curl --resolve primary download produced corrupt NOHUD video %s", fname)
-                    target.unlink(missing_ok=True)
-                else:
-                    success = True
-
-        if success:
-            downloaded[fname] = str(target)
-            time.sleep(config.inter_request_delay_s)
-            continue
-
-        for attempt in range(1, config.max_retries + 1):
+    max_workers = min(4, max(1, total))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_download_url_worker, url, download_path, config, game_map_dir): url
+            for url in unique_urls
+        }
+        for future in as_completed(futures):
             try:
-                with session.get(url, stream=True, timeout=config.download_timeout_s) as r:
-                    if r.status_code == 429:
-                        retry_after = _parse_retry_after_seconds(
-                            r.headers.get("Retry-After"),
-                            config.retry_base_delay_s * attempt,
-                        )
-                        logger.warning(
-                            "Rate limited (429) for %s. Waiting %ds before retry %d/%d...",
-                            fname,
-                            retry_after,
-                            attempt,
-                            config.max_retries,
-                        )
-                        if attempt < config.max_retries:
-                            time.sleep(retry_after)
-                            continue
-                        else:
-                            break
+                fname, path = future.result()
+            except Exception as exc:
+                url = futures[future]
+                fname = get_filename_from_url(url)
+                logger.error("Unexpected download error for %s: %s", fname, exc)
+                path = None
 
-                    if r.status_code in (403, 404):
-                        logger.warning(
-                            "HTTP %d for %s (links may have expired).",
-                            r.status_code,
-                            fname,
-                        )
-                        break
-                            
-                    r.raise_for_status()
-                    total_size = int(r.headers.get('content-length', 0))
-                    
-                    with open(target, "wb") as f:
-                        for chunk in r.iter_content(chunk_size=1024*1024):
-                            if chunk:
-                                f.write(chunk)
-                    
-                    # Verify download success (non-zero size)
-                    if target.stat().st_size > 1024:
-                        if is_nohud_video and not _is_valid_webm_file(target, config):
-                            logger.warning(
-                                "Downloaded NOHUD video %s failed integrity check (attempt %d/%d)",
-                                fname,
-                                attempt,
-                                config.max_retries,
-                            )
-                            target.unlink(missing_ok=True)
-                            if attempt < config.max_retries:
-                                time.sleep(config.retry_base_delay_s * (2 ** (attempt - 1)))
-                                continue
-                            break
-                        success = True
-                        break
-                    else:
-                        logger.debug("Download produced empty file for %s", fname)
-            except Exception as e:
-                logger.debug("Download error for %s: %s (Attempt %d/%d)", fname, e, attempt, config.max_retries)
-                if attempt < config.max_retries:
-                    time.sleep(config.retry_base_delay_s * (2 ** (attempt - 1)))
-                else:
-                    break
-
-        if success:
-            downloaded[fname] = str(target)
-        else:
-            if prefer_curl_resolve:
-                logger.debug("Trying curl --resolve fallback download for %s", fname)
-                if _download_with_curl_resolve(url, target, config.download_timeout_s):
-                    if is_nohud_video and not _is_valid_webm_file(target, config):
-                        logger.debug("curl --resolve downloaded corrupt NOHUD video %s", fname)
-                        target.unlink(missing_ok=True)
-                    else:
-                        logger.debug("curl --resolve fallback succeeded for %s", fname)
-                        downloaded[fname] = str(target)
-                        time.sleep(config.inter_request_delay_s)
-                        continue
-
-                logger.debug("Trying PowerShell fallback download for %s", fname)
-                if _download_with_powershell(url, target, config.download_timeout_s):
-                    if is_nohud_video and not _is_valid_webm_file(target, config):
-                        logger.debug("PowerShell fallback downloaded corrupt NOHUD video %s", fname)
-                        target.unlink(missing_ok=True)
-                    else:
-                        logger.debug("PowerShell fallback succeeded for %s", fname)
-                        downloaded[fname] = str(target)
-                        time.sleep(config.inter_request_delay_s)
-                        continue
-            logger.error("Failed to download %s after %d attempts", fname, config.max_retries)
-
-        time.sleep(config.inter_request_delay_s)
+            with _progress_lock:
+                _completed[0] += 1
+                if path:
+                    downloaded[fname] = path
+                if progress_callback:
+                    progress_callback(fname, _completed[0], total)
 
     return downloaded
 
@@ -963,9 +1032,9 @@ async def _wait_for_new_message(
 ) -> str:
     """Poll for a newly appended message list item."""
     logger.debug("Waiting for bot message response...")
-    deadline = asyncio.get_event_loop().time() + timeout_s
+    deadline = asyncio.get_running_loop().time() + timeout_s
 
-    while asyncio.get_event_loop().time() < deadline:
+    while asyncio.get_running_loop().time() < deadline:
         result = await page.evaluate(
             """(prevId) => {
                 const all = document.querySelectorAll('li[id^="chat-messages-"]');
@@ -1123,9 +1192,9 @@ async def _wait_for_new_embed(
     for 3 consecutive checks.
     """
     logger.debug("Waiting for bot response...")
-    deadline = asyncio.get_event_loop().time() + timeout_s
+    deadline = asyncio.get_running_loop().time() + timeout_s
 
-    while asyncio.get_event_loop().time() < deadline:
+    while asyncio.get_running_loop().time() < deadline:
         result = await page.evaluate(
             """(prevId) => {
                 const all = document.querySelectorAll('div[id^="message-accessories-"]');
@@ -1680,11 +1749,11 @@ async def _fetch_command_with_retry(
         try:
             pre_id = await _get_last_accessory_id(page)
             await _send_slash_command(page, command=command, choices=choices, codename=codename)
-            scan_deadline = asyncio.get_event_loop().time() + bot_timeout_s
+            scan_deadline = asyncio.get_running_loop().time() + bot_timeout_s
             cursor_id = pre_id
 
-            while asyncio.get_event_loop().time() < scan_deadline:
-                remaining = max(1, int(scan_deadline - asyncio.get_event_loop().time()))
+            while asyncio.get_running_loop().time() < scan_deadline:
+                remaining = max(1, int(scan_deadline - asyncio.get_running_loop().time()))
                 embed_id = await _wait_for_new_embed(page, cursor_id, timeout_s=remaining)
                 html = await _extract_embed_html(page, embed_id)
                 cursor_id = embed_id
@@ -1884,7 +1953,10 @@ class WebPlaywrightExtractor(BaseExtractor):
             for codename in self._codenames:
                 try:
                     scraped_fresh.extend(asyncio.run(self._scrape_codename(codename)))
-                except: pass
+                except WebExtractionError as exc:
+                    logger.warning("Re-scrape for '%s' failed: %s", codename, exc)
+                except Exception as exc:
+                    logger.warning("Unexpected re-scrape error for '%s': %s", codename, exc)
             if scraped_fresh:
                 all_urls = list(set(all_urls + scraped_fresh))
                 refreshed = download_files(all_urls, download_dir, self._quality, self._config)
@@ -2006,6 +2078,12 @@ class WebPlaywrightExtractor(BaseExtractor):
 
     def get_codename(self) -> Optional[str]:
         return self._codename
+
+    def get_source_dir(self) -> Optional[Path]:
+        """Return the download cache directory for the active codename, if known."""
+        if self._codename:
+            return self._download_dir_for_codename(self._codename)
+        return None
 
     @staticmethod
     def _extract_scene_zips(src_dir: Path, dst_dir: Optional[Path] = None) -> None:
