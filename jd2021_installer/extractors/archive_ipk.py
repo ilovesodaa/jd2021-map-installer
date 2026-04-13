@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import struct
 import zlib
 import lzma
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 from jd2021_installer.core.exceptions import IPKExtractionError
 from jd2021_installer.extractors.base import BaseExtractor
@@ -27,6 +28,17 @@ _ENDIAN = ">"
 _STRUCT_SIGNS = {1: "c", 2: "H", 4: "I", 8: "Q"}
 
 _IPK_MAGIC = b"\x50\xEC\x12\xBA"
+
+# Guard against corrupted headers that claim absurd file counts.
+_MAX_IPK_FILE_COUNT = 100_000
+
+# Streaming thresholds for decompression.
+# Payloads below the threshold are fully buffered (faster for the many tiny
+# CKD / metadata files a typical IPK contains).  Larger payloads — audio,
+# textures, video — use streaming zlib.decompressobj to avoid holding both
+# the compressed and decompressed representations in RAM simultaneously.
+_STREAMING_CHUNK = 256 * 1024       # 256 KB read chunk
+_STREAMING_THRESHOLD = 4 * 1024 * 1024  # Switch to streaming above 4 MB
 
 
 def validate_ipk_magic(target_file: str | Path) -> None:
@@ -82,15 +94,134 @@ def _get_file_header() -> dict:
         "time_stamp": {"size": 8},
         "offset": {"size": 8},
         "name_size": {"size": 4},
-        "file_name": {"size": 0},
+        "file_name": {"size": 0},   # resolved at read-time from name_size
         "path_size": {"size": 4},
-        "path_name": {"size": 4},
+        "path_name": {"size": 4},   # resolved at read-time from path_size
         "checksum": {"size": 4},
         "flag": {"size": 4},
     }
 
 
-def extract_ipk(target_file: str | Path, output_dir: str | Path | None = None) -> Path:
+def _iter_file_headers(f, num_files: int) -> Iterator[dict]:
+    """Lazily yield file-entry header dicts from an open IPK stream.
+
+    The caller must position ``f`` immediately after the global IPK header
+    before invoking this generator.  The iterator is lazy so callers that
+    only need the first ``N`` entries can break early without reading the
+    rest of the file.
+
+    This generator is shared between :func:`extract_ipk` and
+    :func:`inspect_ipk` to eliminate the previously duplicated header-parsing
+    loop.
+    """
+    for _ in range(num_files):
+        fheader = _get_file_header()
+        for v in fheader:
+            size = fheader[v]["size"]
+            if v == "path_name":
+                size = _unpack(fheader["path_size"]["value"])
+            if v == "file_name":
+                size = _unpack(fheader["name_size"]["value"])
+            fheader[v]["value"] = f.read(size)
+        yield fheader
+
+
+def _sniff_compression(probe: bytes) -> str:
+    """Identify the compression codec from the leading bytes of a payload.
+
+    Returns ``'zlib'``, ``'lzma'``, or ``'raw'``.
+    """
+    if len(probe) >= 2 and probe[0] == 0x78 and probe[1] in (0x9C, 0x01, 0xDA, 0x5E):
+        return "zlib"
+    if len(probe) >= 6 and probe[:6] == b"\xfd7zXZ\x00":
+        return "lzma"
+    if len(probe) >= 2 and probe[:2] == b"]\x00":
+        return "lzma"
+    return "raw"
+
+
+def _decompress_to_file(f_in, f_out, data_size: int) -> None:
+    """Read ``data_size`` bytes from ``f_in``, decompress, and write to ``f_out``.
+
+    Small payloads (< 4 MB) are fully buffered before decompression —
+    this is marginally faster for the many tiny CKD / metadata files a
+    typical IPK contains.
+
+    Large payloads use :class:`zlib.decompressobj` in streaming mode so
+    only one 256 KB chunk of compressed data is held in RAM at a time,
+    avoiding the peak where both the full compressed *and* decompressed
+    representations would otherwise coexist.
+
+    The compression codec is auto-detected from the leading magic bytes;
+    unrecognised payloads are written as-is (raw copy).
+    """
+    if data_size < _STREAMING_THRESHOLD:
+        # Small payload: buffer fully, try zlib → lzma → raw.
+        raw = f_in.read(data_size)
+        try:
+            f_out.write(zlib.decompress(raw))
+            return
+        except zlib.error:
+            pass
+        try:
+            f_out.write(lzma.decompress(raw))
+            return
+        except lzma.LZMAError:
+            pass
+        f_out.write(raw)
+        return
+
+    # Large payload: probe codec from first bytes, then stream-decompress.
+    probe = f_in.read(min(16, data_size))
+    remaining = data_size - len(probe)
+    codec = _sniff_compression(probe)
+
+    if codec == "zlib":
+        try:
+            dobj = zlib.decompressobj()
+            f_out.write(dobj.decompress(probe))
+            while remaining > 0:
+                n = min(_STREAMING_CHUNK, remaining)
+                f_out.write(dobj.decompress(f_in.read(n)))
+                remaining -= n
+            f_out.write(dobj.flush())
+            return
+        except zlib.error:
+            # Skip any unread compressed bytes to leave the stream positioned
+            # correctly for the next entry, then bail out.
+            logger.debug(
+                "Streaming zlib decompression failed for %d-byte payload; "
+                "output may be partial — skipping remaining %d bytes.",
+                data_size,
+                remaining,
+            )
+            if remaining > 0:
+                f_in.read(remaining)
+            return
+
+    # LZMA or raw: collect remaining bytes, then decompress or copy.
+    tail = f_in.read(remaining)
+    full = probe + tail
+
+    if codec == "lzma":
+        try:
+            f_out.write(lzma.decompress(full))
+            return
+        except lzma.LZMAError:
+            pass
+
+    # Raw write — chunk through the already-collected buffer.
+    offset = 0
+    while offset < len(full):
+        end = min(offset + _STREAMING_CHUNK, len(full))
+        f_out.write(full[offset:end])
+        offset = end
+
+
+def extract_ipk(
+    target_file: str | Path,
+    output_dir: str | Path | None = None,
+) -> tuple[Path, list[str]]:
     """Extract an IPK archive to the given output directory.
 
     Args:
@@ -99,7 +230,11 @@ def extract_ipk(target_file: str | Path, output_dir: str | Path | None = None) -
                  ``target_file.stem`` (V1-compatible behavior).
 
     Returns:
-        Path to the output directory.
+        ``(output_path, codenames)`` — the extraction directory and the
+        sorted list of map codenames discovered in the file-entry headers.
+        Callers that previously discarded the return value are unaffected;
+        callers such as :meth:`ArchiveIPKExtractor.extract` can consume the
+        codenames directly to skip a redundant :func:`inspect_ipk` pass.
 
     Raises:
         IPKExtractionError: If extraction fails.
@@ -107,6 +242,8 @@ def extract_ipk(target_file: str | Path, output_dir: str | Path | None = None) -
     target_file = Path(target_file)
     output_path = Path(output_dir) if output_dir is not None else Path(target_file.stem)
 
+    # validate_ipk_magic raises a typed, descriptive error — no need to
+    # recheck the magic bytes again inside the open() block below.
     validate_ipk_magic(target_file)
 
     try:
@@ -115,27 +252,19 @@ def extract_ipk(target_file: str | Path, output_dir: str | Path | None = None) -
         with open(target_file, "rb") as f:
             ipk_header = _read_header_fields(f, _IPK_HEADER_TEMPLATE)
 
-            if ipk_header["magic"]["value"] != _IPK_MAGIC:
-                raise IPKExtractionError("Not a valid IPK file (bad magic bytes)")
-
             num_files = _unpack(ipk_header["num_files"]["value"])
+            if num_files > _MAX_IPK_FILE_COUNT:
+                raise IPKExtractionError(
+                    f"Suspicious file count in IPK header: {num_files:,}. "
+                    "The archive may be corrupted or non-standard."
+                )
             logger.debug("IPK: Found %d files...", num_files)
 
-            file_chunks = []
-            for _ in range(num_files):
-                fheader = _get_file_header()
-                for v in fheader:
-                    size = fheader[v]["size"]
-                    if v == "path_name":
-                        size = _unpack(fheader["path_size"]["value"])
-                    if v == "file_name":
-                        size = _unpack(fheader["name_size"]["value"])
-                    fheader[v]["value"] = f.read(size)
-                file_chunks.append(fheader)
+            file_chunks = list(_iter_file_headers(f, num_files))
 
             base_offset = _unpack(ipk_header["base_offset"]["value"])
-            created_dirs = set()
-            codenames_found = set()
+            created_dirs: set[Path] = set()
+            codenames_found: set[str] = set()
             extracted_files = 0
 
             for k, chunk in enumerate(file_chunks):
@@ -175,24 +304,21 @@ def extract_ipk(target_file: str | Path, output_dir: str | Path | None = None) -
                     created_dirs.add(file_path)
 
                 with open(file_path / file_name, "wb") as ff:
-                    raw_data = f.read(data_size)
-                    try:
-                        decompressed = zlib.decompress(raw_data)
-                    except zlib.error:
-                        try:
-                            decompressed = lzma.decompress(raw_data)
-                        except lzma.LZMAError:
-                            decompressed = raw_data
-                    ff.write(decompressed)
+                    _decompress_to_file(f, ff, data_size)
                 extracted_files += 1
 
-        logger.debug("IPK: Extracted %d/%d files to %s", extracted_files, num_files, output_path)
+        logger.info(
+            "IPK: Extracted %d/%d files to %s",
+            extracted_files,
+            num_files,
+            output_path,
+        )
         if extracted_files == 0 and num_files > 0:
             logger.warning(
                 "IPK extraction produced no materialized files for %s; continuing for V1 parity.",
                 target_file,
             )
-        return output_path
+        return output_path, sorted(codenames_found)
 
     except IPKExtractionError:
         raise
@@ -201,9 +327,14 @@ def extract_ipk(target_file: str | Path, output_dir: str | Path | None = None) -
 
 
 def inspect_ipk(target_file: str | Path) -> list[str]:
-    """Fast scan of the IPK to discover top-level directories (maps).
-    
-    Reads only headers without decompressing data.
+    """Fast scan of the IPK to discover top-level map directories.
+
+    Reads only file-entry headers without decompressing any data.
+
+    .. note::
+        When you have already called :func:`extract_ipk`, prefer consuming
+        the codename list it returns rather than calling this function again —
+        that avoids a redundant full-file header walk.
     """
     target_file = Path(target_file)
     if not target_file.exists():
@@ -216,21 +347,20 @@ def inspect_ipk(target_file: str | Path) -> list[str]:
                 return []
 
             num_files = _unpack(ipk_header["num_files"]["value"])
-            root_dirs = set()
-            
-            # V1 Parity: Support both standard (world/maps/) and legacy (world/jd20XX/) structures
-            for _ in range(num_files):
-                fheader = _get_file_header()
-                for v in fheader:
-                    size = fheader[v]["size"]
-                    if v == "path_name":
-                        size = _unpack(fheader["path_size"]["value"])
-                    if v == "file_name":
-                        size = _unpack(fheader["name_size"]["value"])
-                    fheader[v]["value"] = f.read(size)
-                
-                raw_path = fheader["path_name"]["value"].decode(errors="ignore").replace('\\', '/')
-                raw_file = fheader["file_name"]["value"].decode(errors="ignore").replace('\\', '/')
+            if num_files > _MAX_IPK_FILE_COUNT:
+                logger.debug(
+                    "inspect_ipk: Suspicious file count %d in %s; skipping inspection.",
+                    num_files,
+                    target_file.name,
+                )
+                return []
+
+            root_dirs: set[str] = set()
+
+            # V1 Parity: support both standard (world/maps/) and legacy (world/jd20XX/) structures.
+            for chunk in _iter_file_headers(f, num_files):
+                raw_path = chunk["path_name"]["value"].decode(errors="ignore").replace('\\', '/')
+                raw_file = chunk["file_name"]["value"].decode(errors="ignore").replace('\\', '/')
 
                 candidates = []
                 if "/" in raw_path:
@@ -258,25 +388,27 @@ def inspect_ipk(target_file: str | Path) -> list[str]:
                         except (ValueError, IndexError):
                             pass
 
-            # V1 Parity: Filter out engine-specific internal folders that are not maps
-            ignore_list = {"cache", "common", "etc", "enginedata", "audio", "videoscoach", "localization"}
-            return sorted({d for d in root_dirs if d and not d.startswith(".") and d.lower() not in ignore_list})
+            # V1 Parity: filter out engine-specific internal folders.
+            ignore_list = {
+                "cache", "common", "etc", "enginedata",
+                "audio", "videoscoach", "localization",
+            }
+            return sorted(
+                {d for d in root_dirs if d and not d.startswith(".") and d.lower() not in ignore_list}
+            )
 
     except Exception as exc:
         logger.debug("Fast inspect failed for IPK %s: %s", target_file, exc)
         return []
 
 
-
-
 def _detect_maps_in_dir(directory: Path) -> list[str]:
     """Scan a directory for map codenames using the UbiArt structure.
-    
+
     Supports both standard (world/maps/) and legacy (world/jd20XX/) layouts.
     """
-    import re
-    codenames = set()
-    
+    codenames: set[str] = set()
+
     # 1. Standard layout: world/maps/<codename>/
     maps_dirs = list(directory.rglob("world/maps"))
     for maps_dir in maps_dirs:
@@ -284,7 +416,7 @@ def _detect_maps_in_dir(directory: Path) -> list[str]:
             for entry in maps_dir.iterdir():
                 if entry.is_dir() and not entry.name.startswith('.'):
                     codenames.add(entry.name)
-                    
+
     # 2. Legacy layout: world/jd20XX/<codename>/
     for world_dir in directory.rglob("world"):
         if world_dir.is_dir():
@@ -293,7 +425,7 @@ def _detect_maps_in_dir(directory: Path) -> list[str]:
                     for entry in jd_dir.iterdir():
                         if entry.is_dir() and not entry.name.startswith('.'):
                             codenames.add(entry.name)
-                                
+
     ignore_list = {"cache", "common", "etc", "enginedata", "audio", "videoscoach", "localization"}
     return sorted({c for c in codenames if c and c.lower() not in ignore_list})
 
@@ -308,24 +440,23 @@ class ArchiveIPKExtractor(BaseExtractor):
         self.bundle_maps: list[str] = []
 
     def extract(self, output_dir: Path) -> Path:
-        import re
-        result = extract_ipk(self._ipk_path, output_dir)
-        
-        # V1 Parity: Detect maps from filesystem structure after extraction
+        # extract_ipk now returns (path, header_codenames) — no second inspect_ipk
+        # pass is needed, saving a full file-header re-read.
+        result, header_codenames = extract_ipk(self._ipk_path, output_dir)
+
+        # V1 Parity: also detect maps from the filesystem structure after extraction,
+        # since some IPKs use path layouts not captured by the header scan alone.
         actual_maps = _detect_maps_in_dir(result)
-        
-        # Fast inspect as a secondary source of truth
-        headers_maps = inspect_ipk(self._ipk_path)
-        
-        # Combine and prioritize
-        discovered = sorted(set(actual_maps) | set(headers_maps))
+
+        # Combine: header codenames + filesystem-detected codenames.
+        discovered = sorted(set(actual_maps) | set(header_codenames))
         self.bundle_maps = discovered
-        
+
         if len(discovered) == 1:
             self._codename = discovered[0]
-            logger.debug("Inferred codename: %s", self._codename)
+            logger.info("Inferred codename from IPK: %s", self._codename)
         elif len(discovered) > 1:
-            logger.debug("Multiple maps discovered in IPK: %s", ", ".join(discovered))
+            logger.info("Multiple maps discovered in IPK: %s", ", ".join(discovered))
             if self._desired_codename:
                 target_matches = [m for m in discovered if m.lower() == self._desired_codename.lower()]
                 if target_matches:
@@ -335,8 +466,13 @@ class ArchiveIPKExtractor(BaseExtractor):
 
             # Try to match the codename from the IPK filename
             base = self._ipk_path.stem
-            stem = re.sub(r"_(x360|durango|scarlett|nx|orbis|prospero|pc)$", "", base, flags=re.IGNORECASE)
-            
+            stem = re.sub(
+                r"_(x360|durango|scarlett|nx|orbis|prospero|pc)$",
+                "",
+                base,
+                flags=re.IGNORECASE,
+            )
+
             matches = [m for m in discovered if m.lower() == stem.lower()]
             if matches:
                 self._codename = matches[0]
@@ -347,10 +483,18 @@ class ArchiveIPKExtractor(BaseExtractor):
         else:
             # Fallback to filename inference if no maps found in structure
             base = self._ipk_path.stem
-            stem = re.sub(r"_(x360|durango|scarlett|nx|orbis|prospero|pc)$", "", base, flags=re.IGNORECASE)
+            stem = re.sub(
+                r"_(x360|durango|scarlett|nx|orbis|prospero|pc)$",
+                "",
+                base,
+                flags=re.IGNORECASE,
+            )
             self._codename = stem
-            logger.debug("No maps found in structure, using fallback from filename: %s", self._codename)
-            
+            logger.debug(
+                "No maps found in structure, using fallback from filename: %s",
+                self._codename,
+            )
+
         return result
 
     def get_codename(self) -> Optional[str]:

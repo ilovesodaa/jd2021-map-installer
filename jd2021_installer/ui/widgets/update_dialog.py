@@ -256,14 +256,14 @@ class UpdateResultDialog(QDialog):
     @staticmethod
     def _restart_application() -> None:
         """Restart the current application process."""
-        import os
         import subprocess
 
         python = sys.executable
-        args = sys.argv[:]
-        # Use subprocess to launch a new instance, then exit this one
+        # Always restart via -m so the project root is on sys.path correctly,
+        # regardless of whether argv[0] is a script path or a module flag.
+        restart_args = [python, "-m", "jd2021_installer.main"]
         try:
-            subprocess.Popen([python] + args)
+            subprocess.Popen(restart_args)
         except Exception as exc:
             logger.error("Failed to restart: %s", exc)
             QMessageBox.warning(

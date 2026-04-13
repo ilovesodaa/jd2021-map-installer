@@ -541,11 +541,10 @@ class PreviewWidget(QWidget):
         fine_video_seek = max(0.0, vid_seek)
 
         vf_filters: list[str] = []
-        if self._accurate_seek and fine_video_seek > 1e-6:
-            vf_filters.extend([
-                f"trim=start={fine_video_seek:.6f}",
-                "setpts=PTS-STARTPTS",
-            ])
+        if self._accurate_seek:
+            if fine_video_seek > 1e-6:
+                vf_filters.append(f"trim=start={fine_video_seek:.6f}")
+            vf_filters.append("setpts=PTS-STARTPTS")
         if video_delay_s > 0:
             vf_filters.append(f"tpad=start_duration={video_delay_s:.6f}")
         vf_filters.append(
@@ -559,7 +558,7 @@ class PreviewWidget(QWidget):
         ffmpeg_cmd: list[str] = [self._ffmpeg_path, "-loglevel", "error"]
         if self._ffmpeg_hwaccel == "auto":
             ffmpeg_cmd += ["-hwaccel", "auto"]
-        if not self._accurate_seek and fine_video_seek > 1e-6:
+        if not self._accurate_seek:
             ffmpeg_cmd += ["-ss", f"{fine_video_seek:.6f}"]
         ffmpeg_cmd += [
             "-i", resolved_video_path,
@@ -574,17 +573,16 @@ class PreviewWidget(QWidget):
             self._ffplay_path, "-nodisp", "-autoexit", "-loglevel", "quiet",
         ]
         fine_audio_seek = max(0.0, aud_seek)
-        if not self._accurate_seek and fine_audio_seek > 1e-6:
+        if not self._accurate_seek:
             ffplay_cmd += ["-ss", f"{fine_audio_seek:.6f}"]
         ffplay_cmd += ["-i", resolved_audio_path]
 
         afilters: list[str] = []
-        if self._accurate_seek and fine_audio_seek > 1e-6:
+        if self._accurate_seek:
             # Fine decoder-side trim preserves fractional precision after coarse seek.
-            afilters.extend([
-                f"atrim=start={fine_audio_seek:.6f}",
-                "asetpts=PTS-STARTPTS",
-            ])
+            if fine_audio_seek > 1e-6:
+                afilters.append(f"atrim=start={fine_audio_seek:.6f}")
+            afilters.append("asetpts=PTS-STARTPTS")
         if aud_delay_ms > 0:
             afilters.append(f"adelay={aud_delay_ms}|{aud_delay_ms}")
         if afilters:

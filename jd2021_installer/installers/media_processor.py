@@ -58,7 +58,8 @@ def _write_silent_ogg(path: Path, config: Optional[AppConfig] = None) -> bool:
             str(path),
         ], config=config)
         return path.exists()
-    except Exception:
+    except Exception as exc:
+        logger.debug("Silent OGG generation failed for %s: %s", path.name, exc)
         return False
     finally:
         if tmp_wav.exists():
@@ -106,6 +107,63 @@ def run_ffmpeg(
         return result
     except subprocess.TimeoutExpired:
         raise MediaProcessingError(f"FFmpeg timed out after {timeout}s")
+    except FileNotFoundError:
+        raise MediaProcessingError(
+            f"FFmpeg not found at '{cfg.ffmpeg_path}'. "
+            "Ensure FFmpeg is installed and in PATH."
+        )
+
+
+async def run_ffmpeg_async(
+    args: list[str],
+    config: Optional[AppConfig] = None,
+    timeout: int = 300,
+) -> None:
+    """Non-blocking FFmpeg invocation using ``asyncio.create_subprocess_exec``.
+
+    Designed for batch-converting multiple media assets concurrently without
+    blocking the caller.  Can be composed with ``asyncio.gather()`` to run
+    several FFmpeg operations in parallel::
+
+        await asyncio.gather(
+            run_ffmpeg_async(audio_args, config=config),
+            run_ffmpeg_async(preview_args, config=config),
+        )
+
+    Raises:
+        MediaProcessingError: On non-zero exit code, timeout, or missing binary.
+    """
+    cfg = config or AppConfig()
+    ffmpeg_args = list(args)
+    if (
+        getattr(cfg, "ffmpeg_hwaccel", "auto") == "auto"
+        and "-hwaccel" not in ffmpeg_args
+        and "-i" in ffmpeg_args
+    ):
+        i_index = ffmpeg_args.index("-i")
+        ffmpeg_args = ffmpeg_args[:i_index] + ["-hwaccel", "auto"] + ffmpeg_args[i_index:]
+
+    cmd = [cfg.ffmpeg_path] + ffmpeg_args
+    logger.debug("FFmpeg (async): %s", " ".join(cmd))
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, stderr_data = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            raise MediaProcessingError(f"FFmpeg timed out after {timeout}s")
+
+        if proc.returncode != 0:
+            err = (stderr_data or b"").decode(errors="replace")[:500]
+            raise MediaProcessingError(
+                f"FFmpeg failed (exit {proc.returncode}): {err}"
+            )
     except FileNotFoundError:
         raise MediaProcessingError(
             f"FFmpeg not found at '{cfg.ffmpeg_path}'. "
@@ -740,15 +798,15 @@ def generate_cover_tga(
 ) -> Path:
     """Convert a cover image to TGA format for the game engine."""
     res = convert_image(src_path, dst_path, target_size=size)
-    # Trigger a re-save as uncompressed RGBA
+    # Re-save as uncompressed 32-bit RGBA TGA for engine compatibility.
     try:
         from PIL import Image
         img = Image.open(res)
         if img.mode != 'RGBA':
             img = img.convert('RGBA')
         img.save(res, format='TGA')
-    except:
-        pass
+    except Exception as exc:
+        logger.warning("TGA re-save failed for %s: %s", Path(dst_path).name, exc)
     return res
 
 

@@ -79,7 +79,7 @@ class SettingsDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.setMinimumSize(780, 620)
+        self.setMinimumSize(788, 620)
         self.setModal(True)
         
         # We work on a copy of the config, and only return it if Save is clicked.

@@ -819,7 +819,11 @@ class MainWindow(QMainWindow):
         updater = Updater(project_root)
         updater.initialize_state()
 
-        branch = getattr(self._config, "update_branch", "") or None
+        # Use the configured branch; fall back to whatever the updater detects
+        # so a stale setting (e.g. "master" on a v2-only repo) doesn't cause a
+        # silent 404 that makes the check appear to succeed.
+        configured_branch = (getattr(self._config, "update_branch", "") or "").strip()
+        branch = configured_branch if configured_branch else updater.get_current_branch()
 
         def _check():
             return updater.check_for_updates(branch)
@@ -844,7 +848,7 @@ class MainWindow(QMainWindow):
 
         def _on_finished(result):
             if result.error:
-                logger.debug("Startup update check failed: %s", result.error)
+                logger.info("Startup update check failed: %s", result.error)
             elif not result.is_up_to_date:
                 logger.info(
                     "Update available: %s -> %s on branch %s",
@@ -855,7 +859,7 @@ class MainWindow(QMainWindow):
                 dialog = UpdateResultDialog(result, updater, self)
                 dialog.exec()
             else:
-                logger.debug(
+                logger.info(
                     "Up to date on branch %s (commit %s)",
                     result.branch,
                     result.local_commit,
@@ -863,7 +867,7 @@ class MainWindow(QMainWindow):
             thread.quit()
 
         def _on_error(msg):
-            logger.debug("Startup update check error: %s", msg)
+            logger.info("Startup update check error: %s", msg)
             thread.quit()
 
         def _cleanup():
