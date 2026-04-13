@@ -16,6 +16,7 @@ from typing import Literal
 
 from jd2021_installer.core.config import AppConfig
 from jd2021_installer.core.exceptions import ExtractionError
+from jd2021_installer.core.platform_utils import is_linux, wine_available, wrap_exe_for_platform
 from jd2021_installer.core.fs_utils import write_json
 from jd2021_installer.extractors.base import BaseExtractor
 from jd2021_installer.extractors.jdnext_unitypy import (
@@ -105,8 +106,19 @@ def _run_assetstudio_export(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    cmd = [
-        str(cli_path),
+    # On Linux, wrap Windows .exe with Wine; raise a clear error if Wine is absent
+    if is_linux() and str(cli_path).endswith(".exe"):
+        if not wine_available():
+            raise ExtractionError(
+                "AssetStudioModCLI.exe requires Wine on Linux. "
+                "Please install Wine using your package manager "
+                "(e.g. sudo apt install wine on Debian/Ubuntu)."
+            )
+        base_cmd = wrap_exe_for_platform(cli_path)
+    else:
+        base_cmd = [str(cli_path)]
+
+    cmd = base_cmd + [
         str(bundle_path),
         "-m",
         "export",

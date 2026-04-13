@@ -30,6 +30,7 @@ from jd2021_installer.core.models import (
     MusicTrackStructure,
     SongDescription,
 )
+from jd2021_installer.core.platform_utils import is_linux, wrap_exe_for_platform
 
 logger = logging.getLogger("jd2021.installers.media_processor")
 
@@ -826,8 +827,9 @@ def _resolve_vgmstream_binary(vgmstream_path: Optional[str | Path] = None) -> Pa
 
     Resolution order:
     - explicit path parameter
-    - local tools/vgmstream binaries
-    - PATH lookup
+    - on Linux: native tools/vgmstream/vgmstream-cli (no extension) first
+    - local tools/vgmstream binaries (Windows .exe)
+    - PATH lookup (native name on Linux, .exe name on Windows)
     """
     if vgmstream_path:
         candidate = Path(vgmstream_path).expanduser().resolve()
@@ -835,7 +837,16 @@ def _resolve_vgmstream_binary(vgmstream_path: Optional[str | Path] = None) -> Pa
             return candidate
 
     repo_root = Path(__file__).resolve().parents[2]
-    candidates = [repo_root / rel for rel in VGMSTREAM_DEFAULT_PATHS]
+    candidates: list[Path] = []
+
+    if is_linux():
+        # Prefer native Linux binaries before .exe fallbacks
+        candidates.append(repo_root / "tools" / "vgmstream" / "vgmstream-cli")
+        native_on_path = shutil.which("vgmstream-cli")
+        if native_on_path:
+            candidates.append(Path(native_on_path))
+
+    candidates.extend(repo_root / rel for rel in VGMSTREAM_DEFAULT_PATHS)
 
     for command_name in ("vgmstream-cli.exe", "vgmstream.exe"):
         on_path = shutil.which(command_name)
@@ -847,10 +858,11 @@ def _resolve_vgmstream_binary(vgmstream_path: Optional[str | Path] = None) -> Pa
             return candidate
 
     checked = "\n  - ".join(str(p) for p in candidates)
+    setup_hint = "setup.sh" if is_linux() else "setup.bat"
     raise MediaProcessingError(
         "vgmstream binary not found. Checked:\n"
         f"  - {checked}\n"
-        "Install vgmstream in tools/vgmstream/ (run setup.bat to auto-install)."
+        f"Install vgmstream in tools/vgmstream/ (run {setup_hint} to auto-install)."
     )
 
 
@@ -1054,7 +1066,11 @@ def decode_xma2_audio(
 
     vgm_bin = _resolve_vgmstream_binary(vgmstream_path)
 
-    cmd = [str(vgm_bin), "-o", str(output_wav), str(input_ckd)]
+    # On Linux, wrap Windows .exe binaries with Wine
+    if is_linux() and str(vgm_bin).endswith(".exe"):
+        cmd = wrap_exe_for_platform(vgm_bin) + ["-o", str(output_wav), str(input_ckd)]
+    else:
+        cmd = [str(vgm_bin), "-o", str(output_wav), str(input_ckd)]
     logger.debug("Decoding X360 audio: %s", input_ckd.name)
     logger.debug("vgmstream cmd: %s", " ".join(cmd))
 
