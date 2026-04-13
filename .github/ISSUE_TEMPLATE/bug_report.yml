@@ -1,0 +1,138 @@
+name: 🐛 Bug Report
+description: Report a bug, crash, or unexpected behavior in JD2021 Map Installer.
+title: "[Bug]: "
+labels: ["bug", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report! Please fill out as much detail as possible so we can investigate quickly.
+        
+        > **Tip:** Check the [Troubleshooting guide](../../docs/01_getting_started/TROUBLESHOOTING.md) before submitting — your issue may already have a documented solution.
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Installation Mode
+      description: Which mode were you using when the bug occurred?
+      options:
+        - "Fetch (Codename) — JDU via Playwright"
+        - "HTML Files — from JDHelper exports"
+        - "IPK Archive — Xbox 360 .ipk file"
+        - "Batch (Directory)"
+        - "Manual (Directory)"
+        - "Fetch JDNext — JDNext via Playwright"
+        - "HTML Files JDNext"
+        - "Other / Not applicable"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what went wrong.
+      placeholder: |
+        Example: When installing a map using 'Fetch (Codename)', the tool hangs indefinitely after posting the command to the JDHelper bot.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Step-by-step instructions to reproduce the issue.
+      placeholder: |
+        1. Open the installer and go to 'Fetch (Codename)' mode
+        2. Enter codename 'Koi' and click Install
+        3. App hangs at "Waiting for bot response..."
+        4. No progress after 2+ minutes
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+      placeholder: The map should download and install successfully.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened instead?
+      placeholder: The installer hung indefinitely with no error shown.
+    validations:
+      required: true
+
+  - type: textarea
+    id: log_output
+    attributes:
+      label: Log Output
+      description: |
+        Paste relevant log output from the installer's log panel or from the `logs/` folder.
+        Wrap it in a code block for readability.
+      placeholder: |
+        ```
+        [INFO] Fetching codename: Koi
+        [INFO] Sending command to JDHelper bot...
+        [WARNING] No embed received after 60s
+        ```
+      render: shell
+
+  - type: input
+    id: codename
+    attributes:
+      label: Map Codename (if applicable)
+      description: The map codename you were trying to install (e.g. `Koi`, `Starships`).
+      placeholder: e.g. Koi
+
+  - type: dropdown
+    id: toolchain
+    attributes:
+      label: Toolchain Status
+      description: Which third-party tools were installed (via `setup.bat` or manually)?
+      multiple: true
+      options:
+        - FFmpeg / FFprobe
+        - vgmstream
+        - Playwright Chromium
+        - AssetStudioModCLI
+        - All installed via setup.bat
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: python_version
+    attributes:
+      label: Python Version
+      description: Output of `python --version`
+      placeholder: e.g. Python 3.12.1
+    validations:
+      required: true
+
+  - type: input
+    id: windows_version
+    attributes:
+      label: Windows Version
+      description: e.g. Windows 11 23H2, Windows 10 22H2
+      placeholder: e.g. Windows 11 24H2
+    validations:
+      required: true
+
+  - type: input
+    id: installer_version
+    attributes:
+      label: Installer Commit Version
+      description: The git commit hash. You can find this in the title bar or via `git log -1 --oneline`.
+      placeholder: e.g. a3f7c12
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Anything else that might help — screenshots, the map source, Discord bot behavior, etc.
