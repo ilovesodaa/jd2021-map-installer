@@ -9,6 +9,7 @@ import logging
 import os
 import shutil
 import sys
+import tarfile
 import zipfile
 from pathlib import Path
 from typing import Optional
@@ -45,65 +46,118 @@ class DownloadWorker(QObject):
 
     def run(self) -> None:
         try:
-            if sys.platform != "win32":
-                self.error.emit("Auto-install only supported on Windows for now. Please install FFmpeg via your package manager.")
-                self.finished.emit(False)
-                return
-
-            self.status.emit("Downloading FFmpeg Essentials...")
-            temp_zip = self._target_dir / "ffmpeg.zip"
-            
-            response = requests.get(FFMPEG_URL_WIN, stream=True, timeout=30)
-            response.raise_for_status()
-            total_size = int(response.headers.get('content-length', 0))
-            
-            downloaded = 0
-            with open(temp_zip, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if total_size > 0:
-                            self.progress.emit(int((downloaded / total_size) * 80)) # 0-80% for download
-
-            self.status.emit("Extracting binaries...")
-            self.progress.emit(85)
-            
-            extract_temp = self._target_dir / "_extract"
-            extract_temp.mkdir(parents=True, exist_ok=True)
-            
-            with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
-                zip_ref.extractall(extract_temp)
-            
-            # Find ffmpeg toolchain binaries in the extracted tree.
-            required_bins = {"ffmpeg.exe", "ffplay.exe", "ffprobe.exe"}
-            binaries_found = set()
-            for p in extract_temp.rglob("*.exe"):
-                lower_name = p.name.lower()
-                if lower_name in required_bins:
-                    shutil.move(str(p), str(self._target_dir / p.name))
-                    binaries_found.add(lower_name)
-            
-            # Cleanup
-            shutil.rmtree(extract_temp, ignore_errors=True)
-            if temp_zip.exists():
-                temp_zip.unlink()
-
-            missing_bins = sorted(required_bins - binaries_found)
-            if not missing_bins:
-                self.status.emit("Installation complete!")
-                self.progress.emit(100)
-                self.finished.emit(True)
+            if sys.platform == "win32":
+                self._run_windows()
+            elif sys.platform.startswith("linux"):
+                self._run_linux()
             else:
                 self.error.emit(
-                    "Downloaded archive is missing required binaries: "
-                    + ", ".join(missing_bins)
+                    "Auto-install is only supported on Windows and Linux. "
+                    "Please install FFmpeg via your package manager."
                 )
                 self.finished.emit(False)
-
         except Exception as e:
             logger.error("FFmpeg install failed: %s", e)
             self.error.emit(str(e))
+            self.finished.emit(False)
+
+    def _run_windows(self) -> None:
+        self.status.emit("Downloading FFmpeg Essentials...")
+        temp_zip = self._target_dir / "ffmpeg.zip"
+
+        response = requests.get(FFMPEG_URL_WIN, stream=True, timeout=30)
+        response.raise_for_status()
+        total_size = int(response.headers.get('content-length', 0))
+
+        downloaded = 0
+        with open(temp_zip, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total_size > 0:
+                        self.progress.emit(int((downloaded / total_size) * 80))
+
+        self.status.emit("Extracting binaries...")
+        self.progress.emit(85)
+
+        extract_temp = self._target_dir / "_extract"
+        extract_temp.mkdir(parents=True, exist_ok=True)
+
+        with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
+            zip_ref.extractall(extract_temp)
+
+        required_bins = {"ffmpeg.exe", "ffplay.exe", "ffprobe.exe"}
+        binaries_found = set()
+        for p in extract_temp.rglob("*.exe"):
+            lower_name = p.name.lower()
+            if lower_name in required_bins:
+                shutil.move(str(p), str(self._target_dir / p.name))
+                binaries_found.add(lower_name)
+
+        shutil.rmtree(extract_temp, ignore_errors=True)
+        if temp_zip.exists():
+            temp_zip.unlink()
+
+        missing_bins = sorted(required_bins - binaries_found)
+        if not missing_bins:
+            self.status.emit("Installation complete!")
+            self.progress.emit(100)
+            self.finished.emit(True)
+        else:
+            self.error.emit(
+                "Downloaded archive is missing required binaries: "
+                + ", ".join(missing_bins)
+            )
+            self.finished.emit(False)
+
+    def _run_linux(self) -> None:
+        self.status.emit("Downloading FFmpeg static build for Linux...")
+        temp_archive = self._target_dir / "ffmpeg-linux.tar.xz"
+
+        response = requests.get(FFMPEG_URL_LINUX, stream=True, timeout=30)
+        response.raise_for_status()
+        total_size = int(response.headers.get('content-length', 0))
+
+        downloaded = 0
+        with open(temp_archive, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total_size > 0:
+                        self.progress.emit(int((downloaded / total_size) * 80))
+
+        self.status.emit("Extracting binaries...")
+        self.progress.emit(85)
+
+        # The static build contains ffmpeg and ffprobe; ffplay is not included.
+        required_bins = {"ffmpeg", "ffprobe"}
+        binaries_found = set()
+
+        with tarfile.open(temp_archive, "r:xz") as tf:
+            for member in tf.getmembers():
+                name = os.path.basename(member.name)
+                if name in required_bins and member.isfile():
+                    member.name = name  # strip directory prefix
+                    tf.extract(member, path=self._target_dir)
+                    dest = self._target_dir / name
+                    dest.chmod(dest.stat().st_mode | 0o111)
+                    binaries_found.add(name)
+
+        if temp_archive.exists():
+            temp_archive.unlink()
+
+        missing_bins = sorted(required_bins - binaries_found)
+        if not missing_bins:
+            self.status.emit("Installation complete!")
+            self.progress.emit(100)
+            self.finished.emit(True)
+        else:
+            self.error.emit(
+                "Downloaded archive is missing required binaries: "
+                + ", ".join(missing_bins)
+            )
             self.finished.emit(False)
 
 class FFmpegInstallDialog(QDialog):

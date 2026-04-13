@@ -57,6 +57,7 @@ from jd2021_installer.core.config import AppConfig
 from jd2021_installer.core.logging_config import apply_log_detail, get_file_log_level
 from jd2021_installer.core.install_summary import InstallSummary, build_install_summary, render_install_summary
 from jd2021_installer.core.theme import load_theme_stylesheet, resolve_theme_stylesheet_path
+from jd2021_installer.core.platform_utils import is_linux
 from jd2021_installer.core.models import (
     MapMedia,
     MapSync,
@@ -716,11 +717,23 @@ class MainWindow(QMainWindow):
 
         resolved_vgmstream = _resolve_configured_tool(
             getattr(self._config, "vgmstream_path", None),
-            [
-                repo_root / "tools" / "vgmstream" / "vgmstream-cli.exe",
-                repo_root / "tools" / "vgmstream" / "vgmstream.exe",
-            ],
-            command_names=("vgmstream-cli.exe", "vgmstream.exe"),
+            (
+                [
+                    repo_root / "tools" / "vgmstream" / "vgmstream-cli",
+                    repo_root / "tools" / "vgmstream" / "vgmstream-cli.exe",
+                    repo_root / "tools" / "vgmstream" / "vgmstream.exe",
+                ]
+                if is_linux()
+                else [
+                    repo_root / "tools" / "vgmstream" / "vgmstream-cli.exe",
+                    repo_root / "tools" / "vgmstream" / "vgmstream.exe",
+                ]
+            ),
+            command_names=(
+                ("vgmstream-cli", "vgmstream-cli.exe", "vgmstream.exe")
+                if is_linux()
+                else ("vgmstream-cli.exe", "vgmstream.exe")
+            ),
         )
         resolved_assetstudio = _resolve_configured_tool(
             getattr(self._config, "assetstudio_cli_path", None),
