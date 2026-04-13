@@ -1039,39 +1039,50 @@ async def _wait_for_new_message(
             """(prevId) => {
                 const all = document.querySelectorAll('li[id^="chat-messages-"]');
                 if (all.length === 0) return null;
-                const last = all[all.length - 1];
-                const textContent = last.textContent || '';
-                const hasContent = !!last.querySelector('[id^="message-content-"]');
-                const hasAccessories = !!last.querySelector('[id^="message-accessories-"]');
-                return {
-                    id: last.id,
-                    hasContent,
-                    hasAccessories,
-                    isLoading: textContent.includes('Loading'),
-                };
+                const list = Array.from(all);
+                let start = 0;
+                if (prevId) {
+                    const idx = list.findIndex((el) => el.id === prevId);
+                    if (idx >= 0) start = idx + 1;
+                }
+
+                for (let i = start; i < list.length; i++) {
+                    const candidate = list[i];
+                    const textContent = candidate.textContent || '';
+                    const hasContent = !!candidate.querySelector('[id^="message-content-"]');
+                    const hasAccessories = !!candidate.querySelector('[id^="message-accessories-"]');
+                    const isLoading = textContent.includes('Loading');
+
+                    if (isLoading) return null; // Block and wait for it to load
+
+                    if (hasContent || hasAccessories) {
+                        return {
+                            id: candidate.id,
+                            hasContent,
+                            hasAccessories,
+                            isLoading: false,
+                        };
+                    }
+                }
+                return null;
             }""",
             previous_last_message_id,
         )
 
-        if (
-            result
-            and result["id"] != previous_last_message_id
-            and (result["hasContent"] or result["hasAccessories"])
-            and not result["isLoading"]
-        ):
+        if result:
             stable = True
             for _ in range(3):
                 await page.wait_for_timeout(350)
                 latest = await page.evaluate(
-                    """() => {
-                        const all = document.querySelectorAll('li[id^="chat-messages-"]');
-                        if (all.length === 0) return null;
-                        const last = all[all.length - 1];
+                    """(targetId) => {
+                        const el = document.getElementById(targetId);
+                        if (!el) return null;
                         return {
-                            id: last.id,
-                            isLoading: (last.textContent || '').includes('Loading'),
+                            id: el.id,
+                            isLoading: (el.textContent || '').includes('Loading'),
                         };
-                    }"""
+                    }""",
+                    result["id"],
                 )
                 if not latest or latest["id"] != result["id"] or latest["isLoading"]:
                     stable = False
@@ -1211,7 +1222,9 @@ async def _wait_for_new_embed(
                     const textContent = candidate.textContent || '';
                     const hasChildren = candidate.children.length > 0;
                     const isLoading = textContent.includes('Loading');
-                    if (!hasChildren || isLoading) continue;
+                    
+                    if (isLoading) return null; // Block and wait for it to load
+                    if (!hasChildren) continue; // Skip empty wrappers
 
                     return {
                         id: candidate.id,
@@ -1225,12 +1238,7 @@ async def _wait_for_new_embed(
             previous_last_id,
         )
 
-        if (
-            result
-            and result["id"] != previous_last_id
-            and result["hasChildren"]
-            and not result["isLoading"]
-        ):
+        if result:
             # Stability check: 3 × 500 ms
             stable = True
             for _ in range(3):
@@ -1275,7 +1283,9 @@ async def _extract_embed_html(page, accessory_id: str) -> str:
     html = await page.evaluate(
         """(id) => {
             const el = document.getElementById(id);
-            return el ? el.outerHTML : null;
+            if (!el) return null;
+            const message = el.closest('li[id^="chat-messages-"]');
+            return message ? message.outerHTML : el.outerHTML;
         }""",
         accessory_id,
     )
@@ -1292,7 +1302,7 @@ def _has_valid_cdn_links(html: str) -> bool:
     Supports both legacy/public and newer/private hosts used by NOHUD.
     """
     for url in extract_urls_from_html(html):
-        if _UBI_CDN_HOST_PATTERN.search(url) and _MAP_PATH_PATTERN.search(url):
+        if _MAP_PATH_PATTERN.search(url):
             return True
     return False
 
@@ -1318,7 +1328,7 @@ def _embed_contains_codename_links(html: str, codename: str) -> bool:
         return True
 
     for url in extract_urls_from_html(html):
-        if not (_UBI_CDN_HOST_PATTERN.search(url) and _MAP_PATH_PATTERN.search(url)):
+        if not _MAP_PATH_PATTERN.search(url):
             continue
 
         parsed = urlparse(url)
@@ -1333,23 +1343,23 @@ def _is_valid_embed_response(
     require_gameplay_video: bool = False,
     expected_codename: Optional[str] = None,
     allow_textual_codename_fallback: bool = False,
-) -> bool:
+) -> tuple[bool, str]:
     """Validate an embed response before accepting it as usable."""
     if not _has_valid_cdn_links(html):
-        return False
+        return False, "Failed _has_valid_cdn_links (no matching /map/ or /jdnext/maps/ CDN paths found in embed)"
     if expected_codename and not _embed_contains_codename_links(html, expected_codename):
         if not (
             allow_textual_codename_fallback
             and _embed_mentions_expected_codename(html, expected_codename)
         ):
-            return False
+            return False, f"Codename '{expected_codename}' not found in any URL paths or text"
     if require_gameplay_video and not _has_gameplay_video_links(html):
-        return False
-    return True
+        return False, "Failed _has_gameplay_video_links (no .webm gameplay video found in embed)"
+    return True, "Valid"
 
 
 def _strip_html_tags(value: str) -> str:
-    return re.sub(r"<[^>]+>", "", value)
+    return re.sub(r"<[^>]+>", " ", value)
 
 
 def _extract_embed_fields_from_html(html: str) -> Dict[str, str]:
@@ -1418,7 +1428,16 @@ def _embed_mentions_expected_codename(html: str, expected_codename: Optional[str
         return True
 
     text = unescape(_strip_html_tags(html)).lower()
-    return re.search(rf"\b{re.escape(needle)}\b", text) is not None
+    if re.search(rf"\b{re.escape(needle)}\b", text):
+        return True
+        
+    # JDNext titles often contain spaces or special chars differing from the codename.
+    num_alpha_needle = re.sub(r'[^a-z0-9]', '', needle)
+    num_alpha_text = re.sub(r'[^a-z0-9]', '', text)
+    if num_alpha_needle and len(num_alpha_needle) >= 3 and num_alpha_needle in num_alpha_text:
+        return True
+        
+    return False
 
 
 def _extract_requester_mentions_from_embed(html: str) -> Set[str]:
@@ -1780,21 +1799,26 @@ async def _fetch_command_with_retry(
                     )
                     continue
 
-                if _is_valid_embed_response(
+                is_valid, reason = _is_valid_embed_response(
                     html,
                     require_gameplay_video=require_gameplay_video,
                     expected_codename=codename,
                     allow_textual_codename_fallback=allow_textual_codename_fallback,
-                ):
+                )
+                if is_valid:
                     logger.debug("Extracted %s embed HTML.", label)
                     return html
 
                 logger.debug(
-                    "Skipping %s response %s: links do not match requested codename '%s'.",
+                    "Skipping %s response %s: %s",
                     label,
                     embed_id,
-                    codename,
+                    reason,
                 )
+                try:
+                    Path("LAST_FAILED_EMBED.html").write_text(html, encoding="utf-8")
+                except Exception:
+                    pass
 
             raise WebExtractionError(
                 f"Timed out waiting for a {label} response matching codename '{codename}'."
