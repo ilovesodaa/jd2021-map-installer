@@ -164,8 +164,6 @@ Use this panel to visually inspect audio/video sync.
 | **Video Offset (ms)** | Optional separate video timing adjustment (checkbox to enable) |
 | **±1 / ±10 / ±100 / ±1000 buttons** | Quick-nudge offset values |
 | **Preview** | Play with current offsets |
-| **Pad Audio** | Add silence to the start of audio |
-| **Sync Beatgrid** | Recalculate beat timing |
 | **Apply Offset** | Save offset changes to installed files |
 | **Prev Map / Next Map** | Navigate between maps in multi-map flows |
 
