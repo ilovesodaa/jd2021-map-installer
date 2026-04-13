@@ -1,0 +1,105 @@
+name: ✨ Feature Request
+description: Suggest a new feature, improvement, or new map source support for JD2021 Map Installer.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Got an idea to make the JD2021 Map Installer better? We'd love to hear it!
+        
+        Please check existing issues first to avoid duplicates.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Feature Area
+      description: Which part of the tool does this feature relate to?
+      options:
+        - "New Installation Mode / Map Source"
+        - "Extractor (WebPlaywright / IPK / JDNext / Manual)"
+        - "Media Processing (video, audio, images)"
+        - "UI / GUI (layout, controls, preview)"
+        - "Pipeline / Normalizer / Game Writer"
+        - "Toolchain / Setup (FFmpeg, Playwright, AssetStudio)"
+        - "Auto-Updater"
+        - "Documentation"
+        - "Developer / Testing / CI"
+        - "Other"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / Motivation
+      description: |
+        Is your feature request related to a problem? Describe the friction or limitation you're hitting.
+        Even if it's not a problem per se, explain what improvement you're after.
+      placeholder: |
+        Example: When porting IPK maps, I have to manually adjust `videoStartTime` every time because the binary CKD value is always 0.0. It would be great if the tool could auto-detect the correct offset from the musictrack markers.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe the feature or change you'd like to see. Be as specific as possible.
+      placeholder: |
+        Example: Add an "Auto-sync" button in the Preview panel that analyzes the musictrack markers from the parsed CKD and proposes a videoStartTime offset, with a ±0.5s fine-tune slider.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: modes_affected
+    attributes:
+      label: Affected Mode(s)
+      description: Which installation mode(s) would benefit from this feature?
+      multiple: true
+      options:
+        - "Fetch (Codename) — JDU via Playwright"
+        - "HTML Files — from JDHelper exports"
+        - "IPK Archive — Xbox 360 .ipk file"
+        - "Batch (Directory)"
+        - "Manual (Directory)"
+        - "Fetch JDNext — JDNext via Playwright"
+        - "HTML Files JDNext"
+        - "All Modes"
+        - "Not mode-specific"
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Have you tried any workarounds or alternative approaches? What are the trade-offs?
+      placeholder: |
+        Example: I currently manually tweak the value in installer_settings.json after each install, but it's tedious and error-prone.
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: How impactful is this to your workflow?
+      options:
+        - "🔴 Blocker — I can't complete a common workflow without this"
+        - "🟠 High — Significant improvement to my regular use"
+        - "🟡 Medium — Nice to have, would use it often"
+        - "🟢 Low — Minor polish or edge-case improvement"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      description: Would you be interested in contributing this feature?
+      options:
+        - label: I'd be willing to submit a pull request for this feature.
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: |
+        Any other context, mockups, references, or related issues. 
+        Links to similar tools, Discord discussions, or map format documentation are welcome.

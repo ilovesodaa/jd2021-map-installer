@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Troubleshooting Guide
+    url: https://github.com/VenB304/jd2021-map-installer/blob/main/docs/01_getting_started/TROUBLESHOOTING.md
+    about: Check the Troubleshooting guide before filing a bug — your issue may already be documented.
