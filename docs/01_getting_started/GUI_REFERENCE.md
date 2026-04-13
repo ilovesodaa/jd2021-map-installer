@@ -46,7 +46,7 @@ The main window is split into two side-by-side columns inside a horizontal layou
 │ │ Configuration Panel  │ │ │ Sync Refinement Widget                       │ │
 │ │  - Game Directory    │ │ │  - Audio/Video offset inputs                 │ │
 │ │  - Video Quality     │ │ │  - Fine-tune buttons (±1/10/100/1000 ms)     │ │
-│ └──────────────────────┘ │ │  - Pad Audio, Apply Offset                   │ │
+│ └──────────────────────┘ │ │  - Preview, Apply Offset                     │ │
 │ ┌──────────────────────┐ │ │  - Prev Map / Next Map navigation            │ │
 │ │ Action Panel         │ │ └──────────────────────────────────────────────┘ │
 │ │  - Install Map       │ │ ┌──────────────────────────────────────────────┐ │
@@ -202,8 +202,6 @@ This is where you fine-tune audio and video timing after installing a map.
 | **Video Offset (ms)** checkbox + input | Enable and set a separate video offset (optional) |
 | **±1 / ±10 / ±100 / ±1000** buttons | Quickly nudge audio or video offset values |
 | **Preview** | Start/stop playback with current offset values |
-| **Pad Audio** | Add silence padding to the beginning of audio |
-| **Sync Beatgrid** | Recalculate beatgrid timing based on current offset |
 | **Apply Offset** | Write the current offsets to the installed map files |
 | **Prev Map / Next Map** | Navigate between maps when multiple maps are loaded (batch/readjust flows) |
 

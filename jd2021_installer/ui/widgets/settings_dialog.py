@@ -157,25 +157,30 @@ class SettingsDialog(QDialog):
         task: Callable[[], object],
         on_success: Callable[[object], None],
         error_title: str,
+        show_progress_dialog: bool = True,
+        show_error_dialog: bool = True,
     ) -> None:
         if self._task_thread is not None and self._task_thread.isRunning():
-            QMessageBox.information(
-                self,
-                "Operation In Progress",
-                "Wait for the current task to finish before starting another one.",
-            )
+            if show_error_dialog:
+                QMessageBox.information(
+                    self,
+                    "Operation In Progress",
+                    "Wait for the current task to finish before starting another one.",
+                )
             return
 
-        progress = QProgressDialog(initial_status, "", 0, 0, self)
-        progress.setWindowTitle(window_title)
-        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
-        progress.setMinimumDuration(0)
-        progress.setCancelButton(None)
-        progress.setAutoClose(False)
-        progress.setAutoReset(False)
-        progress.show()
-
-        self._task_progress = progress
+        if show_progress_dialog:
+            progress = QProgressDialog(initial_status, "", 0, 0, self)
+            progress.setWindowTitle(window_title)
+            progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+            progress.setMinimumDuration(0)
+            progress.setCancelButton(None)
+            progress.setAutoClose(False)
+            progress.setAutoReset(False)
+            progress.show()
+            self._task_progress = progress
+        else:
+            self._task_progress = None
         self._set_task_status_text(initial_status)
         self._start_task_status_animation(initial_status)
 
@@ -187,7 +192,10 @@ class SettingsDialog(QDialog):
             self._start_task_status_animation(text)
 
         def _on_error(msg: str) -> None:
-            QMessageBox.critical(self, error_title, f"{error_title}:\n{msg}")
+            if show_error_dialog:
+                QMessageBox.critical(self, error_title, f"{error_title}:\n{msg}")
+            else:
+                logger.warning("%s: %s", error_title, msg)
             self._set_parent_status("Ready")
             thread.quit()
 
@@ -880,6 +888,10 @@ class SettingsDialog(QDialog):
         # Connect branch change to trigger a check
         self.combo_update_branch.currentTextChanged.connect(self._on_branch_selection_changed)
 
+        # Fetch all available branches immediately in the background so users
+        # can switch without needing to click Refresh first.
+        self._refresh_branches_in_background(silent=True)
+
         # Manual check button
         check_row = QHBoxLayout()
         self.btn_check_updates = QPushButton("Check for Updates")
@@ -992,37 +1004,47 @@ class SettingsDialog(QDialog):
 
     def _populate_branch_combo_initial(self) -> None:
         """Set the branch combo to the current branch without a network call."""
+        preferred = (getattr(self._config, "update_branch", "") or "").strip()
         try:
             updater = self._get_updater()
             current = updater.get_current_branch()
         except Exception:
             current = "v2"
 
+        initial = preferred or current
+
         self.combo_update_branch.blockSignals(True)
         self.combo_update_branch.clear()
-        self.combo_update_branch.addItem(current)
-        self.combo_update_branch.setCurrentText(current)
+        self.combo_update_branch.addItem(initial)
+        self.combo_update_branch.setCurrentText(initial)
         self.combo_update_branch.blockSignals(False)
 
     def _on_refresh_branches(self) -> None:
         """Fetch branch list from GitHub in a background thread."""
-        self.btn_refresh_branches.setEnabled(False)
-        self.btn_refresh_branches.setText("Fetching...")
+        self._refresh_branches_in_background(silent=False)
+
+    def _refresh_branches_in_background(self, *, silent: bool) -> None:
+        """Fetch branch list in the background, optionally without UI prompts."""
+        if not silent:
+            self.btn_refresh_branches.setEnabled(False)
+            self.btn_refresh_branches.setText("Fetching...")
 
         def _task() -> object:
             updater = self._get_updater()
             return updater.fetch_remote_branches()
 
         def _on_success(branches: object) -> None:
-            self.btn_refresh_branches.setEnabled(True)
-            self.btn_refresh_branches.setText("Refresh")
+            if not silent:
+                self.btn_refresh_branches.setEnabled(True)
+                self.btn_refresh_branches.setText("Refresh")
             if not branches:
-                QMessageBox.warning(
-                    self,
-                    "Branch Fetch Failed",
-                    "Could not fetch branches from GitHub.\n"
-                    "Check your internet connection and try again.",
-                )
+                if not silent:
+                    QMessageBox.warning(
+                        self,
+                        "Branch Fetch Failed",
+                        "Could not fetch branches from GitHub.\n"
+                        "Check your internet connection and try again.",
+                    )
                 return
 
             current_text = self.combo_update_branch.currentText()
@@ -1042,6 +1064,8 @@ class SettingsDialog(QDialog):
             task=_task,
             on_success=_on_success,
             error_title="Branch Fetch Failed",
+            show_progress_dialog=not silent,
+            show_error_dialog=not silent,
         )
 
     def _on_branch_selection_changed(self, branch: str) -> None:

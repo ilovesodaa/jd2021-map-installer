@@ -1104,7 +1104,6 @@ class MainWindow(QMainWindow):
         self._sync_refinement.preview_requested.connect(self._on_preview_toggle)
         self._sync_refinement.apply_requested.connect(self._on_apply_offset)
         self._sync_refinement.offsets_changed.connect(self._on_offset_spin_changed)
-        self._sync_refinement.pad_audio_requested.connect(self._on_pad_audio)
         self._sync_refinement.nav_requested.connect(self._on_nav_requested)
         
         # -- Preview widget signals -----------------------------------------
@@ -2904,24 +2903,6 @@ class MainWindow(QMainWindow):
                 startup_compensation_ms=startup_compensation_ms,
                 accurate_seek=is_jdnext_preview,
             )
-
-    def _on_pad_audio(self) -> None:
-        """Autofill Audio Offset by probing differences in media lengths."""
-        if not self._current_map or not self._current_map.media.audio_path or not self._current_map.media.video_path:
-            self.append_log("Both audio and video required to pad audio.")
-            return
-
-        from jd2021_installer.installers.media_processor import get_video_duration
-        try:
-            self.append_log("Probing media durations for Auto Pad...")
-            v_dur = get_video_duration(self._current_map.media.video_path, self._config)
-            a_dur = get_video_duration(self._current_map.media.audio_path, self._config)
-            diff_ms = (v_dur - a_dur) * 1000.0
-
-            self._sync_refinement.set_offsets(audio_ms=diff_ms, video_ms=self._sync_refinement.get_video_offset())
-            self.append_log(f"Auto Pad Audio computed {diff_ms:+.1f} ms difference.")
-        except Exception as e:
-            self.append_log(f"Pad audio failed to compute duration: {e}")
 
     def _on_apply_offset(self, audio_ms: float, video_ms: float) -> None:
         """Apply the combined offset to the current map data."""

@@ -42,7 +42,6 @@ class SyncRefinementWidget(QWidget):
     offsets_changed = pyqtSignal(float, float)  # (audio_ms, video_ms)
     preview_requested = pyqtSignal(bool)      # True = start, False = stop
     apply_requested = pyqtSignal(float, float) # (audio_ms, video_ms) to apply
-    pad_audio_requested = pyqtSignal()
     nav_requested = pyqtSignal(int)          # -1 = prev, 1 = next
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -162,16 +161,6 @@ class SyncRefinementWidget(QWidget):
         self._btn_preview.clicked.connect(self._on_preview_toggled)
         preview_row.addWidget(self._btn_preview)
 
-        self._btn_pad = QPushButton("Pad Audio")
-        self._btn_pad.setToolTip("Auto-calculate audio offset to match video duration. Required when source audio is shorter than the background video.")
-        self._btn_pad.clicked.connect(self.pad_audio_requested.emit)
-        preview_row.addWidget(self._btn_pad)
-
-        self._btn_sync_beatgrid = QPushButton("Sync Beatgrid")
-        self._btn_sync_beatgrid.setToolTip("Copy the video offset into the audio offset for a 1:1 alignment. Useful for manual tweaks.")
-        self._btn_sync_beatgrid.clicked.connect(self._on_sync_beatgrid)
-        preview_row.addWidget(self._btn_sync_beatgrid)
-
         self._btn_apply = QPushButton("Apply Offset")
         self._btn_apply.setObjectName("btn_apply_offset")
         self._btn_apply.setToolTip("Commit the combined audio and video offsets to the current map data for installation.")
@@ -220,11 +209,6 @@ class SyncRefinementWidget(QWidget):
     def _adjust_video(self, delta: float) -> None:
         if self._video_check.isChecked():
             self._video_spin.setValue(self._video_spin.value() + delta)
-
-    def _on_sync_beatgrid(self) -> None:
-        """Copies video offset to audio offset."""
-        if self._video_check.isChecked():
-            self._audio_spin.setValue(self._video_spin.value())
 
     def _on_video_toggle(self, checked: bool) -> None:
         self._video_spin.setEnabled(checked)
