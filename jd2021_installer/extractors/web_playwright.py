@@ -1322,19 +1322,22 @@ def _has_gameplay_video_links(html: str) -> bool:
 
 
 def _embed_contains_codename_links(html: str, codename: str) -> bool:
-    """Return True when at least one Ubisoft CDN map URL targets ``codename``."""
+    """Return True when at least one map URL targets ``codename``."""
     needle = (codename or "").strip().lower()
     if not needle:
         return True
 
     for url in extract_urls_from_html(html):
-        if not _MAP_PATH_PATTERN.search(url):
-            continue
-
         parsed = urlparse(url)
         parts = [part for part in parsed.path.strip("/").split("/") if part]
         if any(part.lower() == needle for part in parts):
             return True
+            
+        if parts:
+            filename = parts[-1].lower()
+            if filename.startswith(f"{needle}.") or filename == needle:
+                return True
+                
     return False
 
 
@@ -1446,6 +1449,12 @@ def _extract_requester_mentions_from_embed(html: str) -> Set[str]:
 
     for match in re.findall(r"@([A-Za-z0-9_.\-]{2,32})", html or ""):
         name = (match or "").strip().lower()
+        if name:
+            mentions.add(name)
+            
+    interaction_match = re.search(r'class="username[^>]*>([^<]+)</span>\s*used', html, re.IGNORECASE)
+    if interaction_match:
+        name = interaction_match.group(1).strip().lower()
         if name:
             mentions.add(name)
 
