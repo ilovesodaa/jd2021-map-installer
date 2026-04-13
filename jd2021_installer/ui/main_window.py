@@ -240,6 +240,9 @@ class MainWindow(QMainWindow):
 
         self._active_threads: set[QThread] = set()
         self._active_worker: Optional[object] = None
+        self._startup_update_thread: Optional[QThread] = None
+        self._startup_update_worker: Optional[object] = None
+        self._startup_update_completed: bool = False
         self._file_logger_handlers: list[logging.Handler] = []
         self._preview_audio_warning_shown = False
         self._size_overlay: Optional[QLabel] = None
@@ -824,6 +827,8 @@ class MainWindow(QMainWindow):
         # silent 404 that makes the check appear to succeed.
         configured_branch = (getattr(self._config, "update_branch", "") or "").strip()
         branch = configured_branch if configured_branch else updater.get_current_branch()
+        self._set_status(f"Checking for updates on {branch}...")
+        self._startup_update_completed = False
 
         def _check():
             return updater.check_for_updates(branch)
@@ -845,10 +850,27 @@ class MainWindow(QMainWindow):
 
         worker = _Worker()
         worker.moveToThread(thread)
+        self._startup_update_thread = thread
+        self._startup_update_worker = worker
+
+        timeout_timer = QTimer(self)
+        timeout_timer.setSingleShot(True)
+
+        def _on_timeout():
+            if self._startup_update_completed:
+                return
+            logger.warning("Startup update check timed out on branch %s", branch)
+            self._set_status(f"Update check timed out for {branch}")
+
+        timeout_timer.timeout.connect(_on_timeout)
+        timeout_timer.start(25000)
 
         def _on_finished(result):
+            self._startup_update_completed = True
+            timeout_timer.stop()
             if result.error:
                 logger.info("Startup update check failed: %s", result.error)
+                self._set_status("Update check failed")
             elif not result.is_up_to_date:
                 logger.info(
                     "Update available: %s -> %s on branch %s",
@@ -856,6 +878,7 @@ class MainWindow(QMainWindow):
                     result.remote_commit,
                     result.branch,
                 )
+                self._set_status(f"Updates Available on {result.branch}")
                 dialog = UpdateResultDialog(result, updater, self)
                 dialog.exec()
             else:
@@ -864,13 +887,19 @@ class MainWindow(QMainWindow):
                     result.branch,
                     result.local_commit,
                 )
+                self._set_status(f"You are running on the latest version for {result.branch}")
             thread.quit()
 
         def _on_error(msg):
+            self._startup_update_completed = True
+            timeout_timer.stop()
             logger.info("Startup update check error: %s", msg)
+            self._set_status("Update check failed")
             thread.quit()
 
         def _cleanup():
+            self._startup_update_thread = None
+            self._startup_update_worker = None
             self._active_threads.discard(thread)
 
         thread.started.connect(worker.run)
